@@ -1622,7 +1622,7 @@ describe("coop phantom walls", () => {
     return require(path.join(root, "src/coop/native.js"));
   }
 
-  it("stamps remote bodies into the wall grid without peaceful", () => {
+  it("does not stamp remote bodies into the wall grid", () => {
     loadNative();
     const { CoopNative } = require(path.join(root, "src/coop/native.js"));
     const cn = new CoopNative();
@@ -1645,10 +1645,46 @@ describe("coop phantom walls", () => {
       oa: { ka: [{ x: 0, y: 0 }], direction: null },
       Tb: function () {},
     };
+    // Pre-seed a legacy phantom stamp that must be cleared
+    game.Ca.wa[0][1] = 1;
     global.__mpCoopOnTick(game);
-    assert.equal(game.Ca.wa[0][1], 1);
-    assert.equal(game.Ca.wa[0][2], 1);
+    assert.equal(game.Ca.wa[0][1], 0, "no phantom stamp on remote body");
+    assert.equal(game.Ca.wa[0][2], 0, "no phantom stamp on remote body");
     assert.equal(game.Ca.wa[0][0], 0);
+  });
+
+  it("kills local snake when stepping onto a remote body", () => {
+    loadNative();
+    const { CoopNative } = require(path.join(root, "src/coop/native.js"));
+    const cn = new CoopNative();
+    cn.sessionActive = true;
+    cn.injectEnabled = true;
+    cn.myClientId = "me";
+    cn.applySnakeDelta({
+      clientId: "other",
+      body: [{ x: 1, y: 0 }],
+      alive: true,
+    });
+    global.__mpCoopSession = true;
+    global.__mpCoopInject = true;
+    global.__mpCoopMyId = "me";
+    global.__mpCoopLocalDead = false;
+    let died = false;
+    const game = {
+      Ca: { wa: [[0, 0, 0]] },
+      oa: {
+        ka: [{ x: 0, y: 0 }],
+        direction: "RIGHT",
+      },
+      die: function () {
+        died = true;
+        this.nj = true;
+      },
+      Tb: function () {},
+    };
+    global.__mpCoopOnTick(game);
+    assert.equal(died, true, "die() on remote body");
+    assert.equal(global.__mpCoopLocalDead, true);
   });
 
   it("yin yang does not stamp remote snakes as walls", () => {
@@ -1703,6 +1739,26 @@ describe("coop phantom walls", () => {
     };
     global.__mpCoopOnTick(game);
     assert.equal(game.Ca.wa[0][1], 0);
+  });
+
+  it("findFreeSpawnCell skips solid wall cells", () => {
+    loadNative();
+    const native = require(path.join(root, "src/coop/native.js"));
+    const game = {
+      Ca: {
+        wa: [
+          [0, 1, 0, 0],
+          [0, 0, 0, 0],
+        ],
+      },
+      oa: { ka: [], oa: { width: 4, height: 2 } },
+      wa: { oa: { oa: { width: 4, height: 2 } } },
+    };
+    const free = native.findFreeSpawnCell(game, {});
+    assert.ok(free, "found a free cell");
+    assert.notEqual(free.x + "," + free.y, "1,0", "did not land on wall");
+    assert.equal(native.isSolidWallCell(game, 1, 0), true);
+    assert.equal(native.isSolidWallCell(game, 0, 0), false);
   });
 });
 

@@ -250,7 +250,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
   display:block; color:rgba(255,255,255,0.85); font-family:Roboto,Arial,sans-serif;
   font-size:12px; font-weight:600; margin:6px 0 4px;
 }
-.mp-hud{position:fixed;top:48px;right:8px;z-index:9999;background:rgba(0,0,0,.55);color:#fff;
+.mp-hud{position:fixed;top:48px;left:8px;z-index:9999;background:rgba(0,0,0,.55);color:#fff;
   padding:8px 10px;border-radius:8px;font:12px/1.35 Roboto,Arial,sans-serif;min-width:180px;max-width:280px}
 .mp-hud h4{margin:0 0 6px;font-size:13px}
 .mp-hud .mp-hud-winner{
@@ -663,6 +663,31 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     goalField.id = "mp-versus-goal-field";
     adminBox.appendChild(goalField);
 
+    const finishOngoingWrap = el(
+      "div",
+      "form-check form-check-inline mp-finish-ongoing-wrap"
+    );
+    finishOngoingWrap.id = "mp-finish-ongoing-wrap";
+    const finishOngoingCb = el("input", "form-check-input");
+    finishOngoingCb.type = "checkbox";
+    finishOngoingCb.setAttribute("role", "switch");
+    finishOngoingCb.id = "mp-finish-ongoing";
+    finishOngoingCb.checked =
+      lsGet("MULTIPLAYER_VERSUS_FINISH_ONGOING", "1") !== "0";
+    const finishOngoingLabel = el(
+      "label",
+      "form-check-label",
+      "Finish ongoing runs"
+    );
+    finishOngoingLabel.htmlFor = "mp-finish-ongoing";
+    finishOngoingLabel.title =
+      "When the attempt timer ends, let active runs finish (die or ALL) before closing the match";
+    finishOngoingLabel.style.cssText =
+      "margin:3px;color:white;font-family:Roboto,Arial,sans-serif;";
+    finishOngoingWrap.appendChild(finishOngoingCb);
+    finishOngoingWrap.appendChild(finishOngoingLabel);
+    adminBox.appendChild(finishOngoingWrap);
+
     const startBtn = themedBtn("Start match");
     startBtn.id = "mp-start";
     startBtn.disabled = true;
@@ -836,16 +861,21 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         self.app.client.setVersusGoal(g);
       }
     };
+    finishOngoingCb.onchange = function () {
+      lsSet(
+        "MULTIPLAYER_VERSUS_FINISH_ONGOING",
+        finishOngoingCb.checked ? "1" : "0"
+      );
+    };
     startBtn.onclick = function () {
       if (!self.app.client || !self.app.client.isAdmin()) return;
       const roster = self.app.client.roster || {};
       // After timer expiry, Start begins a *new* match (scores clear on SESSION_START).
-      // Only block while a live attempt forbids new runs mid-window.
+      // Block while a live session still forbids new runs (incl. finish-ongoing grace).
       const midAttemptNoRuns =
         roster.mode === "versus" &&
         roster.sessionActive &&
-        roster.allowNewRuns === false &&
-        !roster.attemptExpired;
+        roster.allowNewRuns === false;
       if (midAttemptNoRuns) return;
       if (!Session.canStart(roster)) return;
       // Always push the textbox value before starting — localStorage alone is not enough
@@ -860,11 +890,18 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       goalSel.value = g;
       lsSet("MULTIPLAYER_VERSUS_GOAL", g);
       if (self.app.client.setVersusGoal) self.app.client.setVersusGoal(g);
+      const finishOngoing = !!finishOngoingCb.checked;
+      lsSet(
+        "MULTIPLAYER_VERSUS_FINISH_ONGOING",
+        finishOngoing ? "1" : "0"
+      );
       // Bundle match rules into SESSION_START so co-op/versus peers apply
       // trophy/count/speed/size quietly under __mpStartingMatch (no menu open).
       const snap =
         self.app.syncMySettingsAsAdmin && self.app.syncMySettingsAsAdmin();
-      self.app.client.sessionStart(snap ? { settings: snap } : {});
+      const startPayload = snap ? { settings: snap } : {};
+      startPayload.finishOngoingRuns = finishOngoing;
+      self.app.client.sessionStart(startPayload);
       const st = document.getElementById("mp-status");
       if (st) st.textContent = "Starting match…";
     };
@@ -883,6 +920,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       readyBtn.textContent = next ? "Unready" : "Ready";
       if (self.app.client.roster) self.renderRoster(self.app.client.roster);
       self.app.client.setReady(next);
+      if (self.app.applyControlLocks) self.app.applyControlLocks();
     };
 
     // Stable delegation — survives roster DOM rebuilds mid-click (SCORE_PULSE etc.)
@@ -945,6 +983,15 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     };
     mosaicBtn.onclick = function () {
       if (!self.app.versus) return;
+      if (
+        self.app.client &&
+        self.app.client.roster &&
+        self.app.client.roster.mode === "coop"
+      ) {
+        // Co-op spectate stays mosaic-only
+        self.app.setSpectateMode("mosaic");
+        return;
+      }
       const next = self.app.versus.spectateMode === "mosaic" ? "focus" : "mosaic";
       self.app.setSpectateMode(next);
       mosaicBtn.textContent = next === "mosaic" ? "Focus view" : "Mosaic";
@@ -1078,19 +1125,33 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       // Spectate controls on Roster — only while you are a spectator
       const amSpectator = !!(me && me.role === "spectator");
       const isVersus = rosterData.mode === "versus";
-      spectateBar.style.display = amSpectator && isVersus ? "" : "none";
-      if (amSpectator && self.app.versus) {
+      const isCoop = rosterData.mode === "coop";
+      spectateBar.style.display = amSpectator && (isVersus || isCoop) ? "" : "none";
+      if (amSpectator && isCoop && self.app.versus) {
+        // Co-op is mosaic-only — no Focus toggle
+        self.app.versus.spectateMode = "mosaic";
+        mosaicBtn.style.display = "none";
+      } else if (amSpectator && self.app.versus) {
+        mosaicBtn.style.display = "";
         mosaicBtn.textContent =
           self.app.versus.spectateMode === "mosaic" ? "Focus view" : "Mosaic";
       }
       // Versus attempt length is versus-only; hide in co-op
-      const isCoop = rosterData.mode === "coop";
       durField.classList.toggle("hidden", !!isCoop);
       durField.style.display = isCoop ? "none" : "";
       const goalFieldEl = document.getElementById("mp-versus-goal-field");
       if (goalFieldEl) {
         goalFieldEl.classList.toggle("hidden", !!isCoop);
         goalFieldEl.style.display = isCoop ? "none" : "";
+      }
+      finishOngoingWrap.classList.toggle("hidden", !!isCoop);
+      finishOngoingWrap.style.display = isCoop ? "none" : "";
+      if (
+        !isCoop &&
+        rosterData.finishOngoingRuns != null &&
+        document.activeElement !== finishOngoingCb
+      ) {
+        finishOngoingCb.checked = !!rosterData.finishOngoingRuns;
       }
       // Keep textbox aligned with server durationMin (source of truth for the clock)
       if (
@@ -1135,17 +1196,16 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       endBtn.style.display = showEnd ? "" : "none";
       matchHint.style.display =
         !connected || (isAdmin || (me && me.role === "player")) ? "none" : "block";
-      // Start match has nothing left to do once a match is live — it comes back
-      // when the session ends or the versus attempt runs out.
-      const canOfferStart = !sessionOn || matchOver;
+      // Start match has nothing left to do once a match is live — including
+      // finish-ongoing grace (sessionActive stays true until all runs end).
+      const canOfferStart = !sessionOn;
       startBtn.classList.toggle("hidden", !canOfferStart);
       startBtn.style.display = canOfferStart ? "" : "none";
       startBtn.disabled =
         !Session.canStart(rosterData) ||
         (rosterData.mode === "versus" &&
           rosterData.sessionActive &&
-          rosterData.allowNewRuns === false &&
-          !rosterData.attemptExpired);
+          rosterData.allowNewRuns === false);
       readyBtn.textContent = me && me.ready ? "Unready" : "Ready";
       // Every player readies on the in-game Shuffle→Ready button, admin
       // included; only spectator seats keep the Match Ready button.
@@ -1161,9 +1221,12 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         rosterData.mode === "versus" &&
         (rosterData.allowNewRuns === false || rosterData.attemptExpired)
       ) {
-        const suffix = rosterData.attemptExpired
-          ? " · match over — results kept"
-          : " · no new runs";
+        let suffix = " · no new runs";
+        if (rosterData.attemptExpired && rosterData.sessionActive) {
+          suffix = " · finishing runs…";
+        } else if (rosterData.attemptExpired) {
+          suffix = " · match over — results kept";
+        }
         status.textContent =
           (connected
             ? "Connected · versus · room " + (rosterData.roomCode || "")
@@ -1401,12 +1464,6 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       return;
     }
     const r = app.client.roster || {};
-    // Co-op: no floating debug HUD — play inside native Snake chrome only
-    if (r.mode === "coop") {
-      this.hud.style.display = "none";
-      return;
-    }
-    this.hud.style.display = "block";
     const clients = r.clients || [];
     function nameOf(id) {
       const c = clients.find(function (x) {
@@ -1417,6 +1474,56 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         c.resolvedName || c.displayName || c.colorName || id.slice(0, 6)
       );
     }
+
+    // Co-op panel: combined score + per-player lives
+    if (r.mode === "coop") {
+      if (!r.sessionActive && !(app._coopTotal > 0)) {
+        this.hud.style.display = "none";
+        return;
+      }
+      this.hud.style.display = "block";
+      const goal =
+        app._coopGoal != null
+          ? app._coopGoal
+          : app.ensureCoopAppleGoal
+            ? app.ensureCoopAppleGoal()
+            : "—";
+      const total = app._coopTotal != null ? app._coopTotal : 0;
+      let html = "<h4>CO-OP</h4>";
+      html +=
+        '<div class="mp-hud-meta">Team score: <strong>' +
+        total +
+        "</strong> / " +
+        goal +
+        "</div>";
+      if (r.sessionActive) {
+        html += '<div class="mp-hud-meta">Fill the board together</div>';
+      } else if (app._coopWon) {
+        html += '<div class="mp-hud-winner">All apples!</div>';
+      } else {
+        html += '<div class="mp-hud-meta">Match over</div>';
+      }
+      const scores = app._coopScores || {};
+      clients
+        .filter(function (c) {
+          return c.role === "player";
+        })
+        .forEach(function (c) {
+          const sc = scores[c.clientId] || {};
+          const alive = sc.alive !== false;
+          html +=
+            '<div class="mp-hud-place">' +
+            nameOf(c.clientId) +
+            ": " +
+            (sc.score != null ? sc.score : 0) +
+            (alive ? "" : " · down") +
+            "</div>";
+        });
+      this.hud.innerHTML = html;
+      return;
+    }
+
+    this.hud.style.display = "block";
     let html = "<h4>" + (r.mode || "").toUpperCase() + "</h4>";
     if (r.mode === "versus" && app.versus) {
       const VersusState = root.VersusState;
@@ -1434,10 +1541,17 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       );
       html +=
         '<div class="mp-hud-meta">Goal: ' + escapeHtml(goalLabel) + "</div>";
+      const finishingRuns = !!(
+        r.attemptExpired &&
+        r.sessionActive &&
+        (r.finishOngoingRuns !== false ||
+          (app.versus && app.versus.finishOngoing))
+      );
       if (
         r.sessionActive &&
         app.versus.attemptRemainingMs != null &&
-        !app.versus.expired
+        !app.versus.expired &&
+        !r.attemptExpired
       ) {
         const s = Math.max(
           0,
@@ -1449,6 +1563,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           ":" +
           String(s % 60).padStart(2, "0") +
           "</div>";
+      } else if (finishingRuns) {
+        html += '<div class="mp-hud-meta">Attempt: finishing runs…</div>';
       } else if (matchOver) {
         html += '<div class="mp-hud-meta">Attempt: ended</div>';
       }
@@ -1460,7 +1576,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           ? VersusState.pickLeader(scores, goal)
           : null);
 
-      if (matchOver && Object.keys(scores).length) {
+      if (matchOver && !finishingRuns && Object.keys(scores).length) {
         html += '<div class="mp-hud-meta">Last match results</div>';
         if (winId) {
           const winSc = scores[winId] || {};
@@ -1509,7 +1625,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           " " +
           escapeHtml(bestLine) +
           mark;
-        if (sc.score != null && !matchOver) {
+        if (sc.score != null && (!matchOver || finishingRuns)) {
           line +=
             " · live " +
             sc.score +

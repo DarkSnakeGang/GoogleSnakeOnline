@@ -1182,11 +1182,45 @@ describe("GSM hook harness", () => {
     assert.equal(win.__remixGame.oa.direction, "UP");
   });
 
-  it("locks menus for non-admin sync", () => {
+  it("applyCoopSpawnOffset slides off solid wall cells", () => {
+    const w = 17;
+    const h = 15;
+    const cx = Math.floor(w / 2);
+    const cy = Math.floor(h / 2);
+    // Paint the preferred length-3 seat as walls
+    win.__remixGame.Ca = { wa: [] };
+    for (let y = 0; y < h; y++) {
+      win.__remixGame.Ca.wa[y] = [];
+      for (let x = 0; x < w; x++) win.__remixGame.Ca.wa[y][x] = 0;
+    }
+    win.__remixGame.Ca.wa[cy][cx] = 1;
+    win.__remixGame.Ca.wa[cy][cx - 1] = 1;
+    win.__remixGame.Ca.wa[cy][cx - 2] = 1;
+    win.__remixGame.oa.ka = [{ x: 0, y: 0 }];
+    win.__remixGame.oa.direction = null;
+    win.__mpCoopIsSolidWall = function (game, x, y) {
+      const row = game.Ca.wa[y];
+      return !!(row && (row[x] | 0) !== 0 && (row[x] | 0) !== 3);
+    };
+    win.__mpCoopReadOccupancy = function () {
+      return {};
+    };
+    const ok = Gsm.applyCoopSpawnOffset(0);
+    assert.equal(ok, true);
+    const head = win.__remixGame.oa.ka[0];
+    assert.ok(head, "spawned");
+    assert.notEqual(head.x + "," + head.y, cx + "," + cy, "left the walled seat");
+    // Entire body must be off walls
+    win.__remixGame.oa.ka.forEach(function (p) {
+      assert.equal(win.__remixGame.Ca.wa[p.y][p.x], 0, "body not on wall");
+    });
+  });
+
+  it("locks match menus while Ready (title + play stay gated)", () => {
     Gsm.setNativeMenusLocked(true);
     const trophy = win.document.getElementById("trophy");
     assert.equal(trophy.style.pointerEvents, "none");
-    assert.equal(trophy.title, "Synced from admin");
+    assert.equal(trophy.title, "Unready to change settings");
     const play = Gsm.playButton();
     assert.equal(play.style.pointerEvents, "none");
     assert.match(play.title, /Start match/i);
@@ -2953,7 +2987,7 @@ describe("spectator / admin menu access", () => {
     });
   }
 
-  it("non-admin spectator: sync menus locked, cosmetics + Escape peek stay usable", () => {
+  it("spectator menus unlocked until Ready; cosmetics + Escape peek stay usable", () => {
     const win = menuDom();
     const MultiplayerApp = loadApp(win);
     const Gsm = win.MultiplayerGsm;
@@ -2983,8 +3017,8 @@ describe("spectator / admin menu access", () => {
     app.versus.focusClientId = "admin";
 
     app.applyControlLocks();
-    assert.equal(win.document.getElementById("trophy").style.pointerEvents, "none");
-    assert.equal(win.document.getElementById("trophy").title, "Synced from admin");
+    assert.equal(win.document.getElementById("trophy").style.pointerEvents, "");
+    assert.equal(win.document.getElementById("trophy").title, "");
     assertPersonalClickable(win.document);
     assert.equal(Gsm.playButton().style.pointerEvents, "none");
 
@@ -2994,6 +3028,39 @@ describe("spectator / admin menu access", () => {
     const death = win.document.getElementsByClassName("wjOYOd")[0];
     assert.notEqual(death.style.visibility, "hidden");
     assertPersonalClickable(win.document);
+  });
+
+  it("Ready player locks match menus; Unready unlocks", () => {
+    const win = menuDom();
+    const MultiplayerApp = loadApp(win);
+    const me = { clientId: "p1", role: "player", ready: true };
+    const app = new MultiplayerApp();
+    app.client = {
+      connected: true,
+      clientId: "p1",
+      isAdmin: function () {
+        return false;
+      },
+      me: function () {
+        return me;
+      },
+      roster: {
+        mode: "versus",
+        sessionActive: false,
+        adminId: "admin",
+        clients: [me],
+      },
+    };
+    app.ui = { updateHud: function () {}, renderRoster: function () {} };
+    app.applyControlLocks();
+    assert.equal(win.document.getElementById("trophy").style.pointerEvents, "none");
+    assert.equal(
+      win.document.getElementById("trophy").title,
+      "Unready to change settings"
+    );
+    me.ready = false;
+    app.applyControlLocks();
+    assert.equal(win.document.getElementById("trophy").style.pointerEvents, "");
   });
 
   it("admin spectator in lobby: sync menus unlocked", () => {
@@ -3228,20 +3295,21 @@ describe("spectator / admin menu access", () => {
     app._leaveVersusFocusSpectate();
   });
 
-  it("click capture blocks only sync menus for non-admin, not cosmetics", () => {
+  it("click capture blocks sync menus only while Ready, not cosmetics", () => {
     const win = menuDom();
     const MultiplayerApp = loadApp(win);
     const app = new MultiplayerApp();
     let colorClicks = 0;
     let trophyClicks = 0;
+    const me = { role: "player", ready: true };
     app.client = {
       connected: true,
-      clientId: "spec",
+      clientId: "p1",
       isAdmin: function () {
         return false;
       },
       me: function () {
-        return { role: "spectator" };
+        return me;
       },
     };
     app.hookAdminSettingsWatch();
@@ -3262,7 +3330,13 @@ describe("spectator / admin menu access", () => {
       new win.MouseEvent("click", { bubbles: true, cancelable: true })
     );
     assert.equal(colorClicks, 1, "cosmetic click reaches target");
-    assert.equal(trophyClicks, 0, "sync menu click blocked for non-admin");
+    assert.equal(trophyClicks, 0, "sync menu click blocked while Ready");
+
+    me.ready = false;
+    trophy.dispatchEvent(
+      new win.MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    assert.equal(trophyClicks, 1, "sync menu click reaches target when Unready");
   });
 
   it("hideControlHelper does not disable wrappers that own menu rows", () => {

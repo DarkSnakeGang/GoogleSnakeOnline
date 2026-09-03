@@ -12,6 +12,7 @@
     this.scores = {};
     this.attemptRemainingMs = null;
     this.expired = false;
+    this.finishOngoing = false;
     this.focusClientId = null;
     this.boards = {};
     this.spectateMode = "focus"; // focus | mosaic
@@ -268,6 +269,7 @@
 
   VersusState.prototype.onExpired = function (payload) {
     this.expired = true;
+    this.finishOngoing = !!(payload && payload.finishOngoing);
     if (payload && payload.winnerClientId) {
       this.winnerClientId = payload.winnerClientId;
       this.leaderClientId = payload.winnerClientId;
@@ -331,6 +333,7 @@
     this.boards = {};
     this.runClocks = {};
     this.expired = false;
+    this.finishOngoing = false;
     this.attemptRemainingMs = null;
     this.leaderClientId = null;
     this.winnerClientId = null;

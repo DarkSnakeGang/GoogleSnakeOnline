@@ -649,6 +649,64 @@ describe("gsm hooks", () => {
     assert.equal(filtered[2].lock, true);
   });
 
+  it("scrapeWalls does not export co-op phantom remote cells", () => {
+    const game = {
+      width: 6,
+      height: 4,
+      Ca: {
+        wa: [
+          [0, 1, 1, 0, 0, 0],
+          [0, 0, 0, 1, 0, 0],
+          [0, 0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0, 0],
+        ],
+      },
+    };
+    global.__mpGame = game;
+    global.__remixGame = game;
+    global.__mpCoopSession = true;
+    global.__mpCoopInject = true;
+    let cleared = 0;
+    let stamped = 0;
+    global.__mpCoopClearPhantomWalls = function () {
+      cleared++;
+      // Simulate phantoms at (1,0) and (2,0) being cleared
+      game.Ca.wa[0][1] = 0;
+      game.Ca.wa[0][2] = 0;
+    };
+    global.__mpCoopStampPhantomWalls = function () {
+      stamped++;
+      // Clear-only — must not put snake cells back into the wall grid
+    };
+    global.__mpCoopPhantomKeys = function () {
+      return [];
+    };
+    global.__mpCoopRemotes = {
+      other: { body: [{ x: 1, y: 0 }, { x: 2, y: 0 }] },
+    };
+    try {
+      const walls = Gsm.scrapeBoardEntities(game).walls;
+      assert.equal(cleared, 1, "phantoms cleared before scrape");
+      assert.equal(stamped, 1, "clear-only stamp after scrape");
+      // Real wall at (3,1) remains; phantom cells must not appear
+      const keys = walls.map(function (w) {
+        return w.x + "," + w.y;
+      });
+      assert.ok(keys.indexOf("3,1") >= 0, "real wa wall kept");
+      assert.equal(keys.indexOf("1,0"), -1, "phantom not exported");
+      assert.equal(keys.indexOf("2,0"), -1, "phantom not exported");
+    } finally {
+      delete global.__mpCoopSession;
+      delete global.__mpCoopInject;
+      delete global.__mpCoopClearPhantomWalls;
+      delete global.__mpCoopStampPhantomWalls;
+      delete global.__mpCoopPhantomKeys;
+      delete global.__mpCoopRemotes;
+      delete global.__mpGame;
+      delete global.__remixGame;
+    }
+  });
+
   it("drawBoardOnCanvas ignores phantom corner walls", () => {
     const fills = [];
     const ctx = {
@@ -3279,6 +3337,85 @@ describe("gsm hooks", () => {
     });
     assert.equal(g.__remixGame.Ca.wa[1][1], 1);
     assert.equal(g.__remixGame.Aa.oa[0].pos.x, 2);
+  });
+
+  it("collectablesFingerprint changes when a soko box or key moves", () => {
+    const a = {
+      apples: [{ x: 1, y: 1 }],
+      boxes: [{ x: 2, y: 2 }],
+      keys: [{ x: 3, y: 3, type: 1, keyblock: { x: 4, y: 4 } }],
+      walls: [{ x: 5, y: 5, lock: true, lockType: 1 }],
+    };
+    const b = {
+      apples: [{ x: 1, y: 1 }],
+      boxes: [{ x: 2, y: 3 }],
+      keys: [{ x: 3, y: 3, type: 1, keyblock: { x: 4, y: 4 } }],
+      walls: [{ x: 5, y: 5, lock: true, lockType: 1 }],
+    };
+    const c = {
+      apples: [{ x: 1, y: 1 }],
+      boxes: [{ x: 2, y: 2 }],
+      keys: [],
+      walls: [],
+    };
+    const fa = Gsm.collectablesFingerprint(a);
+    const fb = Gsm.collectablesFingerprint(b);
+    const fc = Gsm.collectablesFingerprint(c);
+    assert.notEqual(fa, fb, "box move changes fingerprint");
+    assert.notEqual(fa, fc, "key collect + unlock changes fingerprint");
+    assert.ok(fa.indexOf("2,2") >= 0);
+    assert.ok(fb.indexOf("2,3") >= 0);
+  });
+
+  it("scrapeKeys reads Map/Set hosts like mines do", () => {
+    const g = typeof globalThis !== "undefined" ? globalThis : global;
+    const keyMap = new Map();
+    keyMap.set("k", {
+      pos: { x: 6, y: 7 },
+      type: 4,
+      r7a: { x: 1, y: 2 },
+    });
+    g.__remixGame = {
+      oa: { ka: [], oa: { width: 17, height: 15 } },
+      Ba: { keys: keyMap },
+      Ca: { wa: [], Aa: null },
+      wa: { ka: [{ pos: { x: 0, y: 0 } }], oa: { oa: { width: 17, height: 15 } } },
+    };
+    g.__mpGame = g.__remixGame;
+    const cols = Gsm.scrapeCollectables({ includeEntities: true });
+    assert.ok(cols.keys && cols.keys.length === 1);
+    assert.equal(cols.keys[0].x, 6);
+    assert.equal(cols.keys[0].type, 4);
+    assert.equal(cols.keys[0].keyblock.x, 1);
+  });
+
+  it("applyBoardEntities reuses soko box instances when they move", () => {
+    const g = typeof globalThis !== "undefined" ? globalThis : global;
+    const box = {
+      pos: {
+        x: 1,
+        y: 1,
+        clone: function () {
+          return { x: this.x, y: this.y, clone: this.clone };
+        },
+      },
+      nativeMark: 42,
+    };
+    const boxes = new Set([box]);
+    g.__remixGame = {
+      oa: { ka: [], oa: { width: 8, height: 6 } },
+      Aa: { oa: boxes },
+      Ca: { wa: [[0, 0], [0, 0]] },
+      wa: { ka: [], oa: { oa: { width: 8, height: 6 } } },
+    };
+    g.__mpGame = g.__remixGame;
+    Gsm.applyBoardEntities({ boxes: [{ x: 3, y: 4 }] });
+    assert.equal(boxes.size, 1);
+    const next = Array.from(boxes)[0];
+    assert.equal(next, box, "same box object reused");
+    assert.equal(next.nativeMark, 42);
+    assert.equal(next.pos.x, 3);
+    assert.equal(next.pos.y, 4);
   });
 
   it("Yin Yang corners put right-side snakes facing left", () => {

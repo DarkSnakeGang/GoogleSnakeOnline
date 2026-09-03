@@ -156,6 +156,8 @@ pub struct Room {
     pub attempt_deadline: Option<Instant>,
     pub attempt_expired: bool,
     pub allow_new_runs: bool,
+    /// When the attempt clock hits zero, keep live runs going until they die/ALL.
+    pub finish_ongoing_runs: bool,
     pub versus_scores: HashMap<String, VersusScore>,
     pub versus_boards: HashMap<String, Value>,
     /// Legacy simplified sim — unused for native co-op gameplay (kept for tests/compat).
@@ -187,6 +189,7 @@ impl Room {
             attempt_deadline: None,
             attempt_expired: false,
             allow_new_runs: true,
+            finish_ongoing_runs: true,
             versus_scores: HashMap::new(),
             versus_boards: HashMap::new(),
             coop: None,
@@ -285,6 +288,7 @@ impl Room {
             "sessionActive": self.session_active,
             "attemptExpired": self.attempt_expired,
             "allowNewRuns": self.allow_new_runs,
+            "finishOngoingRuns": self.finish_ongoing_runs,
             "allPlayersReady": self.all_players_ready(),
             "collectablesOwnerId": self.collectables_owner,
             "leaderClientId": self.versus_leader_id(),
@@ -765,6 +769,9 @@ impl Room {
             self.attempt_deadline =
                 Some(Instant::now() + Duration::from_secs(self.duration_min as u64 * 60));
             self.collectables_owner = None;
+            if let Some(flag) = payload.get("finishOngoingRuns").and_then(|v| v.as_bool()) {
+                self.finish_ongoing_runs = flag;
+            }
         } else {
             self.attempt_deadline = None;
             // Native co-op: no server grid sim — clients run Google Snake.
@@ -791,6 +798,7 @@ impl Room {
             "versusGoal": self.versus_goal.as_str(),
             "versusGoalLabel": self.versus_goal.label(),
             "collectablesOwnerId": self.collectables_owner,
+            "finishOngoingRuns": self.finish_ongoing_runs,
             "settings": self.settings,
         });
         if self.mode == Mode::Coop {
@@ -1081,6 +1089,7 @@ impl Room {
             }
         }
         self.push_broadcast(Envelope::new("SCORE_PULSE", pulse));
+        self.maybe_end_versus_grace();
         Ok(())
     }
 
@@ -1335,25 +1344,93 @@ impl Room {
                 if Instant::now() >= deadline && !self.attempt_expired {
                     self.attempt_expired = true;
                     self.allow_new_runs = false;
-                    // Match is over — leave lobby so clients reopen death/settings
-                    // (Focus/mosaic gate on sessionActive).
-                    self.session_active = false;
-                    self.attempt_deadline = None;
-                    info!(roomId = %self.code, event = "attempt_expired");
                     let winner = self.versus_leader_id();
-                    self.push_broadcast(Envelope::new(
-                        "ATTEMPT_EXPIRED",
-                        json!({
-                            "winnerClientId": winner,
-                            "versusGoal": self.versus_goal.as_str(),
-                            "versusGoalLabel": self.versus_goal.label(),
-                        }),
-                    ));
-                    self.broadcast_roster();
+                    if self.finish_ongoing_runs {
+                        // Keep session_active so in-progress runs can finish;
+                        // new runs stay blocked via allow_new_runs.
+                        info!(roomId = %self.code, event = "attempt_expired_grace");
+                        self.push_broadcast(Envelope::new(
+                            "ATTEMPT_EXPIRED",
+                            json!({
+                                "winnerClientId": winner,
+                                "versusGoal": self.versus_goal.as_str(),
+                                "versusGoalLabel": self.versus_goal.label(),
+                                "finishOngoing": true,
+                            }),
+                        ));
+                        self.broadcast_roster();
+                        self.maybe_end_versus_grace();
+                    } else {
+                        // Hard stop — leave lobby so clients reopen death/settings
+                        self.session_active = false;
+                        self.attempt_deadline = None;
+                        info!(roomId = %self.code, event = "attempt_expired");
+                        self.push_broadcast(Envelope::new(
+                            "ATTEMPT_EXPIRED",
+                            json!({
+                                "winnerClientId": winner,
+                                "versusGoal": self.versus_goal.as_str(),
+                                "versusGoalLabel": self.versus_goal.label(),
+                                "finishOngoing": false,
+                            }),
+                        ));
+                        self.broadcast_roster();
+                    }
                 }
             }
         }
         // Co-op: gameplay is native-client; server only relays SNAKE/COLLECTABLES.
+    }
+
+    /// After the clock expires with finish-ongoing, close the match once nobody
+    /// is still alive in a run.
+    fn maybe_end_versus_grace(&mut self) {
+        if self.mode != Mode::Versus
+            || !self.attempt_expired
+            || !self.finish_ongoing_runs
+            || !self.session_active
+        {
+            return;
+        }
+        let players: Vec<String> = self
+            .players()
+            .into_iter()
+            .map(|p| p.client_id.clone())
+            .collect();
+        if players.is_empty() {
+            self.finish_versus_grace();
+            return;
+        }
+        let any_alive = players.iter().any(|id| {
+            self.versus_scores
+                .get(id)
+                .map(|s| s.alive)
+                .unwrap_or(true) // no pulse yet → still considered running
+        });
+        if !any_alive {
+            self.finish_versus_grace();
+        }
+    }
+
+    fn finish_versus_grace(&mut self) {
+        if !self.session_active {
+            return;
+        }
+        self.session_active = false;
+        self.attempt_deadline = None;
+        let winner = self.versus_leader_id();
+        info!(roomId = %self.code, event = "attempt_grace_complete");
+        self.push_broadcast(Envelope::new(
+            "ATTEMPT_EXPIRED",
+            json!({
+                "winnerClientId": winner,
+                "versusGoal": self.versus_goal.as_str(),
+                "versusGoalLabel": self.versus_goal.label(),
+                "finishOngoing": false,
+                "runsComplete": true,
+            }),
+        ));
+        self.broadcast_roster();
     }
 }
 
@@ -1651,15 +1728,20 @@ mod tests {
     }
 
     #[test]
-    fn attempt_expire_clears_session_active() {
+    fn attempt_expire_hard_stop_clears_session_active() {
         let mut r = room();
         r.join("a".into(), None, None).unwrap();
         r.cmd_set_role("a", &json!({"clientId": "a", "role": "player"}))
             .unwrap();
         r.cmd_ready("a", &json!({"ready": true})).unwrap();
         r.cmd_set_duration("a", &json!({"minutes": 1})).unwrap();
-        r.cmd_session_start("a", &json!({})).unwrap();
+        r.cmd_session_start(
+            "a",
+            &json!({"finishOngoingRuns": false}),
+        )
+        .unwrap();
         assert!(r.session_active);
+        assert!(!r.finish_ongoing_runs);
         assert!(r.attempt_deadline.is_some());
         // Force deadline into the past
         r.attempt_deadline = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
@@ -1670,6 +1752,65 @@ mod tests {
         assert!(r.attempt_deadline.is_none());
         let out = r.take_outbox();
         assert!(out.iter().any(|(_, e)| e.msg_type == "ATTEMPT_EXPIRED"));
+    }
+
+    #[test]
+    fn attempt_expire_finish_ongoing_waits_for_deaths() {
+        let mut r = room();
+        r.join("a".into(), None, None).unwrap();
+        r.join("b".into(), None, None).unwrap();
+        r.cmd_set_role("a", &json!({"clientId": "a", "role": "player"}))
+            .unwrap();
+        r.cmd_set_role("a", &json!({"clientId": "b", "role": "player"}))
+            .unwrap();
+        r.cmd_ready("a", &json!({"ready": true})).unwrap();
+        r.cmd_ready("b", &json!({"ready": true})).unwrap();
+        r.cmd_set_duration("a", &json!({"minutes": 1})).unwrap();
+        r.cmd_session_start("a", &json!({"finishOngoingRuns": true}))
+            .unwrap();
+        assert!(r.finish_ongoing_runs);
+        r.cmd_score_pulse(
+            "a",
+            &json!({"score": 5, "timeMs": 1000, "alive": true}),
+        )
+        .unwrap();
+        r.cmd_score_pulse(
+            "b",
+            &json!({"score": 2, "timeMs": 800, "alive": true}),
+        )
+        .unwrap();
+        r.take_outbox();
+        r.attempt_deadline = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        r.tick();
+        assert!(r.attempt_expired);
+        assert!(!r.allow_new_runs);
+        assert!(r.session_active, "grace keeps session live");
+        let out = r.take_outbox();
+        let expired = out
+            .iter()
+            .find(|(_, e)| e.msg_type == "ATTEMPT_EXPIRED")
+            .expect("ATTEMPT_EXPIRED");
+        assert_eq!(expired.1.payload["finishOngoing"], json!(true));
+
+        // One death — still grace
+        r.cmd_score_pulse(
+            "a",
+            &json!({"score": 5, "timeMs": 1200, "alive": false}),
+        )
+        .unwrap();
+        assert!(r.session_active);
+
+        // Last death ends the match
+        r.cmd_score_pulse(
+            "b",
+            &json!({"score": 2, "timeMs": 900, "alive": false}),
+        )
+        .unwrap();
+        assert!(!r.session_active);
+        let out2 = r.take_outbox();
+        assert!(out2.iter().any(|(_, e)| {
+            e.msg_type == "ATTEMPT_EXPIRED" && e.payload["runsComplete"] == json!(true)
+        }));
     }
 
     #[test]

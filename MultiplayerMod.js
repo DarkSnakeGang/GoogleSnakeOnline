@@ -1,6 +1,6 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-03T16:45:55.562Z */
+/* Built: 2026-09-03T18:04:48.045Z */
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -31098,6 +31098,7 @@ window.RemixMod.runCodeAfter = function () {
     this.scores = {};
     this.attemptRemainingMs = null;
     this.expired = false;
+    this.finishOngoing = false;
     this.focusClientId = null;
     this.boards = {};
     this.spectateMode = "focus"; // focus | mosaic
@@ -31354,6 +31355,7 @@ window.RemixMod.runCodeAfter = function () {
 
   VersusState.prototype.onExpired = function (payload) {
     this.expired = true;
+    this.finishOngoing = !!(payload && payload.finishOngoing);
     if (payload && payload.winnerClientId) {
       this.winnerClientId = payload.winnerClientId;
       this.leaderClientId = payload.winnerClientId;
@@ -31417,6 +31419,7 @@ window.RemixMod.runCodeAfter = function () {
     this.boards = {};
     this.runClocks = {};
     this.expired = false;
+    this.finishOngoing = false;
     this.attemptRemainingMs = null;
     this.leaderClientId = null;
     this.winnerClientId = null;
@@ -31717,11 +31720,10 @@ window.RemixMod.runCodeAfter = function () {
  * Partially-native co-op.
  *
  * Remote players are drawn with the mosaic snake renderer straight into the
- * native canvas layer the local snake was just painted on, and their occupied
- * cells are stamped into the native wall collision grid (`game.Ca.wa`). The
- * engine then kills the local snake with its own wall death — a "phantom wall"
- * that collides but is never drawn, because the remote snake is already painted
- * on top of it. Walls render from `game.Ca.Aa`, which we never touch.
+ * native canvas layer the local snake was just painted on. Collision uses the
+ * live remote body positions each tick (head-step probe + y4E / slot wall
+ * wrappers) — we never stamp snake cells into the wall grid, because that
+ * draws real wall tiles at spawn / body cells.
  *
  * The retired "100% native" approach (PlayerRenderer body-swap) lives in
  * archive/coop-native-full/.
@@ -32031,8 +32033,13 @@ window.RemixMod.runCodeAfter = function () {
     if (!game || coopSkipFriendlyHits()) return false;
     if (root.__mpCoopSpectator || root.__mpCoopLocalDead) return false;
     if (game.nj || game.dead || game.isDead) return false;
+    const snake = game.oa;
+    const head = snake && snake.ka && snake.ka[0];
     const next = predictedHead(game);
-    if (!next || !remoteOccupies(next.x, next.y)) return false;
+    const hit =
+      (head && remoteOccupies(head.x, head.y)) ||
+      (next && remoteOccupies(next.x, next.y));
+    if (!hit) return false;
     try {
       if (typeof game.die === "function") game.die();
       else {
@@ -32043,6 +32050,15 @@ window.RemixMod.runCodeAfter = function () {
       game.nj = true;
     }
     root.__mpCoopLocalDead = true;
+    // Notify mod so corpse / score paths stay in sync
+    if (typeof root.__mpCoopOnFriendlyDeath === "function" && snake && snake.ka) {
+      try {
+        const snap = Array.prototype.map.call(snake.ka, function (p) {
+          return p && { x: p.x | 0, y: p.y | 0 };
+        });
+        root.__mpCoopOnFriendlyDeath(snap);
+      } catch (e2) { /* ignore */ }
+    }
     return true;
   }
 
@@ -32189,7 +32205,49 @@ window.RemixMod.runCodeAfter = function () {
     return { width: w || 17, height: h || 15 };
   }
 
-  /** Linear scan for a cell not on any co-op snake (and not on local body). */
+  /**
+   * Native wall collision: non-zero / non-3 cells in Ca.wa are solid (y4E).
+   * Used so fruit/snake seats avoid real Wall-mode cells the same way the
+   * engine does — including after peers apply a synced wall list.
+   */
+  function isSolidWallCell(game, x, y) {
+    const wa = wallGrid(game);
+    if (!wa) return false;
+    const xi = x | 0;
+    const yi = y | 0;
+    const row = wa[yi];
+    if (!row || xi < 0 || xi >= row.length) return false;
+    const v = row[xi] | 0;
+    return v !== 0 && v !== 3;
+  }
+
+  /** All solid Ca.wa cells (real walls + current phantom stamps). */
+  function wallOccupancyKeys(game) {
+    const keys = {};
+    const wa = wallGrid(game);
+    if (!wa) return keys;
+    for (let y = 0; y < wa.length; y++) {
+      const row = wa[y];
+      if (!row) continue;
+      for (let x = 0; x < row.length; x++) {
+        const v = row[x] | 0;
+        if (v === 0 || v === 3) continue;
+        keys[x + "," + y] = true;
+      }
+    }
+    return keys;
+  }
+
+  function spawnCellBlocked(game, x, y, occ) {
+    const k = (x | 0) + "," + (y | 0);
+    if (occ && occ[k]) return true;
+    return isSolidWallCell(game, x, y);
+  }
+
+  /**
+   * Linear scan for a cell not on any co-op snake, local body, or solid wall.
+   * Wall mode must plant fruit / entities with the same rules as native.
+   */
   function findFreeSpawnCell(game, occ) {
     occ = occ || readCoopOccupancy();
     const size = boardSizeFromGame(game);
@@ -32206,6 +32264,7 @@ window.RemixMod.runCodeAfter = function () {
       for (let x = 0; x < size.width; x++) {
         const k = x + "," + y;
         if (occ[k] || local[k]) continue;
+        if (isSolidWallCell(game, x, y)) continue;
         return { x: x, y: y };
       }
     }
@@ -32214,11 +32273,14 @@ window.RemixMod.runCodeAfter = function () {
 
   /* ---------------------------------------------------------- phantom walls */
 
-  // Native y4E blocks a cell unless its wall value is 0 or 3. Temp Walls uses
-  // a plain ++ from 0, so 1 is a known-good "solid" value.
+  // Legacy: we used to stamp remote bodies into Ca.wa as solid "phantom"
+  // walls. That painted visible wall tiles at snake cells (especially the
+  // initial spawn seats). Collision is body-position only now — these helpers
+  // only clear any leftover stamps from older sessions/builds.
+
   const PHANTOM_WALL_VALUE = 1;
 
-  // Cells we stamped, so unstamping is exact and never eats a real wall.
+  // Cells we stamped historically, so unstamping is exact.
   let _phantomKeys = [];
   let _phantomSet = new Set();
   let _phantomGrid = null;
@@ -32229,7 +32291,7 @@ window.RemixMod.runCodeAfter = function () {
     return Array.isArray(wa) && wa.length ? wa : null;
   }
 
-  /** Remove every cell we stamped last pass. */
+  /** Remove every cell we stamped last pass (and wipe any stray value-1 stamps). */
   function clearPhantomWalls(game) {
     const wa = wallGrid(game);
     if (wa && wa === _phantomGrid) {
@@ -32241,55 +32303,69 @@ window.RemixMod.runCodeAfter = function () {
         if (row && (row[x] | 0) === PHANTOM_WALL_VALUE) row[x] = 0;
       }
     }
-    // A reset swaps the grid out from under us; the stale list is then moot.
     if (_phantomKeys.length) {
       _phantomKeys = [];
       _phantomSet = new Set();
     }
     _phantomGrid = wa;
-  }
 
-  /**
-   * Stamp every solid remote cell (live bodies including heads, plus corpses)
-   * into the wall collision grid. Only free cells are stamped, so real walls,
-   * keys, mines and bridges keep their own values and our unstamp stays exact.
-   */
-  function stampPhantomWalls(game) {
-    clearPhantomWalls(game);
-    const wa = wallGrid(game);
-    if (!wa) return 0;
-    if (!root.__mpCoopSession || !root.__mpCoopInject) return 0;
-    if (root.__mpCoopSpectator) return 0;
-    // Peaceful / cat grace / chess peaceful: friendly snakes are not solid
-    if (coopSkipFriendlyHits()) return 0;
-
-    const myId = root.__mpCoopMyId;
+    // Scrub legacy phantom stamps under current remote bodies (and Aa copies).
+    // Live snakes never occupy real wall cells, so clearing solid-1 here is safe.
+    if (!wa || !root.__mpCoopSession) return;
     const remotes = root.__mpCoopRemotes || {};
-    const hostDim = localOtherDim(game);
+    const myId = root.__mpCoopMyId;
     const ids = Object.keys(remotes);
-    let stamped = 0;
+    const scrubKeys = [];
     for (let i = 0; i < ids.length; i++) {
-      const id = ids[i];
-      if (myId && id === myId) continue;
-      const body = (remotes[id] && remotes[id].body) || [];
+      if (myId && ids[i] === myId) continue;
+      const body = (remotes[ids[i]] && remotes[ids[i]].body) || [];
       for (let j = 0; j < body.length; j++) {
         const seg = body[j];
-        if (!remoteCellBlocks(seg, hostDim)) continue;
+        if (!seg || seg.x == null || seg.y == null) continue;
         const x = seg.x | 0;
         const y = seg.y | 0;
         const row = wa[y];
-        if (!row || x < 0 || x >= row.length) continue;
-        if ((row[x] | 0) !== 0) continue;
-        const key = x + "," + y;
-        if (_phantomSet.has(key)) continue;
-        row[x] = PHANTOM_WALL_VALUE;
-        _phantomSet.add(key);
-        _phantomKeys.push(key);
-        stamped++;
+        if (row && (row[x] | 0) === PHANTOM_WALL_VALUE) {
+          row[x] = 0;
+          scrubKeys.push(x + "," + y);
+        }
       }
     }
-    _phantomGrid = wa;
-    return stamped;
+    if (!scrubKeys.length) return;
+    try {
+      const g = game || root.__mpGame || root.__remixGame;
+      const aa = g && g.Ca && g.Ca.Aa;
+      if (!aa || typeof aa.forEach !== "function") return;
+      const drop = Object.create(null);
+      for (let i = 0; i < scrubKeys.length; i++) drop[scrubKeys[i]] = 1;
+      const remove = [];
+      aa.forEach(function (w, key) {
+        if (!w) return;
+        const pos = w.pos || w;
+        if (pos.x == null || pos.y == null) return;
+        // Keep lock / temp / hotdog walls even if a snake briefly overlaps
+        if (w.yNa != null || w.XNa != null || w.__tempWall || w.temp || w.ty || w.ez) {
+          return;
+        }
+        const k = (pos.x | 0) + "," + (pos.y | 0);
+        if (drop[k]) remove.push(key != null ? key : k);
+      });
+      for (let i = 0; i < remove.length; i++) {
+        try {
+          if (typeof aa.delete === "function") aa.delete(remove[i]);
+          else if (typeof aa.remove === "function") aa.remove(remove[i]);
+        } catch (eDel) { /* ignore */ }
+      }
+    } catch (eAa) { /* ignore */ }
+  }
+
+  /**
+   * No-op stamp: clear leftover phantom cells only. Remote collision is handled
+   * by killLocalOnRemote / y4E / slot_pos_in_wall against live body positions.
+   */
+  function stampPhantomWalls(game) {
+    clearPhantomWalls(game);
+    return 0;
   }
 
   function phantomKeys() {
@@ -32298,8 +32374,8 @@ window.RemixMod.runCodeAfter = function () {
 
   /**
    * Slot Machine treats "any non-zero wall cell" as Wall mode being live
-   * (`e7(a,1)` via slot_has_walls). Phantom snake cells must not switch that on,
-   * so answer from the grid while ignoring cells we stamped.
+   * (`e7(a,1)` via slot_has_walls). Keep the guard so older leftover stamps
+   * cannot flip Wall-mode detection.
    */
   function installSlotWallGuard() {
     const orig = root.slot_has_walls;
@@ -32583,7 +32659,7 @@ window.RemixMod.runCodeAfter = function () {
 
   /**
    * Hook native `render(a,b,c)`. Remotes are painted right after the local
-   * snake so they sit on top of their own phantom walls.
+   * snake so companions stay visible on the shared board.
    */
   function installCoopRenderHook() {
     if (root.__mpCoopRenderInstalled) return;
@@ -32632,8 +32708,28 @@ window.RemixMod.runCodeAfter = function () {
   /* --------------------------------------------------------- spawn occupancy */
 
   /**
-   * Wrap game.Tb / game.Rb so freePos never lands on live or dead co-op snakes.
-   * Occupancy is re-read every attempt (snakes move between ticks).
+   * Occupancy for spawn: remotes + optional local body. Used by freePos wrappers
+   * so fruit never lands on any snake.
+   */
+  function readSpawnOccupancy(game, includeLocal) {
+    const occ = Object.assign({}, readCoopOccupancy());
+    if (includeLocal !== false) {
+      try {
+        const g = game || root.__mpGame || root.__remixGame;
+        const body = g && g.oa && g.oa.ka;
+        (body || []).forEach(function (p) {
+          if (p && p.x != null && p.y != null) {
+            occ[(p.x | 0) + "," + (p.y | 0)] = true;
+          }
+        });
+      } catch (e) { /* ignore */ }
+    }
+    return occ;
+  }
+
+  /**
+   * Wrap game.Tb / game.Rb so freePos never lands on live/dead co-op snakes
+   * (including the local body) or solid wall cells.
    */
   function wrapFreePos(game) {
     if (!game || game.__mpCoopFreePosWrapped) return;
@@ -32645,14 +32741,14 @@ window.RemixMod.runCodeAfter = function () {
         let attempts = 0;
         let pos = orig.apply(this, arguments);
         while (pos && attempts < 64) {
-          const occ = readCoopOccupancy();
-          if (!occ[(pos.x | 0) + "," + (pos.y | 0)]) break;
+          const occ = readSpawnOccupancy(game || this, true);
+          if (!spawnCellBlocked(game || this, pos.x, pos.y, occ)) break;
           attempts++;
           pos = orig.apply(this, arguments);
         }
         if (pos) {
-          const occ = readCoopOccupancy();
-          if (occ[(pos.x | 0) + "," + (pos.y | 0)]) {
+          const occ = readSpawnOccupancy(game || this, true);
+          if (spawnCellBlocked(game || this, pos.x, pos.y, occ)) {
             const scanned = findFreeSpawnCell(game || this, occ);
             if (scanned) return scanned;
           }
@@ -32664,10 +32760,8 @@ window.RemixMod.runCodeAfter = function () {
 
   /**
    * Remix Chess/Slot spawn helpers only mark the local snake — merge co-op
-   * occupancy (live + corpse) so walls/keys/fruit plants avoid peers too.
-   * Phantom walls already cover most paths, but not cells we deliberately leave
-   * passable (cheese holes, other dimension, peaceful), and nothing should ever
-   * spawn inside a snake even when you can walk through it.
+   * occupancy (live + corpse) and solid wall cells so walls/keys/fruit plants
+   * avoid peers and Wall-mode geometry the same way native does.
    */
   function installRemixSpawnOccupancyHooks() {
     if (
@@ -32678,11 +32772,14 @@ window.RemixMod.runCodeAfter = function () {
       root.chess_occupied_keys = function (game, apples, skipIndexes) {
         const keys = origKeys.call(this, game, apples, skipIndexes);
         if (!root.__mpCoopSession || !root.__mpCoopInject) return keys;
-        const occ = readCoopOccupancy();
-        Object.keys(occ).forEach(function (k) {
+        function addKey(k) {
           if (keys && typeof keys.add === "function") keys.add(k);
           else if (keys && typeof keys === "object") keys[k] = true;
-        });
+        }
+        const occ = readSpawnOccupancy(game, true);
+        Object.keys(occ).forEach(addKey);
+        const walls = wallOccupancyKeys(game);
+        Object.keys(walls).forEach(addKey);
         return keys;
       };
       root.chess_occupied_keys.__mpCoop = true;
@@ -32694,18 +32791,18 @@ window.RemixMod.runCodeAfter = function () {
         if (!root.__mpCoopSession || !root.__mpCoopInject) {
           return origSlot.apply(this, arguments);
         }
+        const game = (mgr && mgr.wb) || root.__mpGame || root.__remixGame;
         let attempts = 0;
         let p = origSlot.apply(this, arguments);
         while (p && attempts < 64) {
-          const occ = readCoopOccupancy();
-          if (!occ[(p.x | 0) + "," + (p.y | 0)]) break;
+          const occ = readSpawnOccupancy(game, true);
+          if (!spawnCellBlocked(game, p.x, p.y, occ)) break;
           attempts++;
           p = origSlot.apply(this, arguments);
         }
         if (p) {
-          const occ = readCoopOccupancy();
-          if (occ[(p.x | 0) + "," + (p.y | 0)]) {
-            const game = (mgr && mgr.wb) || root.__mpGame || root.__remixGame;
+          const occ = readSpawnOccupancy(game, true);
+          if (spawnCellBlocked(game, p.x, p.y, occ)) {
             const scanned = findFreeSpawnCell(game, occ);
             if (scanned) {
               if (typeof root.slot_make_pos === "function") {
@@ -32726,9 +32823,8 @@ window.RemixMod.runCodeAfter = function () {
   /* -------------------------------------------------------------- tick hook */
 
   /**
-   * Tick: apply queued peer poses, restamp phantom walls before the engine
-   * moves the head, then let mod.js publish. Native wall collision handles the
-   * kill, so there is no manual friendly-death check here any more.
+   * Tick: apply queued peer poses, clear any leftover phantom wall stamps,
+   * then collide against live remote body cells (no wall-grid stamps).
    * Fruit is applied only on COLLECTABLES_DELTA (not every tick).
    */
   function installCoopTickHook() {
@@ -32737,7 +32833,7 @@ window.RemixMod.runCodeAfter = function () {
     root.__mpCoopOnTick = function (game) {
       if (!root.__mpCoopInject || !root.__mpCoopSession) return;
       try {
-        // Apply coalesced peer poses before we stamp collision for this tick
+        // Apply coalesced peer poses before collision for this tick
         if (typeof root.__mpCoopFlushPendingDeltas === "function") {
           try {
             root.__mpCoopFlushPendingDeltas();
@@ -32758,12 +32854,9 @@ window.RemixMod.runCodeAfter = function () {
           root.__mpCoopLocalDead = true;
         }
 
-        // Phantom walls: solid remote cells become native wall cells for this
-        // tick, so the engine's own head-step check kills us with the real
-        // wall death animation instead of a post-hoc die().
+        // Never leave snake cells in Ca.wa — clear legacy phantom stamps only
         stampPhantomWalls(game);
-        // Classic / no-wall-mode never consults Ca.wa, so also kill if the
-        // head is about to step onto a remote — same cell as a wall would.
+        // Kill when the local head (or next step) is on a remote body cell
         killLocalOnRemote(game);
 
         if (typeof root.__mpCoopAfterTick === "function") {
@@ -32784,12 +32877,15 @@ window.RemixMod.runCodeAfter = function () {
 
   root.CoopNative = CoopNative;
   root.__mpCoopReadOccupancy = readCoopOccupancy;
+  root.__mpCoopReadSpawnOccupancy = readSpawnOccupancy;
   root.__mpCoopFindFreeSpawn = findFreeSpawnCell;
   root.__mpCoopInstallSpawnOcc = installRemixSpawnOccupancyHooks;
   root.__mpCoopDrawRemotes = drawCoopRemotes;
   root.__mpCoopStampPhantomWalls = stampPhantomWalls;
   root.__mpCoopClearPhantomWalls = clearPhantomWalls;
   root.__mpCoopPhantomKeys = phantomKeys;
+  root.__mpCoopIsSolidWall = isSolidWallCell;
+  root.__mpCoopWallOccupancy = wallOccupancyKeys;
   root.__mpCoopDisplayColorIds = coopDisplayColorIds;
   root.__mpCoopRecolorPalette = coopRecolorPalette;
   if (typeof module !== "undefined" && module.exports) {
@@ -32797,6 +32893,9 @@ window.RemixMod.runCodeAfter = function () {
       CoopNative: CoopNative,
       coopDisplayColorIds: coopDisplayColorIds,
       coopRecolorPalette: coopRecolorPalette,
+      isSolidWallCell: isSolidWallCell,
+      findFreeSpawnCell: findFreeSpawnCell,
+      wallOccupancyKeys: wallOccupancyKeys,
     };
   }
 })(typeof window !== "undefined" ? window : globalThis);
@@ -33801,41 +33900,131 @@ window.RemixMod.runCodeAfter = function () {
       (g && g.settings && (g.settings.height || g.settings.boardHeight)) ||
       (g && g.height) ||
       null;
+    // Co-op used to stamp remotes into Ca.wa. Clear leftovers so we never
+    // publish snake bodies as real walls (which then land in Ca.Aa).
+    let clearedPhantoms = false;
+    if (
+      root.__mpCoopSession &&
+      typeof root.__mpCoopClearPhantomWalls === "function"
+    ) {
+      try {
+        root.__mpCoopClearPhantomWalls(g);
+        clearedPhantoms = true;
+      } catch (eClear) { /* ignore */ }
+    }
+    let result = out;
     try {
-      const aa = wallHost.Aa;
-      if (aa && typeof aa.forEach === "function") {
-        aa.forEach(function (w) {
-          if (!w) return;
-          const pos = w.pos || w;
-          if (pos.x == null || pos.y == null) return;
-          const lockType =
-            w.yNa != null && Number(w.yNa) >= 0
-              ? Math.max(0, Math.min(23, Number(w.yNa) | 0))
-              : w.XNa != null && Number(w.XNa) >= 0
-                ? Math.max(0, Math.min(23, Number(w.XNa) | 0))
-                : null;
-          out.push({
-            x: Number(pos.x),
-            y: Number(pos.y),
-            lock: lockType != null ? true : undefined,
-            lockType: lockType,
-            hotdog: !!(w.ty || w.ez) || undefined,
-            temp: !!(w.__tempWall || w.temp) || undefined,
-          });
-        });
-        if (out.length) {
-          return filterMosaicWalls(out, bw, bh);
+      const byKey = Object.create(null);
+      function addWall(p) {
+        if (!p || p.x == null || p.y == null) return;
+        const key = (p.x | 0) + "," + (p.y | 0);
+        const prev = byKey[key];
+        if (!prev) {
+          byKey[key] = p;
+          return;
+        }
+        // Prefer the entry with richer metadata (lock / temp / hotdog)
+        if (
+          (p.lock || p.lockType != null || p.temp || p.hotdog) &&
+          !(prev.lock || prev.lockType != null || prev.temp || prev.hotdog)
+        ) {
+          byKey[key] = p;
         }
       }
-    } catch (eAa) { /* ignore */ }
-    try {
-      const wa = wallHost.wa || wallHost.oa;
-      if (wa) {
-        // Grid fallback often marks corner sentinels — never treat those as walls
-        return filterMosaicWalls(mapPointList(wa), bw, bh);
+      try {
+        const aa = wallHost.Aa;
+        if (aa && typeof aa.forEach === "function") {
+          aa.forEach(function (w) {
+            if (!w) return;
+            const pos = w.pos || w;
+            if (pos.x == null || pos.y == null) return;
+            const lockType =
+              w.yNa != null && Number(w.yNa) >= 0
+                ? Math.max(0, Math.min(23, Number(w.yNa) | 0))
+                : w.XNa != null && Number(w.XNa) >= 0
+                  ? Math.max(0, Math.min(23, Number(w.XNa) | 0))
+                  : null;
+            addWall({
+              x: Number(pos.x),
+              y: Number(pos.y),
+              lock: lockType != null ? true : undefined,
+              lockType: lockType,
+              hotdog: !!(w.ty || w.ez) || undefined,
+              temp: !!(w.__tempWall || w.temp) || undefined,
+            });
+          });
+        }
+      } catch (eAa) { /* ignore */ }
+      try {
+        const wa = wallHost.wa || wallHost.oa;
+        if (wa) {
+          let mapped = mapPointList(wa);
+          if (
+            root.__mpCoopSession &&
+            typeof root.__mpCoopPhantomKeys === "function"
+          ) {
+            try {
+              const phantoms = root.__mpCoopPhantomKeys() || [];
+              if (phantoms.length) {
+                const skip = {};
+                for (let i = 0; i < phantoms.length; i++) {
+                  skip[phantoms[i]] = 1;
+                }
+                mapped = mapped.filter(function (p) {
+                  return !skip[(p.x | 0) + "," + (p.y | 0)];
+                });
+              }
+            } catch (ePh) { /* ignore */ }
+          }
+          for (let i = 0; i < mapped.length; i++) addWall(mapped[i]);
+        }
+      } catch (eWa) { /* ignore */ }
+      const merged = [];
+      Object.keys(byKey).forEach(function (k) {
+        merged.push(byKey[k]);
+      });
+      // Drop corner sentinels from wa-only cells; keep temp/lock/hotdog
+      result = filterMosaicWalls(merged, bw, bh);
+      // Never treat live snake cells as walls (legacy phantom leaks)
+      if (root.__mpCoopSession) {
+        const snakeCells = Object.create(null);
+        try {
+          const body = g && g.oa && g.oa.ka;
+          (body || []).forEach(function (p) {
+            if (p && p.x != null && p.y != null) {
+              snakeCells[(p.x | 0) + "," + (p.y | 0)] = 1;
+            }
+          });
+        } catch (eBody) { /* ignore */ }
+        try {
+          const remotes = root.__mpCoopRemotes || {};
+          Object.keys(remotes).forEach(function (id) {
+            const b = remotes[id] && remotes[id].body;
+            (b || []).forEach(function (p) {
+              if (p && p.x != null && p.y != null) {
+                snakeCells[(p.x | 0) + "," + (p.y | 0)] = 1;
+              }
+            });
+          });
+        } catch (eR) { /* ignore */ }
+        result = result.filter(function (p) {
+          if (!p) return false;
+          if (p.lock || p.lockType != null || p.temp || p.hotdog) return true;
+          return !snakeCells[(p.x | 0) + "," + (p.y | 0)];
+        });
       }
-    } catch (eWa) { /* ignore */ }
-    return out;
+      return result;
+    } finally {
+      // stampPhantomWalls is clear-only now (no restamp into Ca.wa)
+      if (
+        clearedPhantoms &&
+        typeof root.__mpCoopStampPhantomWalls === "function"
+      ) {
+        try {
+          root.__mpCoopStampPhantomWalls(g);
+        } catch (eStamp) { /* ignore */ }
+      }
+    }
   }
 
   /** Keys with fruit type + marked keyblock cell (r7a). Type 0–23 matches key_types sheet. */
@@ -33843,12 +34032,10 @@ window.RemixMod.runCodeAfter = function () {
     const out = [];
     const keys = g && g.Ba && g.Ba.keys;
     if (!keys) return out;
-    const list = Array.isArray(keys) ? keys : [];
-    for (let i = 0; i < list.length; i++) {
-      const k = list[i];
-      if (!k) continue;
+    function add(k) {
+      if (!k) return;
       const pos = k.pos || k;
-      if (pos.x == null || pos.y == null) continue;
+      if (pos.x == null || pos.y == null) return;
       const pt = { x: Number(pos.x), y: Number(pos.y) };
       let type = k.type;
       if (type == null) type = k.yNa;
@@ -33864,6 +34051,15 @@ window.RemixMod.runCodeAfter = function () {
         };
       }
       out.push(pt);
+    }
+    try {
+      if (typeof keys.forEach === "function" && keys.size != null) {
+        keys.forEach(add);
+        return out;
+      }
+    } catch (eMap) { /* ignore */ }
+    if (Array.isArray(keys)) {
+      for (let i = 0; i < keys.length; i++) add(keys[i]);
     }
     return out;
   }
@@ -34235,24 +34431,67 @@ window.RemixMod.runCodeAfter = function () {
     }
 
     function writeMap(map, list) {
-      if (!map || typeof map.clear !== "function" || !Array.isArray(list)) {
+      if (!map || !Array.isArray(list) || typeof map.forEach !== "function") {
         return;
       }
       let template = null;
+      const oldByPos = Object.create(null);
+      const oldObjs = [];
       try {
         map.forEach(function (v) {
-          if (!template && v) template = v;
+          if (!v) return;
+          if (!template) template = v;
+          const pos = v.pos || v;
+          if (pos && pos.x != null && pos.y != null) {
+            oldByPos[(pos.x | 0) + "," + (pos.y | 0)] = v;
+          }
+          oldObjs.push(v);
         });
       } catch (eT) { /* ignore */ }
-      try {
-        map.clear();
-        for (let i = 0; i < list.length; i++) {
-          const src = list[i];
-          const obj = {};
+
+      // Reuse native instances when boxes/keys move so push/unlock keep working
+      const claimed = Object.create(null);
+      const next = [];
+      for (let i = 0; i < list.length; i++) {
+        const src = list[i];
+        if (!src || src.x == null || src.y == null) continue;
+        const key = (src.x | 0) + "," + (src.y | 0);
+        let obj = oldByPos[key];
+        if (obj) {
+          claimed[key] = true;
+        } else {
+          for (let j = 0; j < oldObjs.length; j++) {
+            const cand = oldObjs[j];
+            if (!cand || cand.__mpClaimed) continue;
+            const cp = cand.pos || cand;
+            const ck =
+              cp && cp.x != null ? (cp.x | 0) + "," + (cp.y | 0) : "";
+            if (ck && claimed[ck]) continue;
+            // Leftover at a position no longer in the list = moved entity
+            if (ck && !list.some(function (p) {
+              return p && (p.x | 0) + "," + (p.y | 0) === ck;
+            })) {
+              obj = cand;
+              cand.__mpClaimed = true;
+              break;
+            }
+          }
+          if (!obj) {
+            for (let j2 = 0; j2 < oldObjs.length; j2++) {
+              if (oldObjs[j2] && !oldObjs[j2].__mpClaimed) {
+                obj = oldObjs[j2];
+                obj.__mpClaimed = true;
+                break;
+              }
+            }
+          }
+        }
+        if (!obj) {
+          obj = {};
           if (template) {
             try {
               Object.keys(template).forEach(function (k) {
-                if (k === "pos") return;
+                if (k === "pos" || k === "__mpClaimed") return;
                 obj[k] = template[k];
               });
             } catch (eC) { /* ignore */ }
@@ -34262,13 +34501,32 @@ window.RemixMod.runCodeAfter = function () {
             src.y,
             template && template.pos
           );
-          paintEntityFields(obj, src);
-          const key =
-            typeof map.set === "function"
-              ? src.x + "," + src.y
-              : obj;
-          if (typeof map.set === "function") map.set(key, obj);
-          else if (typeof map.add === "function") map.add(obj);
+        } else {
+          obj.__mpClaimed = true;
+          if (obj.pos || (template && template.pos)) {
+            obj.pos = ensureNativePos(
+              obj.pos,
+              src.x,
+              src.y,
+              (template && template.pos) || obj.pos
+            );
+          } else {
+            obj.x = src.x;
+            obj.y = src.y;
+          }
+        }
+        paintEntityFields(obj, src);
+        next.push({ key: key, obj: obj });
+      }
+      for (let c = 0; c < oldObjs.length; c++) {
+        if (oldObjs[c]) delete oldObjs[c].__mpClaimed;
+      }
+      try {
+        if (typeof map.clear === "function") map.clear();
+        for (let n = 0; n < next.length; n++) {
+          const item = next[n];
+          if (typeof map.set === "function") map.set(item.key, item.obj);
+          else if (typeof map.add === "function") map.add(item.obj);
         }
         applied = true;
       } catch (eM) { /* ignore */ }
@@ -34314,31 +34572,32 @@ window.RemixMod.runCodeAfter = function () {
 
     function writeNumericGrid(grid, list, emptyVal, solidVal) {
       if (!grid || !Array.isArray(grid) || !Array.isArray(list)) return;
+      const want = Object.create(null);
+      for (let i = 0; i < list.length; i++) {
+        const p = list[i];
+        if (!p) continue;
+        want[(p.x | 0) + "," + (p.y | 0)] = true;
+      }
       for (let y = 0; y < grid.length; y++) {
         const row = grid[y];
         if (!row) continue;
         for (let x = 0; x < row.length; x++) {
-          if (typeof row[x] === "number" || row[x] == null) {
-            row[x] = emptyVal;
+          if (typeof row[x] === "object" && row[x]) continue;
+          const key = x + "," + y;
+          if (want[key]) {
+            row[x] = solidVal;
+            continue;
           }
+          // Only clear plain empty/solid cells — keep temp-wall counters etc.
+          const v = row[x] | 0;
+          if (v === solidVal || v === emptyVal) row[x] = emptyVal;
         }
-      }
-      for (let i = 0; i < list.length; i++) {
-        const p = list[i];
-        if (!p) continue;
-        const x = p.x | 0;
-        const y = p.y | 0;
-        if (!grid[y] || x < 0 || x >= grid[y].length) continue;
-        if (typeof grid[y][x] === "object" && grid[y][x]) {
-          continue;
-        }
-        grid[y][x] = solidVal;
       }
       applied = true;
     }
 
     try {
-      if (entities.walls) {
+      if (entities.walls != null) {
         if (g.Ca && Array.isArray(g.Ca.wa) && g.Ca.wa.length) {
           writeNumericGrid(g.Ca.wa, entities.walls, 0, 1);
         }
@@ -34348,17 +34607,17 @@ window.RemixMod.runCodeAfter = function () {
       }
     } catch (eW) { /* ignore */ }
     try {
-      if (g.Ba && entities.keys) {
+      if (g.Ba && entities.keys != null) {
         if (Array.isArray(g.Ba.keys)) writeList(g.Ba.keys, entities.keys);
         else if (g.Ba.keys && g.Ba.keys.forEach) writeMap(g.Ba.keys, entities.keys);
       }
     } catch (e) { /* ignore */ }
     try {
-      if (g.Aa && entities.boxes) {
+      if (g.Aa && entities.boxes != null) {
         if (Array.isArray(g.Aa.oa)) writeList(g.Aa.oa, entities.boxes);
         else if (g.Aa.oa && g.Aa.oa.forEach) writeMap(g.Aa.oa, entities.boxes);
       }
-      if (g.Aa && entities.goals) {
+      if (g.Aa && entities.goals != null) {
         const gh = g.Aa.d_ || g.Aa.da;
         if (Array.isArray(g.Aa.d_)) writeList(g.Aa.d_, entities.goals);
         else if (Array.isArray(g.Aa.da)) writeList(g.Aa.da, entities.goals);
@@ -34613,6 +34872,29 @@ window.RemixMod.runCodeAfter = function () {
       const body2 = scrapeCompanionBody(g, body, width, height);
       if (body2 && body2.length) board.body2 = body2;
     } catch (eBody2) { /* ignore */ }
+
+    // Co-op remotes for mosaic spectate (shared board, multiple snakes)
+    try {
+      if (root.__mpCoopSession && root.__mpCoopRemotes) {
+        const myId = root.__mpCoopMyId;
+        const remotes = root.__mpCoopRemotes;
+        const snakes = [];
+        Object.keys(remotes).forEach(function (id) {
+          if (myId && id === myId) return;
+          const r = remotes[id];
+          if (!r || !r.body || !r.body.length) return;
+          snakes.push({
+            body: r.body,
+            dir: r.dir,
+            alive: r.alive !== false,
+            colorId: r.colorId != null ? r.colorId : null,
+            Sc: r.Sc || r.color2 || null,
+            Yc: r.Yc || r.color1 || null,
+          });
+        });
+        if (snakes.length) board.snakes = snakes;
+      }
+    } catch (eSnakes) { /* ignore */ }
 
     try {
       if (boardHasMode(board, "light")) {
@@ -36398,6 +36680,44 @@ window.RemixMod.runCodeAfter = function () {
       ? { primary: POISON_SNAKE_PRIMARY, secondary: POISON_SNAKE_SECONDARY }
       : colorInfo;
     const motionSlot = motionKey ? ":" + motionKey : "";
+    // Co-op remotes under the local snake (mosaic spectate shared board)
+    const remoteSnakes = board.snakes || [];
+    for (let ri = 0; ri < remoteSnakes.length; ri++) {
+      const rs = remoteSnakes[ri];
+      if (!rs || !rs.body || !rs.body.length) continue;
+      let remoteColor = null;
+      if (rs.Sc || rs.Yc) {
+        remoteColor = {
+          primary: rs.Sc || rs.Yc,
+          secondary: rs.Yc || rs.Sc,
+          Sc: rs.Sc || null,
+          Yc: rs.Yc || null,
+        };
+      } else if (
+        root.MultiplayerColors &&
+        root.MultiplayerColors.getColor &&
+        rs.colorId != null
+      ) {
+        remoteColor = root.MultiplayerColors.getColor(Number(rs.colorId));
+      }
+      snakeDrawOpts.motion = snakeMotion(
+        canvas,
+        "remote" + ri + motionSlot,
+        rs.body
+      );
+      ctx.globalAlpha = rs.alive === false ? 0.5 : 1;
+      drawWallSolverStyleSnake(
+        ctx,
+        rs.body,
+        ox,
+        oy,
+        cell,
+        remoteColor,
+        rs.dir,
+        snakeDrawOpts
+      );
+      ctx.globalAlpha = 1;
+    }
     // Companion under primary: Yin Yang = muted alt; Twin = same colors
     if (board.body2 && board.body2.length) {
       let companionColor = snakeColor;
@@ -37237,6 +37557,89 @@ window.RemixMod.runCodeAfter = function () {
     ];
   }
 
+  function coopSpawnBodyInBounds(body, width, height) {
+    if (!body || !body.length) return false;
+    const w = width | 0;
+    const h = height | 0;
+    for (let i = 0; i < body.length; i++) {
+      const p = body[i];
+      if (!p) return false;
+      const x = p.x | 0;
+      const y = p.y | 0;
+      if (x < 0 || y < 0 || x >= w || y >= h) return false;
+    }
+    return true;
+  }
+
+  /** True when a length-3 spawn body hits a wall or another co-op snake. */
+  function coopSpawnBodyBlocked(body, game) {
+    if (!body || !body.length) return true;
+    const occ =
+      typeof root.__mpCoopReadOccupancy === "function"
+        ? root.__mpCoopReadOccupancy()
+        : {};
+    const wallFn = root.__mpCoopIsSolidWall;
+    for (let i = 0; i < body.length; i++) {
+      const p = body[i];
+      if (!p) return true;
+      const x = p.x | 0;
+      const y = p.y | 0;
+      if (occ[x + "," + y]) return true;
+      if (typeof wallFn === "function" && wallFn(game, x, y)) return true;
+      // Fallback if bridge helpers are not installed yet
+      if (typeof wallFn !== "function") {
+        try {
+          const wa = game && game.Ca && game.Ca.wa;
+          const row = wa && wa[y];
+          if (row) {
+            const v = row[x] | 0;
+            if (v !== 0 && v !== 3) return true;
+          }
+        } catch (e) { /* ignore */ }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Prefer the requested seat; if Wall mode (or remotes) blocks that footprint,
+   * spiral search for the nearest clear length-3 pose so every player starts
+   * off solid walls the same way native spawn avoids them.
+   */
+  function findClearCoopSpawnPose(pose, width, height, game) {
+    const preferred = pose || {
+      x: Math.floor(width / 2),
+      y: Math.floor(height / 2),
+      dir: "RIGHT",
+    };
+    function tryPose(p) {
+      if (!p) return null;
+      const body = coopSpawnBodyFromPose(p);
+      if (!coopSpawnBodyInBounds(body, width, height)) return null;
+      if (coopSpawnBodyBlocked(body, game)) return null;
+      return p;
+    }
+    const first = tryPose(preferred);
+    if (first) return first;
+    const maxR = Math.max(width, height);
+    for (let r = 0; r <= maxR; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (r > 0 && Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+          const x = (preferred.x | 0) + dx;
+          const y = (preferred.y | 0) + dy;
+          const dirs =
+            preferred.dir === "LEFT" ? ["LEFT", "RIGHT"] : ["RIGHT", "LEFT"];
+          for (let di = 0; di < dirs.length; di++) {
+            const hit = tryPose({ x: x, y: y, dir: dirs[di] });
+            if (hit) return hit;
+          }
+        }
+      }
+    }
+    return preferred;
+  }
+
   function coopYinYangCorner(slot, width, height) {
     const w = width || 17;
     const h = height || 15;
@@ -37288,6 +37691,9 @@ window.RemixMod.runCodeAfter = function () {
         dir: "RIGHT",
       };
     }
+    // Wall mode / remotes: slide off solid cells so the seat is legal
+    pose = findClearCoopSpawnPose(pose, w, h, g);
+    root.__mpLastCoopSpawnPose = pose;
     const body = coopSpawnBodyFromPose(pose);
     try {
       // Keep native idle-until-key behavior: do not assign direction here.
@@ -37382,7 +37788,7 @@ window.RemixMod.runCodeAfter = function () {
         if (!row) return;
         row.style.pointerEvents = locked ? "none" : "";
         row.style.opacity = locked ? "0.55" : "";
-        row.title = locked ? "Synced from admin" : "";
+        row.title = locked ? "Unready to change settings" : "";
       });
       unlockPersonalMenus();
     }
@@ -37725,6 +38131,25 @@ window.RemixMod.runCodeAfter = function () {
       "|" +
       (h2 ? h2.x + "," + h2.y : "") +
       "|" +
+      (function () {
+        const snakes = board.snakes || [];
+        if (!snakes.length) return "0";
+        let s = String(snakes.length);
+        for (let i = 0; i < snakes.length; i++) {
+          const sn = snakes[i];
+          const b = (sn && sn.body) || [];
+          const hh = b[0];
+          s +=
+            ";" +
+            b.length +
+            ":" +
+            (hh ? hh.x + "," + hh.y : "") +
+            ":" +
+            (sn && sn.alive === false ? "0" : "1");
+        }
+        return s;
+      })() +
+      "|" +
       (board.catLives != null ? board.catLives : "") +
       "," +
       (board.catGrace != null ? board.catGrace : "") +
@@ -37817,27 +38242,78 @@ window.RemixMod.runCodeAfter = function () {
     }
     return [
       fruit,
-      len(cols.walls),
-      len(cols.keys),
-      len(cols.boxes),
-      len(cols.goals),
-      len(cols.mines),
-      len(cols.statues),
-      len(cols.bridges),
-      len(cols.gates),
-      len(cols.arrows),
-      len(cols.bombZones),
+      (function () {
+        const walls = cols.walls || [];
+        if (!walls.length) return "0";
+        const parts = [];
+        for (let i = 0; i < walls.length; i++) {
+          const w = walls[i];
+          if (!w) continue;
+          parts.push(
+            (w.x | 0) +
+              "," +
+              (w.y | 0) +
+              (w.temp ? "t" : "") +
+              (w.lock ? "l" : "") +
+              (w.hotdog ? "h" : "") +
+              (w.lockType != null ? ":" + w.lockType : "")
+          );
+        }
+        parts.sort();
+        return parts.join(";");
+      })(),
+      pointListFingerprint(cols.keys, function (k) {
+        return (
+          (k.type != null ? "t" + k.type : "") +
+          (k.keyblock
+            ? "b" + (k.keyblock.x | 0) + "," + (k.keyblock.y | 0)
+            : "")
+        );
+      }),
+      pointListFingerprint(cols.boxes),
+      pointListFingerprint(cols.goals),
+      pointListFingerprint(cols.mines, function (m) {
+        return m.xL != null ? "x" + m.xL : "";
+      }),
+      pointListFingerprint(cols.statues, function (s) {
+        return (s.cracked ? "c" : "") + (s.angle != null ? "a" + s.angle : "");
+      }),
+      pointListFingerprint(cols.bridges),
+      pointListFingerprint(cols.gates),
+      pointListFingerprint(cols.arrows, function (a) {
+        return a.dir || a.direction || "";
+      }),
+      pointListFingerprint(cols.bombZones),
     ].join("|");
   }
 
+  /** Sorted x,y[+extra] fingerprint so key/soko moves republish. */
+  function pointListFingerprint(list, extraFn) {
+    if (!list || !list.length) return "0";
+    const parts = [];
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      if (!p || p.x == null || p.y == null) continue;
+      parts.push(
+        (p.x | 0) +
+          "," +
+          (p.y | 0) +
+          (extraFn ? extraFn(p) : "")
+      );
+    }
+    parts.sort();
+    return parts.length ? parts.join(";") : "0";
+  }
+
   /**
-   * During co-op, if synced fruit lands on a live/dead snake cell, nudge to a
-   * free cell locally (safety net — eater freePos should already avoid snakes).
+   * During co-op, if fruit lands on any snake cell (local or remote) or a wall,
+   * nudge to a free cell. Used on apply and on the eater's publish path.
    */
   function nudgeCoopApplesOffSnakes(apples, game) {
     if (!Array.isArray(apples) || !apples.length) return apples;
     if (!root.__mpCoopSession || !root.__mpCoopInject) return apples;
-    const readOcc = root.__mpCoopReadOccupancy;
+    const readOcc =
+      root.__mpCoopReadSpawnOccupancy || root.__mpCoopReadOccupancy;
     const findFree = root.__mpCoopFindFreeSpawn;
     if (typeof readOcc !== "function") return apples;
 
@@ -37847,7 +38323,7 @@ window.RemixMod.runCodeAfter = function () {
     const reserved = {};
 
     function blockedKeys() {
-      const occ = Object.assign({}, readOcc());
+      const occ = Object.assign({}, readOcc(game, true));
       Object.keys(reserved).forEach(function (k) {
         occ[k] = true;
       });
@@ -37860,7 +38336,10 @@ window.RemixMod.runCodeAfter = function () {
       const y = a.y != null ? a.y | 0 : 0;
       const k = x + "," + y;
       const occ = blockedKeys();
-      if (!occ[k]) {
+      const onWall =
+        typeof root.__mpCoopIsSolidWall === "function" &&
+        root.__mpCoopIsSolidWall(game, x, y);
+      if (!occ[k] && !onWall) {
         reserved[k] = true;
         a.x = x;
         a.y = y;
@@ -37871,7 +38350,6 @@ window.RemixMod.runCodeAfter = function () {
         free = findFree(game, occ);
       }
       if (!free) {
-        // Fallback scan without helper
         const meta =
           (game && game.wa && game.wa.oa && game.wa.oa.oa) ||
           (game && game.oa && game.oa.oa) ||
@@ -37881,10 +38359,15 @@ window.RemixMod.runCodeAfter = function () {
         outer: for (let yy = 0; yy < h; yy++) {
           for (let xx = 0; xx < w; xx++) {
             const kk = xx + "," + yy;
-            if (!occ[kk]) {
-              free = { x: xx, y: yy };
-              break outer;
+            if (occ[kk]) continue;
+            if (
+              typeof root.__mpCoopIsSolidWall === "function" &&
+              root.__mpCoopIsSolidWall(game, xx, yy)
+            ) {
+              continue;
             }
+            free = { x: xx, y: yy };
+            break outer;
           }
         }
       }
@@ -37894,9 +38377,20 @@ window.RemixMod.runCodeAfter = function () {
         reserved[free.x + "," + free.y] = true;
       } else {
         reserved[k] = true;
+        // Board full — signal ALL apples for co-op win detection
+        root.__mpCoopBoardFull = true;
       }
     }
     return out;
+  }
+
+  /** Max shared apples: board cells minus walls minus length-3 seats. */
+  function coopAppleGoal(width, height, playerCount, wallCount) {
+    const w = Math.max(1, Number(width) || 17);
+    const h = Math.max(1, Number(height) || 15);
+    const n = Math.max(1, Number(playerCount) || 1);
+    const walls = Math.max(0, Number(wallCount) || 0);
+    return Math.max(1, w * h - walls - 3 * n);
   }
 
   /** Write apple positions into exposed game fields; grow/shrink list to match owner. */
@@ -38183,11 +38677,14 @@ window.RemixMod.runCodeAfter = function () {
     filterMosaicWalls: filterMosaicWalls,
     isIllegalNormalWallCell: isIllegalNormalWallCell,
     applyCollectables: applyCollectables,
+    nudgeCoopApplesOffSnakes: nudgeCoopApplesOffSnakes,
+    coopAppleGoal: coopAppleGoal,
     applyBoardEntities: applyBoardEntities,
     applyCoopSpawnOffset: applyCoopSpawnOffset,
     applyCoopStartMoving: applyCoopStartMoving,
     coopYinYangCorner: coopYinYangCorner,
     coopSpawnBodyFromPose: coopSpawnBodyFromPose,
+    findClearCoopSpawnPose: findClearCoopSpawnPose,
     coopIsYinYang: coopIsYinYang,
     parkLocalSnakeOffBoard: parkLocalSnakeOffBoard,
     emptyLocalSnakeBody: emptyLocalSnakeBody,
@@ -38637,7 +39134,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
   display:block; color:rgba(255,255,255,0.85); font-family:Roboto,Arial,sans-serif;
   font-size:12px; font-weight:600; margin:6px 0 4px;
 }
-.mp-hud{position:fixed;top:48px;right:8px;z-index:9999;background:rgba(0,0,0,.55);color:#fff;
+.mp-hud{position:fixed;top:48px;left:8px;z-index:9999;background:rgba(0,0,0,.55);color:#fff;
   padding:8px 10px;border-radius:8px;font:12px/1.35 Roboto,Arial,sans-serif;min-width:180px;max-width:280px}
 .mp-hud h4{margin:0 0 6px;font-size:13px}
 .mp-hud .mp-hud-winner{
@@ -39050,6 +39547,31 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     goalField.id = "mp-versus-goal-field";
     adminBox.appendChild(goalField);
 
+    const finishOngoingWrap = el(
+      "div",
+      "form-check form-check-inline mp-finish-ongoing-wrap"
+    );
+    finishOngoingWrap.id = "mp-finish-ongoing-wrap";
+    const finishOngoingCb = el("input", "form-check-input");
+    finishOngoingCb.type = "checkbox";
+    finishOngoingCb.setAttribute("role", "switch");
+    finishOngoingCb.id = "mp-finish-ongoing";
+    finishOngoingCb.checked =
+      lsGet("MULTIPLAYER_VERSUS_FINISH_ONGOING", "1") !== "0";
+    const finishOngoingLabel = el(
+      "label",
+      "form-check-label",
+      "Finish ongoing runs"
+    );
+    finishOngoingLabel.htmlFor = "mp-finish-ongoing";
+    finishOngoingLabel.title =
+      "When the attempt timer ends, let active runs finish (die or ALL) before closing the match";
+    finishOngoingLabel.style.cssText =
+      "margin:3px;color:white;font-family:Roboto,Arial,sans-serif;";
+    finishOngoingWrap.appendChild(finishOngoingCb);
+    finishOngoingWrap.appendChild(finishOngoingLabel);
+    adminBox.appendChild(finishOngoingWrap);
+
     const startBtn = themedBtn("Start match");
     startBtn.id = "mp-start";
     startBtn.disabled = true;
@@ -39223,16 +39745,21 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         self.app.client.setVersusGoal(g);
       }
     };
+    finishOngoingCb.onchange = function () {
+      lsSet(
+        "MULTIPLAYER_VERSUS_FINISH_ONGOING",
+        finishOngoingCb.checked ? "1" : "0"
+      );
+    };
     startBtn.onclick = function () {
       if (!self.app.client || !self.app.client.isAdmin()) return;
       const roster = self.app.client.roster || {};
       // After timer expiry, Start begins a *new* match (scores clear on SESSION_START).
-      // Only block while a live attempt forbids new runs mid-window.
+      // Block while a live session still forbids new runs (incl. finish-ongoing grace).
       const midAttemptNoRuns =
         roster.mode === "versus" &&
         roster.sessionActive &&
-        roster.allowNewRuns === false &&
-        !roster.attemptExpired;
+        roster.allowNewRuns === false;
       if (midAttemptNoRuns) return;
       if (!Session.canStart(roster)) return;
       // Always push the textbox value before starting — localStorage alone is not enough
@@ -39247,11 +39774,18 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       goalSel.value = g;
       lsSet("MULTIPLAYER_VERSUS_GOAL", g);
       if (self.app.client.setVersusGoal) self.app.client.setVersusGoal(g);
+      const finishOngoing = !!finishOngoingCb.checked;
+      lsSet(
+        "MULTIPLAYER_VERSUS_FINISH_ONGOING",
+        finishOngoing ? "1" : "0"
+      );
       // Bundle match rules into SESSION_START so co-op/versus peers apply
       // trophy/count/speed/size quietly under __mpStartingMatch (no menu open).
       const snap =
         self.app.syncMySettingsAsAdmin && self.app.syncMySettingsAsAdmin();
-      self.app.client.sessionStart(snap ? { settings: snap } : {});
+      const startPayload = snap ? { settings: snap } : {};
+      startPayload.finishOngoingRuns = finishOngoing;
+      self.app.client.sessionStart(startPayload);
       const st = document.getElementById("mp-status");
       if (st) st.textContent = "Starting match…";
     };
@@ -39270,6 +39804,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       readyBtn.textContent = next ? "Unready" : "Ready";
       if (self.app.client.roster) self.renderRoster(self.app.client.roster);
       self.app.client.setReady(next);
+      if (self.app.applyControlLocks) self.app.applyControlLocks();
     };
 
     // Stable delegation — survives roster DOM rebuilds mid-click (SCORE_PULSE etc.)
@@ -39332,6 +39867,15 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     };
     mosaicBtn.onclick = function () {
       if (!self.app.versus) return;
+      if (
+        self.app.client &&
+        self.app.client.roster &&
+        self.app.client.roster.mode === "coop"
+      ) {
+        // Co-op spectate stays mosaic-only
+        self.app.setSpectateMode("mosaic");
+        return;
+      }
       const next = self.app.versus.spectateMode === "mosaic" ? "focus" : "mosaic";
       self.app.setSpectateMode(next);
       mosaicBtn.textContent = next === "mosaic" ? "Focus view" : "Mosaic";
@@ -39465,19 +40009,33 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       // Spectate controls on Roster — only while you are a spectator
       const amSpectator = !!(me && me.role === "spectator");
       const isVersus = rosterData.mode === "versus";
-      spectateBar.style.display = amSpectator && isVersus ? "" : "none";
-      if (amSpectator && self.app.versus) {
+      const isCoop = rosterData.mode === "coop";
+      spectateBar.style.display = amSpectator && (isVersus || isCoop) ? "" : "none";
+      if (amSpectator && isCoop && self.app.versus) {
+        // Co-op is mosaic-only — no Focus toggle
+        self.app.versus.spectateMode = "mosaic";
+        mosaicBtn.style.display = "none";
+      } else if (amSpectator && self.app.versus) {
+        mosaicBtn.style.display = "";
         mosaicBtn.textContent =
           self.app.versus.spectateMode === "mosaic" ? "Focus view" : "Mosaic";
       }
       // Versus attempt length is versus-only; hide in co-op
-      const isCoop = rosterData.mode === "coop";
       durField.classList.toggle("hidden", !!isCoop);
       durField.style.display = isCoop ? "none" : "";
       const goalFieldEl = document.getElementById("mp-versus-goal-field");
       if (goalFieldEl) {
         goalFieldEl.classList.toggle("hidden", !!isCoop);
         goalFieldEl.style.display = isCoop ? "none" : "";
+      }
+      finishOngoingWrap.classList.toggle("hidden", !!isCoop);
+      finishOngoingWrap.style.display = isCoop ? "none" : "";
+      if (
+        !isCoop &&
+        rosterData.finishOngoingRuns != null &&
+        document.activeElement !== finishOngoingCb
+      ) {
+        finishOngoingCb.checked = !!rosterData.finishOngoingRuns;
       }
       // Keep textbox aligned with server durationMin (source of truth for the clock)
       if (
@@ -39522,17 +40080,16 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       endBtn.style.display = showEnd ? "" : "none";
       matchHint.style.display =
         !connected || (isAdmin || (me && me.role === "player")) ? "none" : "block";
-      // Start match has nothing left to do once a match is live — it comes back
-      // when the session ends or the versus attempt runs out.
-      const canOfferStart = !sessionOn || matchOver;
+      // Start match has nothing left to do once a match is live — including
+      // finish-ongoing grace (sessionActive stays true until all runs end).
+      const canOfferStart = !sessionOn;
       startBtn.classList.toggle("hidden", !canOfferStart);
       startBtn.style.display = canOfferStart ? "" : "none";
       startBtn.disabled =
         !Session.canStart(rosterData) ||
         (rosterData.mode === "versus" &&
           rosterData.sessionActive &&
-          rosterData.allowNewRuns === false &&
-          !rosterData.attemptExpired);
+          rosterData.allowNewRuns === false);
       readyBtn.textContent = me && me.ready ? "Unready" : "Ready";
       // Every player readies on the in-game Shuffle→Ready button, admin
       // included; only spectator seats keep the Match Ready button.
@@ -39548,9 +40105,12 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         rosterData.mode === "versus" &&
         (rosterData.allowNewRuns === false || rosterData.attemptExpired)
       ) {
-        const suffix = rosterData.attemptExpired
-          ? " · match over — results kept"
-          : " · no new runs";
+        let suffix = " · no new runs";
+        if (rosterData.attemptExpired && rosterData.sessionActive) {
+          suffix = " · finishing runs…";
+        } else if (rosterData.attemptExpired) {
+          suffix = " · match over — results kept";
+        }
         status.textContent =
           (connected
             ? "Connected · versus · room " + (rosterData.roomCode || "")
@@ -39788,12 +40348,6 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       return;
     }
     const r = app.client.roster || {};
-    // Co-op: no floating debug HUD — play inside native Snake chrome only
-    if (r.mode === "coop") {
-      this.hud.style.display = "none";
-      return;
-    }
-    this.hud.style.display = "block";
     const clients = r.clients || [];
     function nameOf(id) {
       const c = clients.find(function (x) {
@@ -39804,6 +40358,56 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         c.resolvedName || c.displayName || c.colorName || id.slice(0, 6)
       );
     }
+
+    // Co-op panel: combined score + per-player lives
+    if (r.mode === "coop") {
+      if (!r.sessionActive && !(app._coopTotal > 0)) {
+        this.hud.style.display = "none";
+        return;
+      }
+      this.hud.style.display = "block";
+      const goal =
+        app._coopGoal != null
+          ? app._coopGoal
+          : app.ensureCoopAppleGoal
+            ? app.ensureCoopAppleGoal()
+            : "—";
+      const total = app._coopTotal != null ? app._coopTotal : 0;
+      let html = "<h4>CO-OP</h4>";
+      html +=
+        '<div class="mp-hud-meta">Team score: <strong>' +
+        total +
+        "</strong> / " +
+        goal +
+        "</div>";
+      if (r.sessionActive) {
+        html += '<div class="mp-hud-meta">Fill the board together</div>';
+      } else if (app._coopWon) {
+        html += '<div class="mp-hud-winner">All apples!</div>';
+      } else {
+        html += '<div class="mp-hud-meta">Match over</div>';
+      }
+      const scores = app._coopScores || {};
+      clients
+        .filter(function (c) {
+          return c.role === "player";
+        })
+        .forEach(function (c) {
+          const sc = scores[c.clientId] || {};
+          const alive = sc.alive !== false;
+          html +=
+            '<div class="mp-hud-place">' +
+            nameOf(c.clientId) +
+            ": " +
+            (sc.score != null ? sc.score : 0) +
+            (alive ? "" : " · down") +
+            "</div>";
+        });
+      this.hud.innerHTML = html;
+      return;
+    }
+
+    this.hud.style.display = "block";
     let html = "<h4>" + (r.mode || "").toUpperCase() + "</h4>";
     if (r.mode === "versus" && app.versus) {
       const VersusState = root.VersusState;
@@ -39821,10 +40425,17 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       );
       html +=
         '<div class="mp-hud-meta">Goal: ' + escapeHtml(goalLabel) + "</div>";
+      const finishingRuns = !!(
+        r.attemptExpired &&
+        r.sessionActive &&
+        (r.finishOngoingRuns !== false ||
+          (app.versus && app.versus.finishOngoing))
+      );
       if (
         r.sessionActive &&
         app.versus.attemptRemainingMs != null &&
-        !app.versus.expired
+        !app.versus.expired &&
+        !r.attemptExpired
       ) {
         const s = Math.max(
           0,
@@ -39836,6 +40447,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           ":" +
           String(s % 60).padStart(2, "0") +
           "</div>";
+      } else if (finishingRuns) {
+        html += '<div class="mp-hud-meta">Attempt: finishing runs…</div>';
       } else if (matchOver) {
         html += '<div class="mp-hud-meta">Attempt: ended</div>';
       }
@@ -39847,7 +40460,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           ? VersusState.pickLeader(scores, goal)
           : null);
 
-      if (matchOver && Object.keys(scores).length) {
+      if (matchOver && !finishingRuns && Object.keys(scores).length) {
         html += '<div class="mp-hud-meta">Last match results</div>';
         if (winId) {
           const winSc = scores[winId] || {};
@@ -39896,7 +40509,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           " " +
           escapeHtml(bestLine) +
           mark;
-        if (sc.score != null && !matchOver) {
+        if (sc.score != null && (!matchOver || finishingRuns)) {
           line +=
             " · live " +
             sc.score +
@@ -40591,19 +41204,25 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       const labelsOnly = !!opts.labelsOnly;
       const me = this.client && this.client.me();
       const el = this.ensureMosaic();
+      const mode = this.client.roster && this.client.roster.mode;
       const isSpec =
         me &&
         me.role === "spectator" &&
-        this.client.roster &&
-        this.client.roster.mode === "versus";
+        (mode === "versus" || mode === "coop");
       const sessionOn = !!(this.client.roster && this.client.roster.sessionActive);
-      if (!isSpec || this.versus.spectateMode !== "mosaic" || !sessionOn) {
+      // Co-op spectators are mosaic-only (no native Focus seat)
+      const mosaicOn =
+        mode === "coop" || this.versus.spectateMode === "mosaic";
+      if (!isSpec || !mosaicOn || !sessionOn) {
         el.style.display = "none";
         if (typeof this._stopMosaicLabelTick === "function") {
           this._stopMosaicLabelTick();
         }
         this._stopMosaicAnim();
         return;
+      }
+      if (mode === "coop" && this.versus.spectateMode !== "mosaic") {
+        this.versus.setSpectateMode("mosaic");
       }
       if (typeof this._ensureMosaicLabelTick === "function") {
         this._ensureMosaicLabelTick();
@@ -40919,6 +41538,9 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       return;
     }
     const isAdmin = this.client.isAdmin();
+    const me = this.client.me && this.client.me();
+    // Match menus lock only while this seat is Ready — unlock on Unready / death.
+    const readyLocked = !!(me && me.role === "player" && me.ready);
     if (typeof window !== "undefined") {
       // Focus inject must not overwrite admin trophy/count/speed/size
       window.__mpSpectateSkipMatchMenus = !!isAdmin;
@@ -40929,13 +41551,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         (this.versus && this.versus.expired)
       );
     }
-    if (!isAdmin) {
-      // Lock match settings + Play; cosmetics stay open
-      Gsm.setNativeMenusLocked(true);
-    } else {
-      // Admin can edit trophy/count/speed/size
-      Gsm.setNativeMenusLocked(false);
-    }
+    Gsm.setNativeMenusLocked(readyLocked);
     // Play stays disabled for everyone while connected (Start match only)
     if (Gsm.setPlayButtonLocked) Gsm.setPlayButtonLocked(true);
     // Always re-assert cosmetics are clickable (survives Focus helper-hide / role flips)
@@ -41123,14 +41739,20 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       }
       // Lobby / co-op: keep non-admin mode settings matched to admin
       self.applyRosterSettingsIfNeeded(p);
-      // Keep in-game #color row in sync with claimed Co-op color
+      // Keep in-game #color row in sync with claimed Co-op color.
+      // Only when the claimed id actually changes — Ready/unready roster
+      // echoes must not re-select the color row (that looked like a recolor).
       if (p.mode === "coop" && me && me.role === "player" && me.colorId != null) {
         if (self._pendingColorId != null && Number(me.colorId) === Number(self._pendingColorId)) {
           self._pendingColorId = null;
         }
-        const localIdx = Gsm.readSettingIndex("color");
-        if (localIdx == null || Number(localIdx) !== Number(me.colorId)) {
-          if (Gsm.applySnakeColor) Gsm.applySnakeColor(me.colorId);
+        const claimed = Number(me.colorId);
+        if (self._lastAppliedColorId !== claimed) {
+          const localIdx = Gsm.readSettingIndex("color");
+          if (localIdx == null || Number(localIdx) !== claimed) {
+            if (Gsm.applySnakeColor) Gsm.applySnakeColor(claimed);
+          }
+          self._lastAppliedColorId = claimed;
         }
       }
       // Re-render after ensureAutoFocus so roster marks the watched player
@@ -41189,19 +41811,42 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       self._versusRestartPending = false;
       self.versus.onExpired(p || {});
       self.versus.attemptRemainingMs = 0;
+      const finishOngoing = !!(p && p.finishOngoing);
       if (self.client && self.client.roster) {
         self.client.roster.attemptExpired = true;
         self.client.roster.allowNewRuns = false;
-        // Server also clears this; set immediately so Focus/mosaic stop hiding menus
-        // before the follow-up ROSTER arrives.
-        self.client.roster.sessionActive = false;
+        self.client.roster.finishOngoingRuns = finishOngoing;
+        if (!finishOngoing) {
+          // Hard stop (or grace complete) — leave the live run chrome
+          self.client.roster.sessionActive = false;
+        }
       }
       if (typeof window !== "undefined") {
         window.__mpAttemptExpired = true;
         window.__mpSpectateAllowMenus = false;
       }
-      // Tear down Focus/mosaic + show death/settings so admin (and players) can
-      // change trophy/mode again — expire used to leave the live hide-death path.
+      if (finishOngoing) {
+        // Soft expire: keep playing until die / ALL; no new runs
+        const me = self.client && self.client.me && self.client.me();
+        let stillRunning = false;
+        if (me && me.role === "player" && Gsm.readScoreAndAlive) {
+          const s = Gsm.readScoreAndAlive();
+          stillRunning = s.alive !== false;
+        }
+        if (me && me.role === "spectator") stillRunning = true;
+        self.ui.updateHud(self);
+        if (self.ui.updateRosterScores) self.ui.updateRosterScores();
+        if (self.ui.renderRoster && self.client && self.client.roster) {
+          self.ui.renderRoster(self.client.roster);
+        }
+        self.updateStatusIndicator();
+        self._log("ATTEMPT_EXPIRED", {
+          finishOngoing: true,
+          stillRunning: stillRunning,
+        });
+        if (stillRunning) return;
+      }
+      // Tear down Focus/mosaic + show death/settings
       self._leaveVersusFocusSpectate();
       if (self._mosaicEl) self._mosaicEl.style.display = "none";
       self.returnToMenus({ fromExpired: true });
@@ -41257,6 +41902,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         return;
       }
       self.coopNative.applySnakeDelta(p);
+      if (typeof self.refreshCoopScores === "function") self.refreshCoopScores();
     });
     this.client.on(P.TYPES.COLLECTABLES_DELTA, function (p) {
       if (!self.coopNative) return;
@@ -41270,10 +41916,17 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         window.__mpCoopSkipFruitReapply
       ) {
         self.coopNative.applyCollectables(p);
+        if (Gsm.collectablesFingerprint) {
+          self._coopColsFp = Gsm.collectablesFingerprint(p);
+        }
         return;
       }
       self.coopNative.applyCollectables(p);
       if (Gsm.applyCollectables) Gsm.applyCollectables(p);
+      // Match local publish fingerprint so we don't echo the same board back
+      if (Gsm.collectablesFingerprint) {
+        self._coopColsFp = Gsm.collectablesFingerprint(p);
+      }
     });
     this.client.on(P.TYPES.COOP_PLAYER_DEAD, function (p) {
       if (!self.coopNative || !p) return;
@@ -41315,10 +41968,14 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         if (!me.ready && !roster.sessionActive) return;
       } else if (me.role === "spectator") {
         if (isCoop) {
-          self.startMatchLocalPlay({
-            coop: true,
-            spectator: true,
-          });
+          // Co-op spectate is mosaic-only — no native Play / phantom inject
+          if (self.versus) self.versus.setSpectateMode("mosaic");
+          if (typeof window !== "undefined") {
+            window.__mpStartingMatch = true;
+            window.__mpCoopSpectator = true;
+          }
+          self.ensureAutoFocus();
+          self.renderSpectateViews();
           return;
         }
         // Versus Focus: every spectator (admin + non-admin) seats native Play
@@ -41419,6 +42076,9 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         self.client.roster.sessionActive = false;
       }
       self._coopSessionActive = false;
+      if (p && p.reason === "ALL_APPLES") {
+        self._coopWon = true;
+      }
       if (typeof window !== "undefined") {
         window.__mpCoopAfterTick = null;
         window.__mpCoopFlushPendingDeltas = null;
@@ -41474,11 +42134,18 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         self.versus.winnerClientId = null;
       }
       self._versusRunStartedAtMs = null;
+      self._coopScores = {};
+      self._coopTotal = 0;
+      self._coopGoal = null;
+      self._coopWon = false;
       if (self.client && self.client.roster) {
         self.client.roster.sessionActive = true;
         // Clear stale "no new runs" before PLAY_SYNC (ROSTER may arrive later)
         self.client.roster.allowNewRuns = true;
         self.client.roster.attemptExpired = false;
+        if (p && p.finishOngoingRuns != null) {
+          self.client.roster.finishOngoingRuns = !!p.finishOngoingRuns;
+        }
         if (p && p.mode) self.client.roster.mode = p.mode;
         if (self.ui.renderRoster) self.ui.renderRoster(self.client.roster);
       }
@@ -41596,7 +42263,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     if (!clientId || !this.client || !this.client.roster) return;
     const me = this.client.me();
     if (!me || me.role !== "spectator") return;
-    if (this.client.roster.mode !== "versus") return;
+    const mode = this.client.roster.mode;
+    if (mode !== "versus" && mode !== "coop") return;
     const target = (this.client.roster.clients || []).find(function (c) {
       return c.clientId === clientId;
     });
@@ -41607,9 +42275,14 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     this.versus.setFocus(clientId);
     this.client.spectateFocus(clientId);
     if (!opts.keepMode) {
-      this.versus.setSpectateMode("focus");
-      const btn = document.getElementById("mp-mosaic-toggle");
-      if (btn) btn.textContent = "Mosaic";
+      // Co-op spectate stays mosaic-only (no native Focus seat)
+      if (mode === "coop") {
+        this.versus.setSpectateMode("mosaic");
+      } else {
+        this.versus.setSpectateMode("focus");
+        const btn = document.getElementById("mp-mosaic-toggle");
+        if (btn) btn.textContent = "Mosaic";
+      }
     }
     if (!this.versus.boards[clientId] && this.client.resync) {
       this.client.resync();
@@ -41906,17 +42579,23 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     if (!btn || btn.__mpReadyHooked) return;
     btn.__mpReadyHooked = true;
     const self = this;
-    btn.addEventListener(
-      "click",
-      function (ev) {
-        if (!self._shouldUseShuffleAsReady()) return;
-        ev.preventDefault();
-        ev.stopPropagation();
-        if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
-        self._toggleReadyFromShuffle();
-      },
-      true
-    );
+    function blockShuffle(ev) {
+      if (!self._shouldUseShuffleAsReady()) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
+    }
+    // pointerdown/mousedown also fire Shuffle's randomizer on some builds
+    ["pointerdown", "mousedown", "click"].forEach(function (type) {
+      btn.addEventListener(
+        type,
+        function (ev) {
+          blockShuffle(ev);
+          if (type === "click") self._toggleReadyFromShuffle();
+        },
+        true
+      );
+    });
   };
 
   /**
@@ -41984,10 +42663,24 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     if (!this._shouldUseShuffleAsReady()) return;
     const me = this.client.me();
     if (!me || me.role !== "player") return;
+    const colorBefore =
+      Gsm.readSettingIndex && Gsm.readSettingIndex("color");
     const next = !me.ready;
     me.ready = next;
     if (this.client.setReady) this.client.setReady(next);
     this._paintShuffleAsReady();
+    this.applyControlLocks();
+    // If anything still nudged the color row, put it back
+    const colorAfter =
+      Gsm.readSettingIndex && Gsm.readSettingIndex("color");
+    if (
+      colorBefore != null &&
+      colorAfter != null &&
+      Number(colorBefore) !== Number(colorAfter) &&
+      Gsm.applySnakeColor
+    ) {
+      Gsm.applySnakeColor(colorBefore);
+    }
     const tabBtn = document.getElementById("mp-ready");
     if (tabBtn) tabBtn.textContent = next ? "Unready" : "Ready";
     if (this.client.roster && this.ui && this.ui.renderRoster) {
@@ -42249,6 +42942,9 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
             console.warn("__mpCoopFlushPendingDeltas", e);
           }
         }
+        if (typeof self.refreshCoopScores === "function") {
+          self.refreshCoopScores();
+        }
       };
       window.__mpCoopAfterTick = function () {
         if (opts.spectator) return;
@@ -42259,12 +42955,9 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         }
         self._reassertCoopSpawnIfNeeded();
         self.publishCoopState();
-        if (!opts.spectator) {
-          const owner =
-            self.coopNative && self.coopNative.collectablesOwnerId;
-          const me = self.client && self.client.clientId;
-          if (!owner || owner === me) self.publishCoopCollectables();
-        }
+        // Any seated player may publish — key unlocks / soko pushes must sync
+        // even when this client is not the fruit owner. Fingerprint dedupes.
+        if (!opts.spectator) self.publishCoopCollectables();
       };
       window.__mpCoopOnLocalReset = function () {
         self._killLocalCoopForReset();
@@ -42302,6 +42995,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           self._coopSeatedPublish = true;
           self._coopRunAccepted = true;
           self.publishCoopState({ forceColors: true });
+          // Push wall/entity board immediately so peers collide with the same walls
+          self.publishCoopCollectables(true);
           return;
         }
       }
@@ -42347,7 +43042,15 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     const pose = this._coopSpawnPoseFor(slot, oy);
     this._coopSpawnPose = pose;
     if (Gsm.applyCoopSpawnOffset) {
-      return Gsm.applyCoopSpawnOffset(oy, { slot: slot, pose: pose });
+      const ok = Gsm.applyCoopSpawnOffset(oy, { slot: slot, pose: pose });
+      // Wall-aware seating may slide the pose — keep the published seat in sync
+      if (
+        typeof window !== "undefined" &&
+        window.__mpLastCoopSpawnPose
+      ) {
+        this._coopSpawnPose = window.__mpLastCoopSpawnPose;
+      }
+      return ok;
     }
     return false;
   };
@@ -42410,12 +43113,15 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
   MultiplayerApp.prototype._coopSpawnBody = function (oy, width, height, slotIndex) {
     const w = width || 17;
     const h = height || 15;
-    const pose = this._coopSpawnPoseFor(
-      slotIndex != null ? slotIndex : this._myCoopSlotIndex(),
-      oy,
-      w,
-      h
-    );
+    // Prefer the wall-adjusted seat we actually wrote into the engine
+    const pose =
+      this._coopSpawnPose ||
+      this._coopSpawnPoseFor(
+        slotIndex != null ? slotIndex : this._myCoopSlotIndex(),
+        oy,
+        w,
+        h
+      );
     if (Gsm.coopSpawnBodyFromPose) return Gsm.coopSpawnBodyFromPose(pose);
     const cx = pose.x;
     const cy = pose.y;
@@ -42492,7 +43198,14 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           color2 = Sc;
         }
       }
-      const body = this._coopSpawnBody(slot.oy, w, h, i);
+      const preferred = this._coopSpawnPoseFor(i, slot.oy, w, h);
+      const pose =
+        Gsm.findClearCoopSpawnPose && g
+          ? Gsm.findClearCoopSpawnPose(preferred, w, h, g)
+          : preferred;
+      const body = Gsm.coopSpawnBodyFromPose
+        ? Gsm.coopSpawnBodyFromPose(pose)
+        : this._coopSpawnBody(slot.oy, w, h, i);
       this.coopNative.applySnakeDelta({
         clientId: slot.clientId,
         body: body,
@@ -42620,6 +43333,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 
     // Do not apply self into remotes — paint skips myId; saves O(n) followBody/GC
     this.client.snakeDelta(delta);
+    if (typeof this.refreshCoopScores === "function") this.refreshCoopScores();
     if (delta.alive === false && !this._coopDeadSent) {
       this._coopDeadSent = true;
       this._coopLastBody = delta.body;
@@ -42680,12 +43394,121 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     if (!Gsm.scrapeCollectables) return;
     const cols = Gsm.scrapeCollectables({ includeEntities: true });
     if (!cols) return;
+    // Never broadcast fruit sitting on a snake body
+    if (cols.apples && Gsm.nudgeCoopApplesOffSnakes) {
+      const g = Gsm.gameInstance && Gsm.gameInstance();
+      if (typeof window !== "undefined") window.__mpCoopBoardFull = false;
+      cols.apples = Gsm.nudgeCoopApplesOffSnakes(cols.apples, g);
+      if (
+        typeof window !== "undefined" &&
+        window.__mpCoopBoardFull &&
+        this.maybeCoopAllApples
+      ) {
+        this.maybeCoopAllApples("board_full");
+      }
+    }
     const fp =
       Gsm.collectablesFingerprint && Gsm.collectablesFingerprint(cols);
     if (fp && fp === this._coopColsFp && !force) return;
     this._coopColsFp = fp;
     if (this.coopNative) this.coopNative.applyCollectables(cols);
     this.client.collectablesDelta(cols);
+  };
+
+  /**
+   * Combined co-op score from local scrape + remote SNAKE_DELTA scores.
+   * Wins when total >= W*H - walls - 3*players (shared board fill).
+   */
+  MultiplayerApp.prototype.refreshCoopScores = function () {
+    if (!this.client || !this.client.roster || this.client.roster.mode !== "coop") {
+      return;
+    }
+    if (!this._coopScores) this._coopScores = {};
+    const players = (this.client.roster.clients || []).filter(function (c) {
+      return c.role === "player";
+    });
+    const myId = this.client.clientId;
+    const remotes = (this.coopNative && this.coopNative.remotes) || {};
+    let total = 0;
+    const self = this;
+    players.forEach(function (p) {
+      let score = 0;
+      let alive = true;
+      if (p.clientId === myId) {
+        const s = Gsm.readScoreAndAlive ? Gsm.readScoreAndAlive() : {};
+        score = s.score != null ? s.score | 0 : 0;
+        alive = s.alive !== false && !self._coopDeadSent;
+      } else if (remotes[p.clientId]) {
+        const r = remotes[p.clientId];
+        score = r.score != null ? r.score | 0 : 0;
+        alive = r.alive !== false;
+      } else if (self._coopScores[p.clientId]) {
+        score = self._coopScores[p.clientId].score | 0;
+        alive = self._coopScores[p.clientId].alive !== false;
+      }
+      self._coopScores[p.clientId] = { score: score, alive: alive };
+      total += score;
+    });
+    this._coopTotal = total;
+    if (this._coopGoal == null) this.ensureCoopAppleGoal();
+    if (this.ui && this.ui.updateHud) this.ui.updateHud(this);
+    if (
+      this._coopGoal != null &&
+      total >= this._coopGoal &&
+      this._coopSessionActive
+    ) {
+      this.maybeCoopAllApples("score");
+    }
+  };
+
+  MultiplayerApp.prototype.ensureCoopAppleGoal = function () {
+    if (this._coopGoal != null) return this._coopGoal;
+    const players = (
+      (this.client && this.client.roster && this.client.roster.clients) ||
+      []
+    ).filter(function (c) {
+      return c.role === "player";
+    });
+    const g = Gsm.gameInstance && Gsm.gameInstance();
+    let w = 17;
+    let h = 15;
+    let walls = 0;
+    try {
+      const meta =
+        (g && g.wa && g.wa.oa && g.wa.oa.oa) ||
+        (g && g.oa && g.oa.oa) ||
+        {};
+      if (meta.width) w = meta.width | 0;
+      if (meta.height) h = meta.height | 0;
+      if (g && g.Ca && g.Ca.Aa && typeof g.Ca.Aa.size === "number") {
+        walls = g.Ca.Aa.size | 0;
+      } else if (typeof window !== "undefined" && window.__mpCoopWallOccupancy) {
+        // Fall back carefully — phantom stamps inflate this; prefer Aa size
+        walls = 0;
+      }
+    } catch (e) { /* defaults */ }
+    this._coopGoal = Gsm.coopAppleGoal
+      ? Gsm.coopAppleGoal(w, h, players.length || 1, walls)
+      : Math.max(1, w * h - walls - 3 * (players.length || 1));
+    return this._coopGoal;
+  };
+
+  MultiplayerApp.prototype.maybeCoopAllApples = function (reason) {
+    if (this._coopWon) return;
+    if (!this._coopSessionActive) return;
+    const me = this.client && this.client.me && this.client.me();
+    if (!me || me.role !== "player") return;
+    if (this._coopDeadSent) return;
+    this._coopWon = true;
+    if (Gsm.stopCoopRunTimer) Gsm.stopCoopRunTimer();
+    if (this.ui && this.ui.updateHud) this.ui.updateHud(this);
+    if (this.client.coopGoal) {
+      this.client.coopGoal({
+        score: this._coopTotal | 0,
+        combined: true,
+        reason: reason || "score",
+      });
+    }
   };
 
   /**
@@ -42788,12 +43611,14 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         ) {
           const me = self.client.me();
           if (me && me.role === "player") {
-            // Native eat+respawn already ran; broadcast full board to peers
             if (typeof window !== "undefined") {
               window.__mpCoopSkipFruitReapply = true;
             }
             setTimeout(function () {
               self.publishCoopCollectables();
+              if (typeof self.refreshCoopScores === "function") {
+                self.refreshCoopScores();
+              }
               setTimeout(function () {
                 if (typeof window !== "undefined") {
                   window.__mpCoopSkipFruitReapply = false;
@@ -42803,12 +43628,53 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           }
         }
       },
+      onAll: function (timeMs, score) {
+        // Versus spectator: keep watching; no PB from spectate
+        if (self._isVersusSpectator && self._isVersusSpectator()) return;
+        if (
+          typeof window !== "undefined" &&
+          window.__mpCoopSpectator
+        ) {
+          if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
+          return;
+        }
+        // Count/track first (Best All + scoreboard), then restart versus
+        self._pulseScore(score, timeMs, false, { goalAll: true });
+        self._versusRunStartedAtMs = null;
+        self._maybePromotePb(timeMs, score);
+        if (
+          self._coopSessionActive &&
+          self.client &&
+          self.client.roster &&
+          self.client.roster.mode === "coop"
+        ) {
+          if (Gsm.stopCoopRunTimer) Gsm.stopCoopRunTimer();
+          if (typeof self.refreshCoopScores === "function") {
+            self.refreshCoopScores();
+          }
+          // Native ALL or combined fill — end the shared run
+          self.maybeCoopAllApples("native_all");
+          return;
+        }
+        // Versus: after ALL apples are scored, instantly start another run
+        // Soft expire (finish ongoing): stay on endscreen — no new runs
+        if (!self.restartVersusAfterDeath()) {
+          const roster = self.client && self.client.roster;
+          if (
+            roster &&
+            roster.mode === "versus" &&
+            roster.attemptExpired
+          ) {
+            self.returnToMenus({ fromExpired: true });
+          }
+        }
+      },
       onDeath: function (timeMs, score) {
         // Versus spectator: watching, not competing — no pulse, no PB, no
         // restart. The endscreen is left exactly as the game left it; hiding it
         // here is what used to fight the run and reset it in a loop.
         if (self._isVersusSpectator && self._isVersusSpectator()) return;
-        // Co-op spectator: never treat as a real player death
+        // Co-op spectator: mosaic-only — never treat as a real player death
         if (
           typeof window !== "undefined" &&
           window.__mpCoopSpectator
@@ -42820,6 +43686,16 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         self._pulseScore(score, timeMs, false);
         self._versusRunStartedAtMs = null;
         self._maybePromotePb(timeMs, score);
+        // Dying clears Ready so match menus unlock again
+        const deathMe = self.client && self.client.me && self.client.me();
+        if (deathMe && deathMe.role === "player" && deathMe.ready) {
+          deathMe.ready = false;
+          if (self.client.setReady) self.client.setReady(false);
+          self.applyControlLocks();
+          if (self.client.roster && self.ui && self.ui.renderRoster) {
+            self.ui.renderRoster(self.client.roster);
+          }
+        }
         if (
           self._coopSessionActive &&
           self.client &&
@@ -42850,40 +43726,23 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
             }
             if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
           }
-          return;
-        }
-        // Versus: skip the death screen — instantly start another run
-        self.restartVersusAfterDeath();
-      },
-      onAll: function (timeMs, score) {
-        // Versus spectator: keep watching; no PB from spectate
-        if (self._isVersusSpectator && self._isVersusSpectator()) return;
-        if (
-          typeof window !== "undefined" &&
-          window.__mpCoopSpectator
-        ) {
-          if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
-          return;
-        }
-        // Count/track first (Best All + scoreboard), then restart versus
-        self._pulseScore(score, timeMs, false, { goalAll: true });
-        self._versusRunStartedAtMs = null;
-        self._maybePromotePb(timeMs, score);
-        if (
-          self._coopSessionActive &&
-          self.client &&
-          self.client.roster &&
-          self.client.roster.mode === "coop"
-        ) {
-          if (Gsm.stopCoopRunTimer) Gsm.stopCoopRunTimer();
-          const me = self.client.me();
-          if (me && me.role === "player" && self.client.coopGoal) {
-            self.client.coopGoal({ score: score, timeMs: timeMs });
+          if (typeof self.refreshCoopScores === "function") {
+            self.refreshCoopScores();
           }
           return;
         }
-        // Versus: after ALL apples are scored, instantly start another run
-        self.restartVersusAfterDeath();
+        // Versus: skip the death screen — instantly start another run
+        // After attempt expiry (hard or finish-ongoing), stay on death / menus
+        if (!self.restartVersusAfterDeath()) {
+          const roster = self.client && self.client.roster;
+          if (
+            roster &&
+            roster.mode === "versus" &&
+            roster.attemptExpired
+          ) {
+            self.returnToMenus({ fromExpired: true });
+          }
+        }
       },
     });
 
@@ -43029,7 +43888,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       if (!self.client || !self.client.connected) return;
       const me = self.client.me();
       if (!me || me.role !== "player") return;
-      if (!self.client.roster || self.client.roster.mode !== "versus") return;
+      const mode = self.client.roster && self.client.roster.mode;
+      if (mode !== "versus" && mode !== "coop") return;
       if (!self.client.roster.sessionActive) return;
       const specs = (self.client.roster.clients || []).filter(function (c) {
         return c.role === "spectator";
@@ -43274,11 +44134,14 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         if (t.closest("#color, #apple, #graphics, #theme")) return;
         const row = t.closest("#trophy, #count, #speed, #size");
         if (!row) return;
-        if (!self.client.isAdmin()) {
+        const me = self.client.me && self.client.me();
+        // Ready seats cannot change match settings; Unready unlocks them
+        if (me && me.role === "player" && me.ready) {
           ev.preventDefault();
           ev.stopPropagation();
           return;
         }
+        if (!self.client.isAdmin()) return;
         setTimeout(pushIfAdmin, 50);
       },
       true
@@ -43302,6 +44165,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           self.client.connected &&
           self.client.isAdmin()
         ) {
+          const me = self.client.me && self.client.me();
+          if (me && me.role === "player" && me.ready) return r;
           setTimeout(pushIfAdmin, 50);
         }
         return r;

@@ -995,41 +995,131 @@
       (g && g.settings && (g.settings.height || g.settings.boardHeight)) ||
       (g && g.height) ||
       null;
+    // Co-op used to stamp remotes into Ca.wa. Clear leftovers so we never
+    // publish snake bodies as real walls (which then land in Ca.Aa).
+    let clearedPhantoms = false;
+    if (
+      root.__mpCoopSession &&
+      typeof root.__mpCoopClearPhantomWalls === "function"
+    ) {
+      try {
+        root.__mpCoopClearPhantomWalls(g);
+        clearedPhantoms = true;
+      } catch (eClear) { /* ignore */ }
+    }
+    let result = out;
     try {
-      const aa = wallHost.Aa;
-      if (aa && typeof aa.forEach === "function") {
-        aa.forEach(function (w) {
-          if (!w) return;
-          const pos = w.pos || w;
-          if (pos.x == null || pos.y == null) return;
-          const lockType =
-            w.yNa != null && Number(w.yNa) >= 0
-              ? Math.max(0, Math.min(23, Number(w.yNa) | 0))
-              : w.XNa != null && Number(w.XNa) >= 0
-                ? Math.max(0, Math.min(23, Number(w.XNa) | 0))
-                : null;
-          out.push({
-            x: Number(pos.x),
-            y: Number(pos.y),
-            lock: lockType != null ? true : undefined,
-            lockType: lockType,
-            hotdog: !!(w.ty || w.ez) || undefined,
-            temp: !!(w.__tempWall || w.temp) || undefined,
-          });
-        });
-        if (out.length) {
-          return filterMosaicWalls(out, bw, bh);
+      const byKey = Object.create(null);
+      function addWall(p) {
+        if (!p || p.x == null || p.y == null) return;
+        const key = (p.x | 0) + "," + (p.y | 0);
+        const prev = byKey[key];
+        if (!prev) {
+          byKey[key] = p;
+          return;
+        }
+        // Prefer the entry with richer metadata (lock / temp / hotdog)
+        if (
+          (p.lock || p.lockType != null || p.temp || p.hotdog) &&
+          !(prev.lock || prev.lockType != null || prev.temp || prev.hotdog)
+        ) {
+          byKey[key] = p;
         }
       }
-    } catch (eAa) { /* ignore */ }
-    try {
-      const wa = wallHost.wa || wallHost.oa;
-      if (wa) {
-        // Grid fallback often marks corner sentinels — never treat those as walls
-        return filterMosaicWalls(mapPointList(wa), bw, bh);
+      try {
+        const aa = wallHost.Aa;
+        if (aa && typeof aa.forEach === "function") {
+          aa.forEach(function (w) {
+            if (!w) return;
+            const pos = w.pos || w;
+            if (pos.x == null || pos.y == null) return;
+            const lockType =
+              w.yNa != null && Number(w.yNa) >= 0
+                ? Math.max(0, Math.min(23, Number(w.yNa) | 0))
+                : w.XNa != null && Number(w.XNa) >= 0
+                  ? Math.max(0, Math.min(23, Number(w.XNa) | 0))
+                  : null;
+            addWall({
+              x: Number(pos.x),
+              y: Number(pos.y),
+              lock: lockType != null ? true : undefined,
+              lockType: lockType,
+              hotdog: !!(w.ty || w.ez) || undefined,
+              temp: !!(w.__tempWall || w.temp) || undefined,
+            });
+          });
+        }
+      } catch (eAa) { /* ignore */ }
+      try {
+        const wa = wallHost.wa || wallHost.oa;
+        if (wa) {
+          let mapped = mapPointList(wa);
+          if (
+            root.__mpCoopSession &&
+            typeof root.__mpCoopPhantomKeys === "function"
+          ) {
+            try {
+              const phantoms = root.__mpCoopPhantomKeys() || [];
+              if (phantoms.length) {
+                const skip = {};
+                for (let i = 0; i < phantoms.length; i++) {
+                  skip[phantoms[i]] = 1;
+                }
+                mapped = mapped.filter(function (p) {
+                  return !skip[(p.x | 0) + "," + (p.y | 0)];
+                });
+              }
+            } catch (ePh) { /* ignore */ }
+          }
+          for (let i = 0; i < mapped.length; i++) addWall(mapped[i]);
+        }
+      } catch (eWa) { /* ignore */ }
+      const merged = [];
+      Object.keys(byKey).forEach(function (k) {
+        merged.push(byKey[k]);
+      });
+      // Drop corner sentinels from wa-only cells; keep temp/lock/hotdog
+      result = filterMosaicWalls(merged, bw, bh);
+      // Never treat live snake cells as walls (legacy phantom leaks)
+      if (root.__mpCoopSession) {
+        const snakeCells = Object.create(null);
+        try {
+          const body = g && g.oa && g.oa.ka;
+          (body || []).forEach(function (p) {
+            if (p && p.x != null && p.y != null) {
+              snakeCells[(p.x | 0) + "," + (p.y | 0)] = 1;
+            }
+          });
+        } catch (eBody) { /* ignore */ }
+        try {
+          const remotes = root.__mpCoopRemotes || {};
+          Object.keys(remotes).forEach(function (id) {
+            const b = remotes[id] && remotes[id].body;
+            (b || []).forEach(function (p) {
+              if (p && p.x != null && p.y != null) {
+                snakeCells[(p.x | 0) + "," + (p.y | 0)] = 1;
+              }
+            });
+          });
+        } catch (eR) { /* ignore */ }
+        result = result.filter(function (p) {
+          if (!p) return false;
+          if (p.lock || p.lockType != null || p.temp || p.hotdog) return true;
+          return !snakeCells[(p.x | 0) + "," + (p.y | 0)];
+        });
       }
-    } catch (eWa) { /* ignore */ }
-    return out;
+      return result;
+    } finally {
+      // stampPhantomWalls is clear-only now (no restamp into Ca.wa)
+      if (
+        clearedPhantoms &&
+        typeof root.__mpCoopStampPhantomWalls === "function"
+      ) {
+        try {
+          root.__mpCoopStampPhantomWalls(g);
+        } catch (eStamp) { /* ignore */ }
+      }
+    }
   }
 
   /** Keys with fruit type + marked keyblock cell (r7a). Type 0–23 matches key_types sheet. */
@@ -1037,12 +1127,10 @@
     const out = [];
     const keys = g && g.Ba && g.Ba.keys;
     if (!keys) return out;
-    const list = Array.isArray(keys) ? keys : [];
-    for (let i = 0; i < list.length; i++) {
-      const k = list[i];
-      if (!k) continue;
+    function add(k) {
+      if (!k) return;
       const pos = k.pos || k;
-      if (pos.x == null || pos.y == null) continue;
+      if (pos.x == null || pos.y == null) return;
       const pt = { x: Number(pos.x), y: Number(pos.y) };
       let type = k.type;
       if (type == null) type = k.yNa;
@@ -1058,6 +1146,15 @@
         };
       }
       out.push(pt);
+    }
+    try {
+      if (typeof keys.forEach === "function" && keys.size != null) {
+        keys.forEach(add);
+        return out;
+      }
+    } catch (eMap) { /* ignore */ }
+    if (Array.isArray(keys)) {
+      for (let i = 0; i < keys.length; i++) add(keys[i]);
     }
     return out;
   }
@@ -1429,24 +1526,67 @@
     }
 
     function writeMap(map, list) {
-      if (!map || typeof map.clear !== "function" || !Array.isArray(list)) {
+      if (!map || !Array.isArray(list) || typeof map.forEach !== "function") {
         return;
       }
       let template = null;
+      const oldByPos = Object.create(null);
+      const oldObjs = [];
       try {
         map.forEach(function (v) {
-          if (!template && v) template = v;
+          if (!v) return;
+          if (!template) template = v;
+          const pos = v.pos || v;
+          if (pos && pos.x != null && pos.y != null) {
+            oldByPos[(pos.x | 0) + "," + (pos.y | 0)] = v;
+          }
+          oldObjs.push(v);
         });
       } catch (eT) { /* ignore */ }
-      try {
-        map.clear();
-        for (let i = 0; i < list.length; i++) {
-          const src = list[i];
-          const obj = {};
+
+      // Reuse native instances when boxes/keys move so push/unlock keep working
+      const claimed = Object.create(null);
+      const next = [];
+      for (let i = 0; i < list.length; i++) {
+        const src = list[i];
+        if (!src || src.x == null || src.y == null) continue;
+        const key = (src.x | 0) + "," + (src.y | 0);
+        let obj = oldByPos[key];
+        if (obj) {
+          claimed[key] = true;
+        } else {
+          for (let j = 0; j < oldObjs.length; j++) {
+            const cand = oldObjs[j];
+            if (!cand || cand.__mpClaimed) continue;
+            const cp = cand.pos || cand;
+            const ck =
+              cp && cp.x != null ? (cp.x | 0) + "," + (cp.y | 0) : "";
+            if (ck && claimed[ck]) continue;
+            // Leftover at a position no longer in the list = moved entity
+            if (ck && !list.some(function (p) {
+              return p && (p.x | 0) + "," + (p.y | 0) === ck;
+            })) {
+              obj = cand;
+              cand.__mpClaimed = true;
+              break;
+            }
+          }
+          if (!obj) {
+            for (let j2 = 0; j2 < oldObjs.length; j2++) {
+              if (oldObjs[j2] && !oldObjs[j2].__mpClaimed) {
+                obj = oldObjs[j2];
+                obj.__mpClaimed = true;
+                break;
+              }
+            }
+          }
+        }
+        if (!obj) {
+          obj = {};
           if (template) {
             try {
               Object.keys(template).forEach(function (k) {
-                if (k === "pos") return;
+                if (k === "pos" || k === "__mpClaimed") return;
                 obj[k] = template[k];
               });
             } catch (eC) { /* ignore */ }
@@ -1456,13 +1596,32 @@
             src.y,
             template && template.pos
           );
-          paintEntityFields(obj, src);
-          const key =
-            typeof map.set === "function"
-              ? src.x + "," + src.y
-              : obj;
-          if (typeof map.set === "function") map.set(key, obj);
-          else if (typeof map.add === "function") map.add(obj);
+        } else {
+          obj.__mpClaimed = true;
+          if (obj.pos || (template && template.pos)) {
+            obj.pos = ensureNativePos(
+              obj.pos,
+              src.x,
+              src.y,
+              (template && template.pos) || obj.pos
+            );
+          } else {
+            obj.x = src.x;
+            obj.y = src.y;
+          }
+        }
+        paintEntityFields(obj, src);
+        next.push({ key: key, obj: obj });
+      }
+      for (let c = 0; c < oldObjs.length; c++) {
+        if (oldObjs[c]) delete oldObjs[c].__mpClaimed;
+      }
+      try {
+        if (typeof map.clear === "function") map.clear();
+        for (let n = 0; n < next.length; n++) {
+          const item = next[n];
+          if (typeof map.set === "function") map.set(item.key, item.obj);
+          else if (typeof map.add === "function") map.add(item.obj);
         }
         applied = true;
       } catch (eM) { /* ignore */ }
@@ -1508,31 +1667,32 @@
 
     function writeNumericGrid(grid, list, emptyVal, solidVal) {
       if (!grid || !Array.isArray(grid) || !Array.isArray(list)) return;
+      const want = Object.create(null);
+      for (let i = 0; i < list.length; i++) {
+        const p = list[i];
+        if (!p) continue;
+        want[(p.x | 0) + "," + (p.y | 0)] = true;
+      }
       for (let y = 0; y < grid.length; y++) {
         const row = grid[y];
         if (!row) continue;
         for (let x = 0; x < row.length; x++) {
-          if (typeof row[x] === "number" || row[x] == null) {
-            row[x] = emptyVal;
+          if (typeof row[x] === "object" && row[x]) continue;
+          const key = x + "," + y;
+          if (want[key]) {
+            row[x] = solidVal;
+            continue;
           }
+          // Only clear plain empty/solid cells — keep temp-wall counters etc.
+          const v = row[x] | 0;
+          if (v === solidVal || v === emptyVal) row[x] = emptyVal;
         }
-      }
-      for (let i = 0; i < list.length; i++) {
-        const p = list[i];
-        if (!p) continue;
-        const x = p.x | 0;
-        const y = p.y | 0;
-        if (!grid[y] || x < 0 || x >= grid[y].length) continue;
-        if (typeof grid[y][x] === "object" && grid[y][x]) {
-          continue;
-        }
-        grid[y][x] = solidVal;
       }
       applied = true;
     }
 
     try {
-      if (entities.walls) {
+      if (entities.walls != null) {
         if (g.Ca && Array.isArray(g.Ca.wa) && g.Ca.wa.length) {
           writeNumericGrid(g.Ca.wa, entities.walls, 0, 1);
         }
@@ -1542,17 +1702,17 @@
       }
     } catch (eW) { /* ignore */ }
     try {
-      if (g.Ba && entities.keys) {
+      if (g.Ba && entities.keys != null) {
         if (Array.isArray(g.Ba.keys)) writeList(g.Ba.keys, entities.keys);
         else if (g.Ba.keys && g.Ba.keys.forEach) writeMap(g.Ba.keys, entities.keys);
       }
     } catch (e) { /* ignore */ }
     try {
-      if (g.Aa && entities.boxes) {
+      if (g.Aa && entities.boxes != null) {
         if (Array.isArray(g.Aa.oa)) writeList(g.Aa.oa, entities.boxes);
         else if (g.Aa.oa && g.Aa.oa.forEach) writeMap(g.Aa.oa, entities.boxes);
       }
-      if (g.Aa && entities.goals) {
+      if (g.Aa && entities.goals != null) {
         const gh = g.Aa.d_ || g.Aa.da;
         if (Array.isArray(g.Aa.d_)) writeList(g.Aa.d_, entities.goals);
         else if (Array.isArray(g.Aa.da)) writeList(g.Aa.da, entities.goals);
@@ -1807,6 +1967,29 @@
       const body2 = scrapeCompanionBody(g, body, width, height);
       if (body2 && body2.length) board.body2 = body2;
     } catch (eBody2) { /* ignore */ }
+
+    // Co-op remotes for mosaic spectate (shared board, multiple snakes)
+    try {
+      if (root.__mpCoopSession && root.__mpCoopRemotes) {
+        const myId = root.__mpCoopMyId;
+        const remotes = root.__mpCoopRemotes;
+        const snakes = [];
+        Object.keys(remotes).forEach(function (id) {
+          if (myId && id === myId) return;
+          const r = remotes[id];
+          if (!r || !r.body || !r.body.length) return;
+          snakes.push({
+            body: r.body,
+            dir: r.dir,
+            alive: r.alive !== false,
+            colorId: r.colorId != null ? r.colorId : null,
+            Sc: r.Sc || r.color2 || null,
+            Yc: r.Yc || r.color1 || null,
+          });
+        });
+        if (snakes.length) board.snakes = snakes;
+      }
+    } catch (eSnakes) { /* ignore */ }
 
     try {
       if (boardHasMode(board, "light")) {
@@ -3592,6 +3775,44 @@
       ? { primary: POISON_SNAKE_PRIMARY, secondary: POISON_SNAKE_SECONDARY }
       : colorInfo;
     const motionSlot = motionKey ? ":" + motionKey : "";
+    // Co-op remotes under the local snake (mosaic spectate shared board)
+    const remoteSnakes = board.snakes || [];
+    for (let ri = 0; ri < remoteSnakes.length; ri++) {
+      const rs = remoteSnakes[ri];
+      if (!rs || !rs.body || !rs.body.length) continue;
+      let remoteColor = null;
+      if (rs.Sc || rs.Yc) {
+        remoteColor = {
+          primary: rs.Sc || rs.Yc,
+          secondary: rs.Yc || rs.Sc,
+          Sc: rs.Sc || null,
+          Yc: rs.Yc || null,
+        };
+      } else if (
+        root.MultiplayerColors &&
+        root.MultiplayerColors.getColor &&
+        rs.colorId != null
+      ) {
+        remoteColor = root.MultiplayerColors.getColor(Number(rs.colorId));
+      }
+      snakeDrawOpts.motion = snakeMotion(
+        canvas,
+        "remote" + ri + motionSlot,
+        rs.body
+      );
+      ctx.globalAlpha = rs.alive === false ? 0.5 : 1;
+      drawWallSolverStyleSnake(
+        ctx,
+        rs.body,
+        ox,
+        oy,
+        cell,
+        remoteColor,
+        rs.dir,
+        snakeDrawOpts
+      );
+      ctx.globalAlpha = 1;
+    }
     // Companion under primary: Yin Yang = muted alt; Twin = same colors
     if (board.body2 && board.body2.length) {
       let companionColor = snakeColor;
@@ -4431,6 +4652,89 @@
     ];
   }
 
+  function coopSpawnBodyInBounds(body, width, height) {
+    if (!body || !body.length) return false;
+    const w = width | 0;
+    const h = height | 0;
+    for (let i = 0; i < body.length; i++) {
+      const p = body[i];
+      if (!p) return false;
+      const x = p.x | 0;
+      const y = p.y | 0;
+      if (x < 0 || y < 0 || x >= w || y >= h) return false;
+    }
+    return true;
+  }
+
+  /** True when a length-3 spawn body hits a wall or another co-op snake. */
+  function coopSpawnBodyBlocked(body, game) {
+    if (!body || !body.length) return true;
+    const occ =
+      typeof root.__mpCoopReadOccupancy === "function"
+        ? root.__mpCoopReadOccupancy()
+        : {};
+    const wallFn = root.__mpCoopIsSolidWall;
+    for (let i = 0; i < body.length; i++) {
+      const p = body[i];
+      if (!p) return true;
+      const x = p.x | 0;
+      const y = p.y | 0;
+      if (occ[x + "," + y]) return true;
+      if (typeof wallFn === "function" && wallFn(game, x, y)) return true;
+      // Fallback if bridge helpers are not installed yet
+      if (typeof wallFn !== "function") {
+        try {
+          const wa = game && game.Ca && game.Ca.wa;
+          const row = wa && wa[y];
+          if (row) {
+            const v = row[x] | 0;
+            if (v !== 0 && v !== 3) return true;
+          }
+        } catch (e) { /* ignore */ }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Prefer the requested seat; if Wall mode (or remotes) blocks that footprint,
+   * spiral search for the nearest clear length-3 pose so every player starts
+   * off solid walls the same way native spawn avoids them.
+   */
+  function findClearCoopSpawnPose(pose, width, height, game) {
+    const preferred = pose || {
+      x: Math.floor(width / 2),
+      y: Math.floor(height / 2),
+      dir: "RIGHT",
+    };
+    function tryPose(p) {
+      if (!p) return null;
+      const body = coopSpawnBodyFromPose(p);
+      if (!coopSpawnBodyInBounds(body, width, height)) return null;
+      if (coopSpawnBodyBlocked(body, game)) return null;
+      return p;
+    }
+    const first = tryPose(preferred);
+    if (first) return first;
+    const maxR = Math.max(width, height);
+    for (let r = 0; r <= maxR; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (r > 0 && Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+          const x = (preferred.x | 0) + dx;
+          const y = (preferred.y | 0) + dy;
+          const dirs =
+            preferred.dir === "LEFT" ? ["LEFT", "RIGHT"] : ["RIGHT", "LEFT"];
+          for (let di = 0; di < dirs.length; di++) {
+            const hit = tryPose({ x: x, y: y, dir: dirs[di] });
+            if (hit) return hit;
+          }
+        }
+      }
+    }
+    return preferred;
+  }
+
   function coopYinYangCorner(slot, width, height) {
     const w = width || 17;
     const h = height || 15;
@@ -4482,6 +4786,9 @@
         dir: "RIGHT",
       };
     }
+    // Wall mode / remotes: slide off solid cells so the seat is legal
+    pose = findClearCoopSpawnPose(pose, w, h, g);
+    root.__mpLastCoopSpawnPose = pose;
     const body = coopSpawnBodyFromPose(pose);
     try {
       // Keep native idle-until-key behavior: do not assign direction here.
@@ -4576,7 +4883,7 @@
         if (!row) return;
         row.style.pointerEvents = locked ? "none" : "";
         row.style.opacity = locked ? "0.55" : "";
-        row.title = locked ? "Synced from admin" : "";
+        row.title = locked ? "Unready to change settings" : "";
       });
       unlockPersonalMenus();
     }
@@ -4919,6 +5226,25 @@
       "|" +
       (h2 ? h2.x + "," + h2.y : "") +
       "|" +
+      (function () {
+        const snakes = board.snakes || [];
+        if (!snakes.length) return "0";
+        let s = String(snakes.length);
+        for (let i = 0; i < snakes.length; i++) {
+          const sn = snakes[i];
+          const b = (sn && sn.body) || [];
+          const hh = b[0];
+          s +=
+            ";" +
+            b.length +
+            ":" +
+            (hh ? hh.x + "," + hh.y : "") +
+            ":" +
+            (sn && sn.alive === false ? "0" : "1");
+        }
+        return s;
+      })() +
+      "|" +
       (board.catLives != null ? board.catLives : "") +
       "," +
       (board.catGrace != null ? board.catGrace : "") +
@@ -5011,27 +5337,78 @@
     }
     return [
       fruit,
-      len(cols.walls),
-      len(cols.keys),
-      len(cols.boxes),
-      len(cols.goals),
-      len(cols.mines),
-      len(cols.statues),
-      len(cols.bridges),
-      len(cols.gates),
-      len(cols.arrows),
-      len(cols.bombZones),
+      (function () {
+        const walls = cols.walls || [];
+        if (!walls.length) return "0";
+        const parts = [];
+        for (let i = 0; i < walls.length; i++) {
+          const w = walls[i];
+          if (!w) continue;
+          parts.push(
+            (w.x | 0) +
+              "," +
+              (w.y | 0) +
+              (w.temp ? "t" : "") +
+              (w.lock ? "l" : "") +
+              (w.hotdog ? "h" : "") +
+              (w.lockType != null ? ":" + w.lockType : "")
+          );
+        }
+        parts.sort();
+        return parts.join(";");
+      })(),
+      pointListFingerprint(cols.keys, function (k) {
+        return (
+          (k.type != null ? "t" + k.type : "") +
+          (k.keyblock
+            ? "b" + (k.keyblock.x | 0) + "," + (k.keyblock.y | 0)
+            : "")
+        );
+      }),
+      pointListFingerprint(cols.boxes),
+      pointListFingerprint(cols.goals),
+      pointListFingerprint(cols.mines, function (m) {
+        return m.xL != null ? "x" + m.xL : "";
+      }),
+      pointListFingerprint(cols.statues, function (s) {
+        return (s.cracked ? "c" : "") + (s.angle != null ? "a" + s.angle : "");
+      }),
+      pointListFingerprint(cols.bridges),
+      pointListFingerprint(cols.gates),
+      pointListFingerprint(cols.arrows, function (a) {
+        return a.dir || a.direction || "";
+      }),
+      pointListFingerprint(cols.bombZones),
     ].join("|");
   }
 
+  /** Sorted x,y[+extra] fingerprint so key/soko moves republish. */
+  function pointListFingerprint(list, extraFn) {
+    if (!list || !list.length) return "0";
+    const parts = [];
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      if (!p || p.x == null || p.y == null) continue;
+      parts.push(
+        (p.x | 0) +
+          "," +
+          (p.y | 0) +
+          (extraFn ? extraFn(p) : "")
+      );
+    }
+    parts.sort();
+    return parts.length ? parts.join(";") : "0";
+  }
+
   /**
-   * During co-op, if synced fruit lands on a live/dead snake cell, nudge to a
-   * free cell locally (safety net — eater freePos should already avoid snakes).
+   * During co-op, if fruit lands on any snake cell (local or remote) or a wall,
+   * nudge to a free cell. Used on apply and on the eater's publish path.
    */
   function nudgeCoopApplesOffSnakes(apples, game) {
     if (!Array.isArray(apples) || !apples.length) return apples;
     if (!root.__mpCoopSession || !root.__mpCoopInject) return apples;
-    const readOcc = root.__mpCoopReadOccupancy;
+    const readOcc =
+      root.__mpCoopReadSpawnOccupancy || root.__mpCoopReadOccupancy;
     const findFree = root.__mpCoopFindFreeSpawn;
     if (typeof readOcc !== "function") return apples;
 
@@ -5041,7 +5418,7 @@
     const reserved = {};
 
     function blockedKeys() {
-      const occ = Object.assign({}, readOcc());
+      const occ = Object.assign({}, readOcc(game, true));
       Object.keys(reserved).forEach(function (k) {
         occ[k] = true;
       });
@@ -5054,7 +5431,10 @@
       const y = a.y != null ? a.y | 0 : 0;
       const k = x + "," + y;
       const occ = blockedKeys();
-      if (!occ[k]) {
+      const onWall =
+        typeof root.__mpCoopIsSolidWall === "function" &&
+        root.__mpCoopIsSolidWall(game, x, y);
+      if (!occ[k] && !onWall) {
         reserved[k] = true;
         a.x = x;
         a.y = y;
@@ -5065,7 +5445,6 @@
         free = findFree(game, occ);
       }
       if (!free) {
-        // Fallback scan without helper
         const meta =
           (game && game.wa && game.wa.oa && game.wa.oa.oa) ||
           (game && game.oa && game.oa.oa) ||
@@ -5075,10 +5454,15 @@
         outer: for (let yy = 0; yy < h; yy++) {
           for (let xx = 0; xx < w; xx++) {
             const kk = xx + "," + yy;
-            if (!occ[kk]) {
-              free = { x: xx, y: yy };
-              break outer;
+            if (occ[kk]) continue;
+            if (
+              typeof root.__mpCoopIsSolidWall === "function" &&
+              root.__mpCoopIsSolidWall(game, xx, yy)
+            ) {
+              continue;
             }
+            free = { x: xx, y: yy };
+            break outer;
           }
         }
       }
@@ -5088,9 +5472,20 @@
         reserved[free.x + "," + free.y] = true;
       } else {
         reserved[k] = true;
+        // Board full — signal ALL apples for co-op win detection
+        root.__mpCoopBoardFull = true;
       }
     }
     return out;
+  }
+
+  /** Max shared apples: board cells minus walls minus length-3 seats. */
+  function coopAppleGoal(width, height, playerCount, wallCount) {
+    const w = Math.max(1, Number(width) || 17);
+    const h = Math.max(1, Number(height) || 15);
+    const n = Math.max(1, Number(playerCount) || 1);
+    const walls = Math.max(0, Number(wallCount) || 0);
+    return Math.max(1, w * h - walls - 3 * n);
   }
 
   /** Write apple positions into exposed game fields; grow/shrink list to match owner. */
@@ -5377,11 +5772,14 @@
     filterMosaicWalls: filterMosaicWalls,
     isIllegalNormalWallCell: isIllegalNormalWallCell,
     applyCollectables: applyCollectables,
+    nudgeCoopApplesOffSnakes: nudgeCoopApplesOffSnakes,
+    coopAppleGoal: coopAppleGoal,
     applyBoardEntities: applyBoardEntities,
     applyCoopSpawnOffset: applyCoopSpawnOffset,
     applyCoopStartMoving: applyCoopStartMoving,
     coopYinYangCorner: coopYinYangCorner,
     coopSpawnBodyFromPose: coopSpawnBodyFromPose,
+    findClearCoopSpawnPose: findClearCoopSpawnPose,
     coopIsYinYang: coopIsYinYang,
     parkLocalSnakeOffBoard: parkLocalSnakeOffBoard,
     emptyLocalSnakeBody: emptyLocalSnakeBody,

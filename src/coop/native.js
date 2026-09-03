@@ -2,11 +2,10 @@
  * Partially-native co-op.
  *
  * Remote players are drawn with the mosaic snake renderer straight into the
- * native canvas layer the local snake was just painted on, and their occupied
- * cells are stamped into the native wall collision grid (`game.Ca.wa`). The
- * engine then kills the local snake with its own wall death — a "phantom wall"
- * that collides but is never drawn, because the remote snake is already painted
- * on top of it. Walls render from `game.Ca.Aa`, which we never touch.
+ * native canvas layer the local snake was just painted on. Collision uses the
+ * live remote body positions each tick (head-step probe + y4E / slot wall
+ * wrappers) — we never stamp snake cells into the wall grid, because that
+ * draws real wall tiles at spawn / body cells.
  *
  * The retired "100% native" approach (PlayerRenderer body-swap) lives in
  * archive/coop-native-full/.
@@ -316,8 +315,13 @@
     if (!game || coopSkipFriendlyHits()) return false;
     if (root.__mpCoopSpectator || root.__mpCoopLocalDead) return false;
     if (game.nj || game.dead || game.isDead) return false;
+    const snake = game.oa;
+    const head = snake && snake.ka && snake.ka[0];
     const next = predictedHead(game);
-    if (!next || !remoteOccupies(next.x, next.y)) return false;
+    const hit =
+      (head && remoteOccupies(head.x, head.y)) ||
+      (next && remoteOccupies(next.x, next.y));
+    if (!hit) return false;
     try {
       if (typeof game.die === "function") game.die();
       else {
@@ -328,6 +332,15 @@
       game.nj = true;
     }
     root.__mpCoopLocalDead = true;
+    // Notify mod so corpse / score paths stay in sync
+    if (typeof root.__mpCoopOnFriendlyDeath === "function" && snake && snake.ka) {
+      try {
+        const snap = Array.prototype.map.call(snake.ka, function (p) {
+          return p && { x: p.x | 0, y: p.y | 0 };
+        });
+        root.__mpCoopOnFriendlyDeath(snap);
+      } catch (e2) { /* ignore */ }
+    }
     return true;
   }
 
@@ -474,7 +487,49 @@
     return { width: w || 17, height: h || 15 };
   }
 
-  /** Linear scan for a cell not on any co-op snake (and not on local body). */
+  /**
+   * Native wall collision: non-zero / non-3 cells in Ca.wa are solid (y4E).
+   * Used so fruit/snake seats avoid real Wall-mode cells the same way the
+   * engine does — including after peers apply a synced wall list.
+   */
+  function isSolidWallCell(game, x, y) {
+    const wa = wallGrid(game);
+    if (!wa) return false;
+    const xi = x | 0;
+    const yi = y | 0;
+    const row = wa[yi];
+    if (!row || xi < 0 || xi >= row.length) return false;
+    const v = row[xi] | 0;
+    return v !== 0 && v !== 3;
+  }
+
+  /** All solid Ca.wa cells (real walls + current phantom stamps). */
+  function wallOccupancyKeys(game) {
+    const keys = {};
+    const wa = wallGrid(game);
+    if (!wa) return keys;
+    for (let y = 0; y < wa.length; y++) {
+      const row = wa[y];
+      if (!row) continue;
+      for (let x = 0; x < row.length; x++) {
+        const v = row[x] | 0;
+        if (v === 0 || v === 3) continue;
+        keys[x + "," + y] = true;
+      }
+    }
+    return keys;
+  }
+
+  function spawnCellBlocked(game, x, y, occ) {
+    const k = (x | 0) + "," + (y | 0);
+    if (occ && occ[k]) return true;
+    return isSolidWallCell(game, x, y);
+  }
+
+  /**
+   * Linear scan for a cell not on any co-op snake, local body, or solid wall.
+   * Wall mode must plant fruit / entities with the same rules as native.
+   */
   function findFreeSpawnCell(game, occ) {
     occ = occ || readCoopOccupancy();
     const size = boardSizeFromGame(game);
@@ -491,6 +546,7 @@
       for (let x = 0; x < size.width; x++) {
         const k = x + "," + y;
         if (occ[k] || local[k]) continue;
+        if (isSolidWallCell(game, x, y)) continue;
         return { x: x, y: y };
       }
     }
@@ -499,11 +555,14 @@
 
   /* ---------------------------------------------------------- phantom walls */
 
-  // Native y4E blocks a cell unless its wall value is 0 or 3. Temp Walls uses
-  // a plain ++ from 0, so 1 is a known-good "solid" value.
+  // Legacy: we used to stamp remote bodies into Ca.wa as solid "phantom"
+  // walls. That painted visible wall tiles at snake cells (especially the
+  // initial spawn seats). Collision is body-position only now — these helpers
+  // only clear any leftover stamps from older sessions/builds.
+
   const PHANTOM_WALL_VALUE = 1;
 
-  // Cells we stamped, so unstamping is exact and never eats a real wall.
+  // Cells we stamped historically, so unstamping is exact.
   let _phantomKeys = [];
   let _phantomSet = new Set();
   let _phantomGrid = null;
@@ -514,7 +573,7 @@
     return Array.isArray(wa) && wa.length ? wa : null;
   }
 
-  /** Remove every cell we stamped last pass. */
+  /** Remove every cell we stamped last pass (and wipe any stray value-1 stamps). */
   function clearPhantomWalls(game) {
     const wa = wallGrid(game);
     if (wa && wa === _phantomGrid) {
@@ -526,55 +585,69 @@
         if (row && (row[x] | 0) === PHANTOM_WALL_VALUE) row[x] = 0;
       }
     }
-    // A reset swaps the grid out from under us; the stale list is then moot.
     if (_phantomKeys.length) {
       _phantomKeys = [];
       _phantomSet = new Set();
     }
     _phantomGrid = wa;
-  }
 
-  /**
-   * Stamp every solid remote cell (live bodies including heads, plus corpses)
-   * into the wall collision grid. Only free cells are stamped, so real walls,
-   * keys, mines and bridges keep their own values and our unstamp stays exact.
-   */
-  function stampPhantomWalls(game) {
-    clearPhantomWalls(game);
-    const wa = wallGrid(game);
-    if (!wa) return 0;
-    if (!root.__mpCoopSession || !root.__mpCoopInject) return 0;
-    if (root.__mpCoopSpectator) return 0;
-    // Peaceful / cat grace / chess peaceful: friendly snakes are not solid
-    if (coopSkipFriendlyHits()) return 0;
-
-    const myId = root.__mpCoopMyId;
+    // Scrub legacy phantom stamps under current remote bodies (and Aa copies).
+    // Live snakes never occupy real wall cells, so clearing solid-1 here is safe.
+    if (!wa || !root.__mpCoopSession) return;
     const remotes = root.__mpCoopRemotes || {};
-    const hostDim = localOtherDim(game);
+    const myId = root.__mpCoopMyId;
     const ids = Object.keys(remotes);
-    let stamped = 0;
+    const scrubKeys = [];
     for (let i = 0; i < ids.length; i++) {
-      const id = ids[i];
-      if (myId && id === myId) continue;
-      const body = (remotes[id] && remotes[id].body) || [];
+      if (myId && ids[i] === myId) continue;
+      const body = (remotes[ids[i]] && remotes[ids[i]].body) || [];
       for (let j = 0; j < body.length; j++) {
         const seg = body[j];
-        if (!remoteCellBlocks(seg, hostDim)) continue;
+        if (!seg || seg.x == null || seg.y == null) continue;
         const x = seg.x | 0;
         const y = seg.y | 0;
         const row = wa[y];
-        if (!row || x < 0 || x >= row.length) continue;
-        if ((row[x] | 0) !== 0) continue;
-        const key = x + "," + y;
-        if (_phantomSet.has(key)) continue;
-        row[x] = PHANTOM_WALL_VALUE;
-        _phantomSet.add(key);
-        _phantomKeys.push(key);
-        stamped++;
+        if (row && (row[x] | 0) === PHANTOM_WALL_VALUE) {
+          row[x] = 0;
+          scrubKeys.push(x + "," + y);
+        }
       }
     }
-    _phantomGrid = wa;
-    return stamped;
+    if (!scrubKeys.length) return;
+    try {
+      const g = game || root.__mpGame || root.__remixGame;
+      const aa = g && g.Ca && g.Ca.Aa;
+      if (!aa || typeof aa.forEach !== "function") return;
+      const drop = Object.create(null);
+      for (let i = 0; i < scrubKeys.length; i++) drop[scrubKeys[i]] = 1;
+      const remove = [];
+      aa.forEach(function (w, key) {
+        if (!w) return;
+        const pos = w.pos || w;
+        if (pos.x == null || pos.y == null) return;
+        // Keep lock / temp / hotdog walls even if a snake briefly overlaps
+        if (w.yNa != null || w.XNa != null || w.__tempWall || w.temp || w.ty || w.ez) {
+          return;
+        }
+        const k = (pos.x | 0) + "," + (pos.y | 0);
+        if (drop[k]) remove.push(key != null ? key : k);
+      });
+      for (let i = 0; i < remove.length; i++) {
+        try {
+          if (typeof aa.delete === "function") aa.delete(remove[i]);
+          else if (typeof aa.remove === "function") aa.remove(remove[i]);
+        } catch (eDel) { /* ignore */ }
+      }
+    } catch (eAa) { /* ignore */ }
+  }
+
+  /**
+   * No-op stamp: clear leftover phantom cells only. Remote collision is handled
+   * by killLocalOnRemote / y4E / slot_pos_in_wall against live body positions.
+   */
+  function stampPhantomWalls(game) {
+    clearPhantomWalls(game);
+    return 0;
   }
 
   function phantomKeys() {
@@ -583,8 +656,8 @@
 
   /**
    * Slot Machine treats "any non-zero wall cell" as Wall mode being live
-   * (`e7(a,1)` via slot_has_walls). Phantom snake cells must not switch that on,
-   * so answer from the grid while ignoring cells we stamped.
+   * (`e7(a,1)` via slot_has_walls). Keep the guard so older leftover stamps
+   * cannot flip Wall-mode detection.
    */
   function installSlotWallGuard() {
     const orig = root.slot_has_walls;
@@ -868,7 +941,7 @@
 
   /**
    * Hook native `render(a,b,c)`. Remotes are painted right after the local
-   * snake so they sit on top of their own phantom walls.
+   * snake so companions stay visible on the shared board.
    */
   function installCoopRenderHook() {
     if (root.__mpCoopRenderInstalled) return;
@@ -917,8 +990,28 @@
   /* --------------------------------------------------------- spawn occupancy */
 
   /**
-   * Wrap game.Tb / game.Rb so freePos never lands on live or dead co-op snakes.
-   * Occupancy is re-read every attempt (snakes move between ticks).
+   * Occupancy for spawn: remotes + optional local body. Used by freePos wrappers
+   * so fruit never lands on any snake.
+   */
+  function readSpawnOccupancy(game, includeLocal) {
+    const occ = Object.assign({}, readCoopOccupancy());
+    if (includeLocal !== false) {
+      try {
+        const g = game || root.__mpGame || root.__remixGame;
+        const body = g && g.oa && g.oa.ka;
+        (body || []).forEach(function (p) {
+          if (p && p.x != null && p.y != null) {
+            occ[(p.x | 0) + "," + (p.y | 0)] = true;
+          }
+        });
+      } catch (e) { /* ignore */ }
+    }
+    return occ;
+  }
+
+  /**
+   * Wrap game.Tb / game.Rb so freePos never lands on live/dead co-op snakes
+   * (including the local body) or solid wall cells.
    */
   function wrapFreePos(game) {
     if (!game || game.__mpCoopFreePosWrapped) return;
@@ -930,14 +1023,14 @@
         let attempts = 0;
         let pos = orig.apply(this, arguments);
         while (pos && attempts < 64) {
-          const occ = readCoopOccupancy();
-          if (!occ[(pos.x | 0) + "," + (pos.y | 0)]) break;
+          const occ = readSpawnOccupancy(game || this, true);
+          if (!spawnCellBlocked(game || this, pos.x, pos.y, occ)) break;
           attempts++;
           pos = orig.apply(this, arguments);
         }
         if (pos) {
-          const occ = readCoopOccupancy();
-          if (occ[(pos.x | 0) + "," + (pos.y | 0)]) {
+          const occ = readSpawnOccupancy(game || this, true);
+          if (spawnCellBlocked(game || this, pos.x, pos.y, occ)) {
             const scanned = findFreeSpawnCell(game || this, occ);
             if (scanned) return scanned;
           }
@@ -949,10 +1042,8 @@
 
   /**
    * Remix Chess/Slot spawn helpers only mark the local snake — merge co-op
-   * occupancy (live + corpse) so walls/keys/fruit plants avoid peers too.
-   * Phantom walls already cover most paths, but not cells we deliberately leave
-   * passable (cheese holes, other dimension, peaceful), and nothing should ever
-   * spawn inside a snake even when you can walk through it.
+   * occupancy (live + corpse) and solid wall cells so walls/keys/fruit plants
+   * avoid peers and Wall-mode geometry the same way native does.
    */
   function installRemixSpawnOccupancyHooks() {
     if (
@@ -963,11 +1054,14 @@
       root.chess_occupied_keys = function (game, apples, skipIndexes) {
         const keys = origKeys.call(this, game, apples, skipIndexes);
         if (!root.__mpCoopSession || !root.__mpCoopInject) return keys;
-        const occ = readCoopOccupancy();
-        Object.keys(occ).forEach(function (k) {
+        function addKey(k) {
           if (keys && typeof keys.add === "function") keys.add(k);
           else if (keys && typeof keys === "object") keys[k] = true;
-        });
+        }
+        const occ = readSpawnOccupancy(game, true);
+        Object.keys(occ).forEach(addKey);
+        const walls = wallOccupancyKeys(game);
+        Object.keys(walls).forEach(addKey);
         return keys;
       };
       root.chess_occupied_keys.__mpCoop = true;
@@ -979,18 +1073,18 @@
         if (!root.__mpCoopSession || !root.__mpCoopInject) {
           return origSlot.apply(this, arguments);
         }
+        const game = (mgr && mgr.wb) || root.__mpGame || root.__remixGame;
         let attempts = 0;
         let p = origSlot.apply(this, arguments);
         while (p && attempts < 64) {
-          const occ = readCoopOccupancy();
-          if (!occ[(p.x | 0) + "," + (p.y | 0)]) break;
+          const occ = readSpawnOccupancy(game, true);
+          if (!spawnCellBlocked(game, p.x, p.y, occ)) break;
           attempts++;
           p = origSlot.apply(this, arguments);
         }
         if (p) {
-          const occ = readCoopOccupancy();
-          if (occ[(p.x | 0) + "," + (p.y | 0)]) {
-            const game = (mgr && mgr.wb) || root.__mpGame || root.__remixGame;
+          const occ = readSpawnOccupancy(game, true);
+          if (spawnCellBlocked(game, p.x, p.y, occ)) {
             const scanned = findFreeSpawnCell(game, occ);
             if (scanned) {
               if (typeof root.slot_make_pos === "function") {
@@ -1011,9 +1105,8 @@
   /* -------------------------------------------------------------- tick hook */
 
   /**
-   * Tick: apply queued peer poses, restamp phantom walls before the engine
-   * moves the head, then let mod.js publish. Native wall collision handles the
-   * kill, so there is no manual friendly-death check here any more.
+   * Tick: apply queued peer poses, clear any leftover phantom wall stamps,
+   * then collide against live remote body cells (no wall-grid stamps).
    * Fruit is applied only on COLLECTABLES_DELTA (not every tick).
    */
   function installCoopTickHook() {
@@ -1022,7 +1115,7 @@
     root.__mpCoopOnTick = function (game) {
       if (!root.__mpCoopInject || !root.__mpCoopSession) return;
       try {
-        // Apply coalesced peer poses before we stamp collision for this tick
+        // Apply coalesced peer poses before collision for this tick
         if (typeof root.__mpCoopFlushPendingDeltas === "function") {
           try {
             root.__mpCoopFlushPendingDeltas();
@@ -1043,12 +1136,9 @@
           root.__mpCoopLocalDead = true;
         }
 
-        // Phantom walls: solid remote cells become native wall cells for this
-        // tick, so the engine's own head-step check kills us with the real
-        // wall death animation instead of a post-hoc die().
+        // Never leave snake cells in Ca.wa — clear legacy phantom stamps only
         stampPhantomWalls(game);
-        // Classic / no-wall-mode never consults Ca.wa, so also kill if the
-        // head is about to step onto a remote — same cell as a wall would.
+        // Kill when the local head (or next step) is on a remote body cell
         killLocalOnRemote(game);
 
         if (typeof root.__mpCoopAfterTick === "function") {
@@ -1069,12 +1159,15 @@
 
   root.CoopNative = CoopNative;
   root.__mpCoopReadOccupancy = readCoopOccupancy;
+  root.__mpCoopReadSpawnOccupancy = readSpawnOccupancy;
   root.__mpCoopFindFreeSpawn = findFreeSpawnCell;
   root.__mpCoopInstallSpawnOcc = installRemixSpawnOccupancyHooks;
   root.__mpCoopDrawRemotes = drawCoopRemotes;
   root.__mpCoopStampPhantomWalls = stampPhantomWalls;
   root.__mpCoopClearPhantomWalls = clearPhantomWalls;
   root.__mpCoopPhantomKeys = phantomKeys;
+  root.__mpCoopIsSolidWall = isSolidWallCell;
+  root.__mpCoopWallOccupancy = wallOccupancyKeys;
   root.__mpCoopDisplayColorIds = coopDisplayColorIds;
   root.__mpCoopRecolorPalette = coopRecolorPalette;
   if (typeof module !== "undefined" && module.exports) {
@@ -1082,6 +1175,9 @@
       CoopNative: CoopNative,
       coopDisplayColorIds: coopDisplayColorIds,
       coopRecolorPalette: coopRecolorPalette,
+      isSolidWallCell: isSolidWallCell,
+      findFreeSpawnCell: findFreeSpawnCell,
+      wallOccupancyKeys: wallOccupancyKeys,
     };
   }
 })(typeof window !== "undefined" ? window : globalThis);
