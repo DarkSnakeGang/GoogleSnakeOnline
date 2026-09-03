@@ -182,43 +182,48 @@ describe("versus session timekeeper", () => {
     };
     global.window = global;
     global.timeKeeper = tk;
-    // Reload scoreboard against this window/localStorage
-    const sbPath = require.resolve(path.join(root, "src/versus/scoreboard.js"));
-    delete require.cache[sbPath];
-    require(sbPath);
-    const VTK = global.VersusTimeKeeper;
-    assert.ok(VTK);
-    assert.equal(VTK.KEY, "snake_timeKeeper_versus_session");
-    VTK.install();
-    VTK.beginMatch();
-    assert.equal(VTK.isActive(), true);
-    const sessionStore = tk.getStorage();
-    assert.equal(sessionStore["25-classic-0-0-0"], undefined);
-    // Write a session PB the way TimeKeeper does
-    sessionStore["25-classic-0-0-0"] = { time: 5000, date: "now", att: 1, sum: 5000 };
-    tk.setStorage(sessionStore);
-    assert.equal(
-      JSON.parse(ls.getItem("snake_timeKeeper_versus_session"))["25-classic-0-0-0"].time,
-      5000
-    );
-    // Remix lifetime untouched
-    assert.equal(
-      JSON.parse(ls.getItem("snake_timeKeeper_remix"))["25-classic-0-0-0"].time,
-      1000
-    );
-    // Promote only if better (5000 is worse than 1000 for timed — no change)
-    assert.equal(VTK.promoteSessionToRemix(), false);
-    // Better session time promotes
-    sessionStore["25-classic-0-0-0"] = { time: 800, date: "now", att: 1, sum: 800 };
-    tk.setStorage(sessionStore);
-    assert.equal(VTK.promoteSessionToRemix(), true);
-    assert.equal(
-      JSON.parse(ls.getItem("snake_timeKeeper_remix"))["25-classic-0-0-0"].time,
-      800
-    );
-    VTK.endMode();
-    assert.equal(VTK.isActive(), false);
-    assert.equal(tk.getStorage()["25-classic-0-0-0"].time, 800);
+    try {
+      // Reload scoreboard against this window/localStorage
+      const sbPath = require.resolve(path.join(root, "src/versus/scoreboard.js"));
+      delete require.cache[sbPath];
+      require(sbPath);
+      const VTK = global.VersusTimeKeeper;
+      assert.ok(VTK);
+      assert.equal(VTK.KEY, "snake_timeKeeper_versus_session");
+      VTK.install();
+      VTK.beginMatch();
+      assert.equal(VTK.isActive(), true);
+      const sessionStore = tk.getStorage();
+      assert.equal(sessionStore["25-classic-0-0-0"], undefined);
+      // Write a session PB the way TimeKeeper does
+      sessionStore["25-classic-0-0-0"] = { time: 5000, date: "now", att: 1, sum: 5000 };
+      tk.setStorage(sessionStore);
+      assert.equal(
+        JSON.parse(ls.getItem("snake_timeKeeper_versus_session"))["25-classic-0-0-0"].time,
+        5000
+      );
+      // Remix lifetime untouched
+      assert.equal(
+        JSON.parse(ls.getItem("snake_timeKeeper_remix"))["25-classic-0-0-0"].time,
+        1000
+      );
+      // Promote only if better (5000 is worse than 1000 for timed — no change)
+      assert.equal(VTK.promoteSessionToRemix(), false);
+      // Better session time promotes
+      sessionStore["25-classic-0-0-0"] = { time: 800, date: "now", att: 1, sum: 800 };
+      tk.setStorage(sessionStore);
+      assert.equal(VTK.promoteSessionToRemix(), true);
+      assert.equal(
+        JSON.parse(ls.getItem("snake_timeKeeper_remix"))["25-classic-0-0-0"].time,
+        800
+      );
+      VTK.endMode();
+      assert.equal(VTK.isActive(), false);
+      assert.equal(tk.getStorage()["25-classic-0-0-0"].time, 800);
+    } finally {
+      delete global.timeKeeper;
+      delete global.localStorage;
+    }
   });
 });
 
@@ -232,7 +237,7 @@ describe("versus expired sync", () => {
     assert.equal(v.expired, false);
   });
 
-  it("mosaic run clock arms once and ignores mid-run timeMs jumps", () => {
+  it("mosaic run clock follows live in-game timeMs and freezes on death", () => {
     const v = new VersusState();
     const started = 1_700_000_000_000;
     v.onScorePulse({
@@ -244,6 +249,7 @@ describe("versus expired sync", () => {
     });
     assert.equal(v.runClocks.p1.startedAtMs, started);
     assert.equal(v.runClocks.p1.frozenMs, null);
+    assert.equal(v.runClocks.p1.liveMs, 0);
     v.onScorePulse({
       clientId: "p1",
       score: 5,
@@ -252,10 +258,16 @@ describe("versus expired sync", () => {
       runStartedAtMs: started,
     });
     assert.equal(v.runClocks.p1.startedAtMs, started);
+    assert.equal(v.runClocks.p1.liveMs, 45000);
     assert.equal(
-      VersusState.resolveRunClockMs(v.runClocks.p1, started + 3200, 45000),
-      3200
+      VersusState.resolveRunClockMs(v.runClocks.p1, started + 99999, 0),
+      45000
     );
+    v.onBoardDelta({
+      clientId: "p1",
+      board: { timeMs: 45200, alive: true },
+    });
+    assert.equal(v.runClocks.p1.liveMs, 45200);
     v.onScorePulse({
       clientId: "p1",
       score: 5,
@@ -268,6 +280,16 @@ describe("versus expired sync", () => {
       VersusState.resolveRunClockMs(v.runClocks.p1, started + 99999, 5100),
       5100
     );
+    // New run clears the freeze
+    v.onScorePulse({
+      clientId: "p1",
+      score: 0,
+      timeMs: 0,
+      alive: true,
+      runStartedAtMs: started + 1,
+    });
+    assert.equal(v.runClocks.p1.frozenMs, null);
+    assert.equal(v.runClocks.p1.liveMs, 0);
   });
 
   it("keeps last-match scores until resetForNewMatch", () => {
@@ -314,8 +336,8 @@ describe("versus expired sync", () => {
   });
 
   it("formats run clock for mosaic / roster", () => {
-    assert.equal(VersusState.formatRunClock(12300), "12.3s");
-    assert.equal(VersusState.formatRunClock(65000), "1:05.0");
+    assert.equal(VersusState.formatRunClock(12300), "12.30s");
+    assert.equal(VersusState.formatRunClock(65000), "1:05.00");
     assert.equal(VersusState.formatRunClock(null), "—");
   });
 
@@ -353,6 +375,43 @@ describe("versus goal leader", () => {
     assert.equal(VersusState.pickLeader(scores, "best25"), "b");
     assert.equal(VersusState.goalLabel("bestAll"), "Best All");
     assert.equal(VersusState.formatGoalBest(scores.b, "best25"), "5.00s");
+  });
+
+  it("goal unreached: highest score wins, fastest time breaks ties", () => {
+    const scores = {
+      a: { bestScore: 12, score: 12, bestScoreTimeMs: 9000 },
+      b: { bestScore: 18, score: 18, bestScoreTimeMs: 8000 },
+      c: { bestScore: 18, score: 18, bestScoreTimeMs: 5000 },
+    };
+    assert.equal(VersusState.pickLeader(scores, "best25"), "c");
+    assert.deepEqual(VersusState.rankPlayers(scores, "best25"), ["c", "b", "a"]);
+    // Score + time to it stand in for the unreached goal time
+    assert.equal(VersusState.formatGoalBest(scores.c, "best25"), "18 apples (5.00s)");
+    assert.equal(
+      VersusState.formatGoalBest({ bestScore: 4, score: 4 }, "best25"),
+      "4 apples"
+    );
+    assert.equal(VersusState.formatGoalBest({ bestScore: 0 }, "best25"), "not yet");
+    // A completion still outranks any unfinished score
+    scores.a.goalCompleted = true;
+    scores.a.bestGoalTimeMs = 30000;
+    assert.equal(VersusState.pickLeader(scores, "best25"), "a");
+    assert.deepEqual(VersusState.rankPlayers(scores, "best25"), ["a", "c", "b"]);
+  });
+
+  it("onScorePulse keeps bestScoreTimeMs from the server", () => {
+    const v = new VersusState();
+    v.onScorePulse({
+      clientId: "p1",
+      score: 18,
+      timeMs: 5000,
+      bestScore: 18,
+      bestScoreTimeMs: 5000,
+      versusGoal: "best25",
+      alive: false,
+    });
+    assert.equal(v.scores.p1.bestScoreTimeMs, 5000);
+    assert.equal(v.leaderClientId, "p1");
   });
 
   it("onExpired sets winnerClientId", () => {
@@ -547,6 +606,13 @@ describe("coop native inject bridge", () => {
     assert.ok(game.oa.ka.length >= 1, "spectator ka stays non-empty");
     assert.equal(game.oa.ka[0].x, -8);
     global.__mpCoopSpectator = false;
+
+    // Ticks stamp their time so the app can spot an engine that never ticks
+    assert.equal(global.__mpCoopTicksRunning(), true);
+    global.__mpCoopLastTickAt = Date.now() - 5000;
+    assert.equal(global.__mpCoopTicksRunning(), false, "stale tick reads idle");
+    global.__mpCoopLastTickAt = 0;
+    assert.equal(global.__mpCoopTicksRunning(), false, "never ticked reads idle");
   });
 
   it("drawCoopRemotes paints finite remotes after local render", () => {
@@ -1129,6 +1195,9 @@ describe("versus instant death reset", () => {
       getElementsByClassName: function () {
         return [];
       },
+      getElementById: function () {
+        return null;
+      },
       addEventListener: function () {},
     };
     [
@@ -1210,6 +1279,7 @@ describe("versus instant death reset", () => {
       };
       return Promise.resolve();
     };
+    const prevGetEl = global.document.getElementById;
     global.document.getElementById = function () {
       return null;
     };
@@ -1260,12 +1330,25 @@ describe("versus instant death reset", () => {
       assert.ok(deathShown >= 1, "death/settings screen shown");
       assert.equal(menusLocked, false, "admin match menus unlocked");
       assert.equal(app.canAutoRestartVersus(), false);
+      // Flush deferred releaseAdminMenusAfterMatch (setTimeout 0) while mocks are live
+      await new Promise(function (r) {
+        setTimeout(r, 0);
+      });
     } finally {
       Client.prototype.connect = origConnect;
       Gsm.showDeathScreen = prevShow;
       Gsm.setNativeMenusLocked = prevLocked;
       Gsm.setPlayButtonLocked = prevPlayLock;
       Gsm.unlockPersonalMenus = prevUnlock;
+      // Always leave a safe stub — a late deferred release must not throw
+      if (global.document) {
+        global.document.getElementById =
+          typeof prevGetEl === "function"
+            ? prevGetEl
+            : function () {
+                return null;
+              };
+      }
       delete global.__mpAttemptExpired;
     }
   });
@@ -1336,6 +1419,55 @@ describe("versus instant death reset", () => {
     assert.equal(app._bodyMatchesSpawnOy(), true);
     app._reassertCoopSpawnIfNeeded();
     assert.equal(app._coopSpawnApplied, true);
+  });
+
+  it("trySeatCoopOnce seats once when live, skips without slot", () => {
+    const MultiplayerApp = loadApp();
+    const Gsm = global.MultiplayerGsm;
+    const game = {
+      oa: {
+        ka: [
+          { x: 8, y: 7 },
+          { x: 7, y: 7 },
+          { x: 6, y: 7 },
+        ],
+      },
+      wa: { oa: { oa: { width: 17, height: 15 } } },
+    };
+    global.__remixGame = game;
+    global.__mpGame = game;
+    const app = new MultiplayerApp();
+    app.client = {
+      connected: true,
+      clientId: "me",
+      roster: { mode: "coop", sessionActive: true },
+      snakeDelta: function () {},
+      me: function () {
+        return { clientId: "me" };
+      },
+    };
+    app._coopSessionActive = true;
+    app._coopSpawnApplied = false;
+    // No server seat yet
+    assert.equal(app.trySeatCoopOnce(false), false);
+    assert.equal(app._coopSpawnApplied, false);
+    app._coopSlots = [{ clientId: "me", slot: 0, oy: 2 }];
+    // Stub live run
+    const origLive = Gsm.isNativeRunLive;
+    Gsm.isNativeRunLive = function () {
+      return true;
+    };
+    try {
+      assert.equal(app.trySeatCoopOnce(false), true);
+      assert.equal(app._coopSpawnApplied, true);
+      assert.equal(game.oa.ka[0].y, 9);
+      // Second call is a no-op
+      game.oa.ka[0].y = 7;
+      assert.equal(app.trySeatCoopOnce(false), true);
+      assert.equal(game.oa.ka[0].y, 7, "already seated — do not rewrite");
+    } finally {
+      Gsm.isNativeRunLive = origLive;
+    }
   });
 
   it("VisibilityFix.install aliases fix (remixOrganizeSettings)", () => {
@@ -1424,10 +1556,13 @@ describe("versus instant death reset", () => {
       assert.equal(applied.length, 1);
       assert.equal(applied[0].clientId, "other");
 
-      // Live session: coalesce many deltas into one apply on flush
+      // Live session with a ticking engine: coalesce into one apply on flush
       applied.length = 0;
       app._coopSessionActive = true;
       app._pendingCoopSnakeDeltas = Object.create(null);
+      global.__mpCoopTicksRunning = function () {
+        return true;
+      };
       global.__mpCoopFlushPendingDeltas = function () {
         const pending = app._pendingCoopSnakeDeltas;
         if (!pending || !app.coopNative) return;
@@ -1448,9 +1583,30 @@ describe("versus instant death reset", () => {
       global.__mpCoopFlushPendingDeltas();
       assert.equal(applied.length, 1);
       assert.equal(applied[0].body[0].x, 4, "latest pose wins");
+
+      // Idle engine (spawn not started / spectator): apply on arrival
+      applied.length = 0;
+      global.__mpCoopTicksRunning = function () {
+        return false;
+      };
+      app.client.emit(Protocol.TYPES.SNAKE_DELTA, {
+        clientId: "other",
+        body: [{ x: 5, y: 5 }],
+      });
+      assert.equal(applied.length, 1, "idle engine must not queue");
+      assert.equal(applied[0].body[0].x, 5);
+
+      // Anything queued before the ticks stopped still gets swept up
+      applied.length = 0;
+      app._pendingCoopSnakeDeltas = { other: { clientId: "other", body: [{ x: 6, y: 6 }] } };
+      assert.equal(app.coopIdleSyncStep(), true);
+      assert.equal(applied.length, 1);
+      assert.equal(applied[0].body[0].x, 6);
+      assert.equal(app.coopIdleSyncStep(), false, "nothing pending → no work");
     } finally {
       Client.prototype.connect = origConnect;
       delete global.__mpCoopFlushPendingDeltas;
+      delete global.__mpCoopTicksRunning;
     }
   });
 
@@ -1695,6 +1851,99 @@ describe("coop body collision", () => {
     assert.notEqual(free.x + "," + free.y, "1,0", "did not land on wall");
     assert.equal(native.isSolidWallCell(game, 1, 0), true);
     assert.equal(native.isSolidWallCell(game, 0, 0), false);
+  });
+
+  it("wallSpawnRejected rejects cells near remote heads and corners", () => {
+    const gsmPath = require.resolve(path.join(root, "src/hooks/gsm.js"));
+    delete require.cache[gsmPath];
+    require(path.join(root, "src/hooks/gsm.js"));
+    loadNative();
+    global.__mpCoopSession = true;
+    global.__mpCoopInject = true;
+    global.__mpCoopRemotes = {
+      peer: { alive: true, body: [{ x: 5, y: 5 }] },
+    };
+    const game = {
+      Ca: { wa: Array.from({ length: 15 }, () => Array(17).fill(0)) },
+      oa: { ka: [{ x: 1, y: 1 }], oa: { width: 17, height: 15 } },
+      wa: { ka: [], oa: { oa: { width: 17, height: 15 } } },
+    };
+    assert.equal(typeof global.__mpCoopWallSpawnRejected, "function");
+    assert.equal(global.__mpCoopWallSpawnRejected(game, 5, 5), true);
+    assert.equal(global.__mpCoopWallSpawnRejected(game, 5, 7), true);
+    assert.equal(global.__mpCoopWallSpawnRejected(game, 0, 0), true);
+    assert.equal(global.__mpCoopWallSpawnRejected(game, 8, 8), false);
+    delete global.__mpCoopRemotes;
+    delete global.__mpCoopSession;
+    delete global.__mpCoopInject;
+  });
+});
+
+describe("coop player seat", () => {
+  function loadApp() {
+    global.window = global;
+    global.document = global.document || {
+      querySelector: function () {
+        return null;
+      },
+      querySelectorAll: function () {
+        return [];
+      },
+      getElementsByClassName: function () {
+        return [];
+      },
+      getElementById: function () {
+        return null;
+      },
+      addEventListener: function () {},
+    };
+    [
+      "shared/colors.js",
+      "shared/protocol.js",
+      "runtime/bridge.js",
+      "session/ready.js",
+      "versus/scoreboard.js",
+      "coop/state.js",
+      "coop/native.js",
+      "hooks/gsm.js",
+      "hooks/visibility.js",
+      "net/client.js",
+      "ui/settingsTab.js",
+      "versus/focus.js",
+      "versus/mosaic.js",
+      "mod.js",
+    ].forEach(function (rel) {
+      const p = require.resolve(path.join(root, "src", rel));
+      delete require.cache[p];
+      require(p);
+    });
+    return require(path.join(root, "src/mod.js")).MultiplayerApp;
+  }
+
+  it("does not claim seat 0 without a server slot", () => {
+    const MultiplayerApp = loadApp();
+    const app = new MultiplayerApp();
+    app.client = { clientId: "me", roster: { mode: "coop", clients: [] } };
+    app._coopSlots = [];
+    assert.equal(app._myCoopSlotIndex(), null);
+    assert.equal(app._myCoopSpawnOy(), null);
+  });
+
+  it("reads player number from roster coopSlot", () => {
+    const MultiplayerApp = loadApp();
+    const app = new MultiplayerApp();
+    app.client = {
+      clientId: "b",
+      roster: {
+        mode: "coop",
+        clients: [
+          { clientId: "a", role: "player", coopSlot: 0, playerNumber: 1 },
+          { clientId: "b", role: "player", coopSlot: 1, playerNumber: 2 },
+        ],
+      },
+    };
+    app._coopSlots = [];
+    assert.equal(app._myCoopSlotIndex(), 1);
   });
 });
 

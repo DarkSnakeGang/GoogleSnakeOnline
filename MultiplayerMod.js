@@ -1,6 +1,6 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-03T18:32:32.047Z */
+/* Built: 2026-09-03T22:14:15.380Z */
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -31141,10 +31141,50 @@ window.RemixMod.runCodeAfter = function () {
     return m.threshold != null ? m.threshold : null;
   };
 
+  function scoreOf(sc) {
+    if (!sc) return 0;
+    if (sc.bestScore != null) return Number(sc.bestScore) || 0;
+    return Number(sc.score) || 0;
+  }
+
+  /** Time at which a player reached their best score (null when unknown). */
+  function bestScoreTimeOf(sc) {
+    const t = sc && sc.bestScoreTimeMs;
+    if (t == null || !Number.isFinite(Number(t)) || Number(t) <= 0) return null;
+    return Number(t);
+  }
+
+  /** Highest score first, then the player who got there fastest. */
+  function compareScoreThenFastest(sa, sb) {
+    const diff = scoreOf(sb) - scoreOf(sa);
+    if (diff !== 0) return diff;
+    const ta = bestScoreTimeOf(sa);
+    const tb = bestScoreTimeOf(sb);
+    if (ta == null && tb == null) return 0;
+    if (ta == null) return 1;
+    if (tb == null) return -1;
+    return ta - tb;
+  }
+
+  /** Best scorer (fastest on ties) — the fallback when nobody hits a timed goal. */
+  function pickTopScorer(map, ids) {
+    let bestId = null;
+    ids.forEach(function (id) {
+      const sc = map[id];
+      if (!sc) return;
+      if (!scoreOf(sc) && !(sc.score > 0)) return;
+      if (bestId == null || compareScoreThenFastest(sc, map[bestId]) < 0) {
+        bestId = id;
+      }
+    });
+    return bestId;
+  }
+
   /**
    * Pick leader/winner from local score map for the active goal.
    * Score → highest bestScore (tie: longer bestTimeMs).
-   * Timed → fastest bestGoalTimeMs among completions.
+   * Timed → fastest bestGoalTimeMs among completions; if nobody completed the
+   * goal, the highest score wins, with the fastest time to it breaking ties.
    */
   VersusState.pickLeader = function (scores, goal) {
     const map = scores || {};
@@ -31165,7 +31205,7 @@ window.RemixMod.runCodeAfter = function () {
           bestId = id;
         }
       });
-      return bestId;
+      return bestId || pickTopScorer(map, ids);
     }
 
     let bestId = null;
@@ -31201,7 +31241,12 @@ window.RemixMod.runCodeAfter = function () {
     const g = VersusState.normalizeGoal(goal);
     if (VersusState.isTimedGoal(g)) {
       if (sc.bestGoalTimeMs == null) {
-        return sc.goalCompleted ? "done" : "not yet";
+        if (sc.goalCompleted) return "done";
+        // Goal not reached — show the score that counts instead, plus how fast
+        const s = scoreOf(sc);
+        if (!s) return "not yet";
+        const t = bestScoreTimeOf(sc);
+        return s + " apples" + (t != null ? " (" + formatMs(t) + ")" : "");
       }
       return formatMs(sc.bestGoalTimeMs);
     }
@@ -31212,7 +31257,8 @@ window.RemixMod.runCodeAfter = function () {
 
   /**
    * Rank clientIds by active goal (best first). Timed: completed by fastest
-   * bestGoalTimeMs; Score: highest bestScore (tie → longer bestTimeMs).
+   * bestGoalTimeMs, then everyone else by highest score / fastest time to it;
+   * Score: highest bestScore (tie → longer bestTimeMs).
    */
   VersusState.rankPlayers = function (scores, goal) {
     const map = scores || {};
@@ -31229,9 +31275,7 @@ window.RemixMod.runCodeAfter = function () {
         if (ca && cb) {
           return Number(sa.bestGoalTimeMs) - Number(sb.bestGoalTimeMs);
         }
-        const aScore = sa.bestScore != null ? Number(sa.bestScore) : Number(sa.score) || 0;
-        const bScore = sb.bestScore != null ? Number(sb.bestScore) : Number(sb.score) || 0;
-        return bScore - aScore;
+        return compareScoreThenFastest(sa, sb);
       }
       const aScore = sa.bestScore != null ? Number(sa.bestScore) : Number(sa.score) || 0;
       const bScore = sb.bestScore != null ? Number(sb.bestScore) : Number(sb.score) || 0;
@@ -31277,6 +31321,7 @@ window.RemixMod.runCodeAfter = function () {
       alive: payload.alive,
       bestScore: payload.bestScore,
       bestTimeMs: payload.bestTimeMs,
+      bestScoreTimeMs: payload.bestScoreTimeMs,
       bestGoalTimeMs: payload.bestGoalTimeMs,
       goalCompleted: !!payload.goalCompleted,
     };
@@ -31289,8 +31334,9 @@ window.RemixMod.runCodeAfter = function () {
   };
 
   /**
-   * Mosaic timers arm once at run start (runStartedAtMs) and tick locally.
-   * Apple / periodic timeMs pulses must not jump the live clock.
+   * Mosaic/Focus run clocks track each player's in-game timer (ticks×Fb).
+   * SCORE_PULSE / BOARD_DELTA re-anchor liveMs; labels show that value so the
+   * clock advances on the same cadence as the on-screen run timer.
    */
   VersusState.prototype._applyRunClockPulse = function (payload) {
     if (!payload || !payload.clientId) return;
@@ -31299,8 +31345,11 @@ window.RemixMod.runCodeAfter = function () {
     const prev = this.runClocks[id] || {};
     const next = {
       startedAtMs: prev.startedAtMs != null ? prev.startedAtMs : null,
+      liveMs: prev.liveMs != null ? prev.liveMs : null,
+      syncedAtMs: prev.syncedAtMs != null ? prev.syncedAtMs : null,
       frozenMs: prev.frozenMs != null ? prev.frozenMs : null,
     };
+    const now = Date.now();
     if (
       payload.runStartedAtMs != null &&
       Number.isFinite(Number(payload.runStartedAtMs))
@@ -31309,26 +31358,37 @@ window.RemixMod.runCodeAfter = function () {
       if (next.startedAtMs !== started) {
         next.startedAtMs = started;
         next.frozenMs = null;
+        next.liveMs = 0;
+        next.syncedAtMs = now;
       }
     }
+    const timeOk =
+      payload.timeMs != null && Number.isFinite(Number(payload.timeMs));
+    const timeMs = timeOk ? Math.max(0, Number(payload.timeMs)) : null;
     if (payload.alive === false) {
-      if (
-        payload.timeMs != null &&
-        Number.isFinite(Number(payload.timeMs))
-      ) {
-        next.frozenMs = Number(payload.timeMs);
-      } else if (next.startedAtMs != null && next.frozenMs == null) {
-        next.frozenMs = Math.max(0, Date.now() - next.startedAtMs);
+      if (timeMs != null) next.frozenMs = timeMs;
+      else if (next.frozenMs == null) {
+        next.frozenMs = VersusState.resolveRunClockMs(next, now, 0) || 0;
+      }
+    } else {
+      // Live again — never keep a death freeze across a new / continuing run
+      next.frozenMs = null;
+      if (timeMs != null) {
+        next.liveMs = timeMs;
+        next.syncedAtMs = now;
       }
     }
     this.runClocks[id] = next;
   };
 
-  /** Elapsed ms for mosaic labels: local tick from start, or frozen on death. */
+  /** Elapsed ms for mosaic labels: frozen death time, or last live in-game sync. */
   VersusState.resolveRunClockMs = function (clock, nowMs, fallbackMs) {
     if (clock) {
       if (clock.frozenMs != null && Number.isFinite(Number(clock.frozenMs))) {
         return Math.max(0, Number(clock.frozenMs));
+      }
+      if (clock.liveMs != null && Number.isFinite(Number(clock.liveMs))) {
+        return Math.max(0, Number(clock.liveMs));
       }
       if (
         clock.startedAtMs != null &&
@@ -31425,7 +31485,7 @@ window.RemixMod.runCodeAfter = function () {
     this.winnerClientId = null;
   };
 
-  /** Format a player's run timer (SpeedInfo-style). */
+  /** Format a player's run timer (SpeedInfo-style hundredths). */
   VersusState.formatRunClock = function (ms) {
     if (ms == null || !Number.isFinite(Number(ms))) return "—";
     const total = Math.max(0, Math.floor(Number(ms)));
@@ -31433,11 +31493,12 @@ window.RemixMod.runCodeAfter = function () {
     if (total > 24 * 60 * 60 * 1000) return "—";
     const m = Math.floor(total / 60000);
     const s = Math.floor((total % 60000) / 1000);
-    const tenths = Math.floor((total % 1000) / 100);
+    const hundredths = Math.floor((total % 1000) / 10);
+    const frac = String(hundredths).padStart(2, "0");
     if (m > 0) {
-      return m + ":" + String(s).padStart(2, "0") + "." + tenths;
+      return m + ":" + String(s).padStart(2, "0") + "." + frac;
     }
-    return s + "." + tenths + "s";
+    return s + "." + frac + "s";
   };
 
   /** Format remaining attempt time as MM:SS. */
@@ -31457,6 +31518,15 @@ window.RemixMod.runCodeAfter = function () {
     const id = payload.clientId;
     const board = payload.board || payload;
     if (id) this.boards[id] = board;
+    // Board scrapes carry live ticks×Fb — keep mosaic clocks aligned every tick
+    if (id && board && typeof this._applyRunClockPulse === "function") {
+      this._applyRunClockPulse({
+        clientId: id,
+        timeMs: board.timeMs,
+        alive: board.alive !== false,
+        runStartedAtMs: board.runStartedAtMs,
+      });
+    }
   };
 
   VersusState.prototype.onBoardSnapshot = function (payload) {
@@ -31740,7 +31810,6 @@ window.RemixMod.runCodeAfter = function () {
     this.collectables = null;
     this.sessionActive = false;
     this._seedStickyUntil = 0;
-    clearPhantomWalls();
     invalidateLightMask();
     this.syncBridge();
   };
@@ -31789,11 +31858,17 @@ window.RemixMod.runCodeAfter = function () {
         "score",
         "otherDim",
         "peaceful",
+        "body2",
+        "headLight",
+        "headLight2",
+        "poisoned",
+        "slotActive",
       ].forEach(function (k) {
         if (payload[k] != null) keep[k] = payload[k];
       });
       this.remotes[payload.clientId] = keep;
       this.syncBridge();
+      maybeApplyPeerSlot(payload);
       return;
     }
     const next = Object.assign(Object.create(null), prev || null, payload);
@@ -31858,7 +31933,24 @@ window.RemixMod.runCodeAfter = function () {
     }
     this.remotes[payload.clientId] = next;
     this.syncBridge();
+    maybeApplyPeerSlot(payload);
   };
+
+  /** Apply a peer's Slot Machine roll without ping-ponging our own eat. */
+  function maybeApplyPeerSlot(payload) {
+    if (!payload || payload.slotActive == null) return;
+    if (root.__mpCoopSkipFruitReapply) return;
+    if (typeof root.setSlotActive !== "function") return;
+    const next = Number(payload.slotActive) | 0;
+    if (!Number.isFinite(next)) return;
+    if ((root.__slotActive | 0) === next) return;
+    if (root.__mpCoopLastSlotActive === next) return;
+    try {
+      const game = root.__mpGame || root.__remixGame;
+      root.setSlotActive(next, game);
+      root.__mpCoopLastSlotActive = next;
+    } catch (e) { /* ignore */ }
+  }
 
   CoopNative.prototype.applyCollectables = function (payload) {
     this.collectables = payload;
@@ -31909,6 +32001,15 @@ window.RemixMod.runCodeAfter = function () {
 
   /** Mode key from Remix ModeRegistry (e.g. "peaceful", "wall+cheese"). */
   function coopModeKey() {
+    try {
+      const Gsm = root.MultiplayerGsm;
+      if (Gsm && typeof Gsm.effectiveModeKey === "function") {
+        return String(Gsm.effectiveModeKey() || "");
+      }
+      if (Gsm && typeof Gsm.scrapeModeKey === "function") {
+        return String(Gsm.scrapeModeKey() || "");
+      }
+    } catch (eGsm) { /* ignore */ }
     try {
       if (
         root.ModeRegistry &&
@@ -31992,13 +32093,53 @@ window.RemixMod.runCodeAfter = function () {
     return null;
   }
 
+  function boardWraps() {
+    const key = coopModeKey();
+    return modeKeyHas(key, "borderless") || modeKeyHas(key, "peaceful");
+  }
+
+  function wrapCell(x, y, size) {
+    let xx = x | 0;
+    let yy = y | 0;
+    if (!size || !(size.width > 0) || !(size.height > 0)) {
+      return { x: xx, y: yy };
+    }
+    const w = size.width | 0;
+    const h = size.height | 0;
+    xx = ((xx % w) + w) % w;
+    yy = ((yy % h) + h) % h;
+    return { x: xx, y: yy };
+  }
+
   function predictedHead(game) {
     const snake = game && game.oa;
     const head = snake && snake.ka && snake.ka[0];
     if (!head) return null;
     const d = dirDelta(snake.direction || snake.dir);
     if (!d) return null;
-    return { x: (head.x | 0) + d.x, y: (head.y | 0) + d.y };
+    let x = (head.x | 0) + d.x;
+    let y = (head.y | 0) + d.y;
+    if (boardWraps()) {
+      const size = boardSizeFromGame(game);
+      const w = wrapCell(x, y, size);
+      x = w.x;
+      y = w.y;
+    }
+    return { x: x, y: y };
+  }
+
+  function remoteBodyCells(remote) {
+    const cells = [];
+    const body = (remote && remote.body) || [];
+    for (let i = 0; i < body.length; i++) {
+      if (body[i]) cells.push(body[i]);
+    }
+    // Yin Yang companion occupies cells for spawn; hits stay friendly
+    const body2 = (remote && remote.body2) || [];
+    for (let j = 0; j < body2.length; j++) {
+      if (body2[j]) cells.push(body2[j]);
+    }
+    return cells;
   }
 
   function remoteOccupies(x, y) {
@@ -32006,16 +32147,22 @@ window.RemixMod.runCodeAfter = function () {
     const hostDim = localOtherDim(root.__mpGame || root.__remixGame);
     const remotes = root.__mpCoopRemotes || {};
     const myId = root.__mpCoopMyId;
+    const wraps = boardWraps();
+    const size = wraps
+      ? boardSizeFromGame(root.__mpGame || root.__remixGame)
+      : null;
+    const probe = wraps ? wrapCell(x, y, size) : { x: x | 0, y: y | 0 };
     const ids = Object.keys(remotes);
     for (let i = 0; i < ids.length; i++) {
       if (myId && ids[i] === myId) continue;
-      const body = (remotes[ids[i]] && remotes[ids[i]].body) || [];
-      for (let j = 0; j < body.length; j++) {
-        const p = body[j];
+      const cells = remoteBodyCells(remotes[ids[i]]);
+      for (let j = 0; j < cells.length; j++) {
+        const p = cells[j];
+        if (!p || p.x == null || p.y == null) continue;
+        const cell = wraps ? wrapCell(p.x, p.y, size) : { x: p.x | 0, y: p.y | 0 };
         if (
-          p &&
-          (p.x | 0) === (x | 0) &&
-          (p.y | 0) === (y | 0) &&
+          cell.x === probe.x &&
+          cell.y === probe.y &&
           remoteCellBlocks(p, hostDim)
         ) {
           return true;
@@ -32082,11 +32229,24 @@ window.RemixMod.runCodeAfter = function () {
     if (coopSkipFriendlyHits()) return false;
     const hostDim = localOtherDim(root.__mpGame || root.__remixGame);
     const remotes = this.remoteList(excludeId);
+    const wraps = boardWraps();
+    const size = wraps
+      ? boardSizeFromGame(root.__mpGame || root.__remixGame)
+      : null;
+    const probe = wraps
+      ? wrapCell(head.x, head.y, size)
+      : { x: head.x | 0, y: head.y | 0 };
     for (let i = 0; i < remotes.length; i++) {
-      const body = (remotes[i] && remotes[i].body) || [];
-      for (let j = 0; j < body.length; j++) {
-        const p = body[j];
-        if (p && p.x === head.x && p.y === head.y && remoteCellBlocks(p, hostDim)) {
+      const cells = remoteBodyCells(remotes[i]);
+      for (let j = 0; j < cells.length; j++) {
+        const p = cells[j];
+        if (!p || p.x == null || p.y == null) continue;
+        const cell = wraps ? wrapCell(p.x, p.y, size) : { x: p.x | 0, y: p.y | 0 };
+        if (
+          cell.x === probe.x &&
+          cell.y === probe.y &&
+          remoteCellBlocks(p, hostDim)
+        ) {
           return true;
         }
       }
@@ -32113,12 +32273,17 @@ window.RemixMod.runCodeAfter = function () {
       });
     }
     Object.keys(this.remotes).forEach(function (id) {
-      addBody(this.remotes[id] && this.remotes[id].body);
+      const r = this.remotes[id];
+      addBody(r && r.body);
+      addBody(r && r.body2);
     }, this);
     if (includeLocal) {
       try {
         const g = root.__mpGame || root.__remixGame;
         if (g && g.oa && g.oa.ka) addBody(g.oa.ka);
+        // Local Yin Yang companion
+        if (g && g.Ra && g.Ra.ka) addBody(g.Ra.ka);
+        else if (g && g.oa && g.oa.Ra && g.oa.Ra.ka) addBody(g.oa.Ra.ka);
       } catch (e) { /* ignore */ }
     }
     return keys;
@@ -32144,12 +32309,15 @@ window.RemixMod.runCodeAfter = function () {
     const cheese = coopIsCheeseMode();
     const remotes = root.__mpCoopRemotes || {};
     Object.keys(remotes).forEach(function (id) {
-      const body = remotes[id] && remotes[id].body;
-      (body || []).forEach(function (p) {
-        if (!p || p.x == null || p.y == null) return;
-        if (cheese && isCheeseLightTile(p.x, p.y)) return;
-        keys[(p.x | 0) + "," + (p.y | 0)] = true;
-      });
+      const r = remotes[id];
+      const bodies = [(r && r.body) || [], (r && r.body2) || []];
+      for (let bi = 0; bi < bodies.length; bi++) {
+        (bodies[bi] || []).forEach(function (p) {
+          if (!p || p.x == null || p.y == null) return;
+          if (cheese && isCheeseLightTile(p.x, p.y)) return;
+          keys[(p.x | 0) + "," + (p.y | 0)] = true;
+        });
+      }
     });
     return keys;
   }
@@ -32240,15 +32408,6 @@ window.RemixMod.runCodeAfter = function () {
     const g = game || root.__mpGame || root.__remixGame;
     const wa = g && g.Ca && g.Ca.wa;
     return Array.isArray(wa) && wa.length ? wa : null;
-  }
-
-  /** No-op stubs — older builds stamped snakes into Ca.wa; we never do that. */
-  function clearPhantomWalls() {}
-  function stampPhantomWalls() {
-    return 0;
-  }
-  function phantomKeys() {
-    return [];
   }
 
   /* ------------------------------------------------------------------ colors */
@@ -32399,12 +32558,46 @@ window.RemixMod.runCodeAfter = function () {
     if (_lightMask && now - _lightMaskAt < 40) return _lightMask;
     const Gsm = root.MultiplayerGsm;
     if (!Gsm || typeof Gsm.collectMosaicLights !== "function") return null;
+    const heads = [];
+    const remotes = root.__mpCoopRemotes || {};
+    const myId = root.__mpCoopMyId;
+    Object.keys(remotes).forEach(function (id) {
+      if (myId && id === myId) return;
+      const r = remotes[id];
+      if (!r || r.alive === false) return;
+      const body = r.body || [];
+      if (body[0]) {
+        heads.push({
+          x: body[0].x,
+          y: body[0].y,
+          light: r.headLight != null ? r.headLight : 2,
+        });
+      }
+      const body2 = r.body2 || [];
+      if (body2[0]) {
+        heads.push({
+          x: body2[0].x,
+          y: body2[0].y,
+          light: r.headLight2 != null ? r.headLight2 : 2,
+        });
+      }
+    });
     let mask = null;
     try {
       mask = Gsm.collectMosaicLights({
         modeKey: "light",
         body: (game && game.oa && game.oa.ka) || [],
+        body2: (function () {
+          try {
+            if (game && game.Ra && game.Ra.ka) return game.Ra.ka;
+            if (game && game.oa && game.oa.Ra && game.oa.Ra.ka) {
+              return game.oa.Ra.ka;
+            }
+          } catch (e) { /* ignore */ }
+          return [];
+        })(),
         apples: (game && game.wa && game.wa.ka) || [],
+        heads: heads,
       });
     } catch (e) {
       mask = null;
@@ -32415,6 +32608,79 @@ window.RemixMod.runCodeAfter = function () {
   }
 
   let _drawWarnAt = 0;
+
+  /**
+   * Native fog only lights the local head. Clip to each remote light disk and
+   * repaint shared apples/walls so teammates actually reveal the board.
+   */
+  function revealRemoteLightDisks(ctx, game, tile, size, lights) {
+    if (!lights || !lights.length || !(tile > 0)) return;
+    const Gsm = root.MultiplayerGsm;
+    if (!Gsm) return;
+    const remotes = root.__mpCoopRemotes || {};
+    const myId = root.__mpCoopMyId;
+    const cols = root.__mpCoopCollectables || {};
+    const board = {
+      modeKey: "light",
+      width: size.width,
+      height: size.height,
+      apples: cols.apples || (game && game.wa && game.wa.ka) || [],
+      walls: cols.walls || [],
+      keys: cols.keys,
+      boxes: cols.boxes,
+      goals: cols.goals,
+      mines: cols.mines,
+      statues: cols.statues,
+      bridges: cols.bridges,
+      gates: cols.gates,
+      arrows: cols.arrows,
+    };
+    const theme = null;
+    Object.keys(remotes).forEach(function (id) {
+      if (myId && id === myId) return;
+      const r = remotes[id];
+      if (!r || r.alive === false) return;
+      const heads = [];
+      if (r.body && r.body[0]) {
+        heads.push({
+          x: r.body[0].x,
+          y: r.body[0].y,
+          light: r.headLight != null ? Number(r.headLight) : 2,
+        });
+      }
+      if (r.body2 && r.body2[0]) {
+        heads.push({
+          x: r.body2[0].x,
+          y: r.body2[0].y,
+          light: r.headLight2 != null ? Number(r.headLight2) : 2,
+        });
+      }
+      for (let i = 0; i < heads.length; i++) {
+        const h = heads[i];
+        const rTiles = Math.max(2, Number(h.light) || 2);
+        const cx = (Number(h.x) + 0.5) * tile;
+        const cy = (Number(h.y) + 0.5) * tile;
+        const rad = rTiles * tile;
+        ctx.save();
+        try {
+          ctx.beginPath();
+          ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+          ctx.clip();
+          if (typeof Gsm.drawBoardWalls === "function") {
+            Gsm.drawBoardWalls(ctx, board, 0, 0, tile, theme, lights);
+          }
+          if (typeof Gsm.drawBoardModeEntities === "function") {
+            Gsm.drawBoardModeEntities(ctx, board, 0, 0, tile, theme, lights);
+          }
+          if (typeof Gsm.drawBoardApples === "function") {
+            Gsm.drawBoardApples(ctx, board, 0, 0, tile, theme, lights);
+          }
+        } finally {
+          ctx.restore();
+        }
+      }
+    });
+  }
 
   /**
    * Draw every remote co-op snake into the layer the local snake was just
@@ -32451,6 +32717,11 @@ window.RemixMod.runCodeAfter = function () {
       wrapWidth: wraps ? size.width : 0,
       wrapHeight: wraps ? size.height : 0,
     };
+
+    // Reveal board tiles inside remote light disks (native fog only knows local head)
+    try {
+      revealRemoteLightDisks(ctx, game, tile, size, opts.lights);
+    } catch (eRev) { /* ignore */ }
 
     let drawn = 0;
     ctx.save();
@@ -32493,9 +32764,13 @@ window.RemixMod.runCodeAfter = function () {
             return out;
           });
         }
-        // A corpse reads as a faded snake, matching the mosaic corpse style.
+        // A corpse / poisoned snake reads faded / grey, matching the mosaic.
         const dead = r.alive === false;
+        const poisoned = !!r.poisoned;
         ctx.globalAlpha = dead ? 0.55 : 1;
+        const colorInfo = poisoned
+          ? { primary: "#eceff1", secondary: "#90a4ae", set: null }
+          : remoteColorInfo(r, colorsById[id]);
         try {
           Gsm.drawWallSolverStyleSnake(
             ctx,
@@ -32503,10 +32778,47 @@ window.RemixMod.runCodeAfter = function () {
             0,
             0,
             tile,
-            remoteColorInfo(r, colorsById[id]),
+            colorInfo,
             r.dir,
             opts
           );
+          // Yin Yang companion
+          let body2 = r.body2;
+          if (bodyIsRenderable(body2)) {
+            if (size.width > 0 && size.height > 0) {
+              const inB = body2.every(function (p) {
+                return (
+                  p &&
+                  (p.x | 0) >= 0 &&
+                  (p.y | 0) >= 0 &&
+                  (p.x | 0) < size.width &&
+                  (p.y | 0) < size.height
+                );
+              });
+              if (!inB) body2 = null;
+            }
+          } else {
+            body2 = null;
+          }
+          if (body2) {
+            let companionColor = poisoned
+              ? { primary: "#eceff1", secondary: "#90a4ae", set: null }
+              : { primary: "#eceff1", secondary: "#90a4ae", set: null };
+            opts.motion =
+              typeof Gsm.snakeMotion === "function"
+                ? Gsm.snakeMotion(r, "coop-body2", body2)
+                : null;
+            Gsm.drawWallSolverStyleSnake(
+              ctx,
+              body2,
+              0,
+              0,
+              tile,
+              companionColor,
+              r.dir,
+              opts
+            );
+          }
           drawn++;
         } catch (e) {
           const t = Date.now();
@@ -32653,34 +32965,124 @@ window.RemixMod.runCodeAfter = function () {
   }
 
   /**
-   * Wrap game.Tb / game.Rb so freePos never lands on live/dead co-op snakes
-   * (including the local body) or solid wall cells.
+   * Wrap game freePos helpers so fruit never lands on co-op snakes / walls,
+   * and Wall-mode picks (arg === 5) obey shared-board wall spawn rules.
    */
   function wrapFreePos(game) {
     if (!game || game.__mpCoopFreePosWrapped) return;
     game.__mpCoopFreePosWrapped = true;
-    ["Tb", "Rb"].forEach(function (name) {
+    ["Tb", "Rb", "Sb", "Vb"].forEach(function (name) {
       const orig = game[name];
       if (typeof orig !== "function") return;
       game[name] = function () {
+        const wallPick = arguments.length >= 2 && Number(arguments[1]) === 5;
         let attempts = 0;
         let pos = orig.apply(this, arguments);
         while (pos && attempts < 64) {
-          const occ = readSpawnOccupancy(game || this, true);
-          if (!spawnCellBlocked(game || this, pos.x, pos.y, occ)) break;
+          if (wallPick) {
+            if (!wallSpawnRejected(game || this, pos.x, pos.y)) break;
+          } else {
+            const occ = readSpawnOccupancy(game || this, true);
+            if (!spawnCellBlocked(game || this, pos.x, pos.y, occ)) break;
+          }
           attempts++;
           pos = orig.apply(this, arguments);
         }
         if (pos) {
+          if (wallPick) {
+            if (wallSpawnRejected(game || this, pos.x, pos.y)) {
+              // Native Wall mode: skip the wall — never invent an illegal cell
+              return null;
+            }
+            return pos;
+          }
           const occ = readSpawnOccupancy(game || this, true);
           if (spawnCellBlocked(game || this, pos.x, pos.y, occ)) {
             const scanned = findFreeSpawnCell(game || this, occ);
             if (scanned) return scanned;
+            // Board full for fruit → ALL_APPLES
+            if (typeof root.__mpCoopOnBoardFull === "function") {
+              try {
+                root.__mpCoopOnBoardFull();
+              } catch (eFull) { /* ignore */ }
+            }
+            root.__mpCoopBoardFull = true;
+            return pos;
           }
         }
         return pos;
       };
     });
+  }
+
+  /** Taxicab distance. */
+  function manhattan(ax, ay, bx, by) {
+    return Math.abs((ax | 0) - (bx | 0)) + Math.abs((ay | 0) - (by | 0));
+  }
+
+  /**
+   * Regular Wall-mode freePos(null,5) rules on a shared multi-snake board.
+   * Rejects corners, snake/fruit/wall occupancy, and taxicab ≤3 of any head.
+   */
+  function wallSpawnRejected(game, x, y) {
+    const xi = x | 0;
+    const yi = y | 0;
+    const size = boardSizeFromGame(game);
+    const Gsm = root.MultiplayerGsm;
+    if (
+      Gsm &&
+      typeof Gsm.isIllegalNormalWallCell === "function" &&
+      Gsm.isIllegalNormalWallCell(xi, yi, size.width, size.height)
+    ) {
+      return true;
+    }
+    if (isSolidWallCell(game, xi, yi)) return true;
+    const occ = readSpawnOccupancy(game, true);
+    if (occ[xi + "," + yi]) return true;
+    // Fruit cells
+    try {
+      const apples = game && game.wa && game.wa.ka;
+      for (let i = 0; apples && i < apples.length; i++) {
+        const a = apples[i];
+        const pos = (a && a.pos) || a;
+        if (pos && (pos.x | 0) === xi && (pos.y | 0) === yi) return true;
+      }
+    } catch (eA) { /* ignore */ }
+    // Head radius 3 vs every live head (local + remotes + Yin Yang companions)
+    const heads = [];
+    try {
+      const local = game && game.oa && game.oa.ka && game.oa.ka[0];
+      if (local) heads.push(local);
+      if (game && game.Ra && game.Ra.ka && game.Ra.ka[0]) {
+        heads.push(game.Ra.ka[0]);
+      }
+    } catch (eL) { /* ignore */ }
+    const remotes = root.__mpCoopRemotes || {};
+    const myId = root.__mpCoopMyId;
+    Object.keys(remotes).forEach(function (id) {
+      if (myId && id === myId) return;
+      const r = remotes[id];
+      if (!r || r.alive === false) return;
+      if (r.body && r.body[0]) heads.push(r.body[0]);
+      if (r.body2 && r.body2[0]) heads.push(r.body2[0]);
+    });
+    for (let h = 0; h < heads.length; h++) {
+      if (manhattan(xi, yi, heads[h].x, heads[h].y) <= 3) return true;
+    }
+    // Adjacent to an existing solid wall (community / native freePos rule)
+    const dirs = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ];
+    for (let d = 0; d < dirs.length; d++) {
+      const nx = xi + dirs[d][0];
+      const ny = yi + dirs[d][1];
+      if (nx < 0 || ny < 0 || nx >= size.width || ny >= size.height) continue;
+      if (isSolidWallCell(game, nx, ny)) return true;
+    }
+    return false;
   }
 
   /**
@@ -32735,6 +33137,12 @@ window.RemixMod.runCodeAfter = function () {
               }
               return scanned;
             }
+            root.__mpCoopBoardFull = true;
+            if (typeof root.__mpCoopOnBoardFull === "function") {
+              try {
+                root.__mpCoopOnBoardFull();
+              } catch (eFull) { /* ignore */ }
+            }
           }
         }
         return p;
@@ -32746,6 +33154,23 @@ window.RemixMod.runCodeAfter = function () {
   /* -------------------------------------------------------------- tick hook */
 
   /**
+   * Native only ticks a snake that is moving: a player still sitting on their
+   * spawn, or a spectator (who never gets a direction), never reaches onTick.
+   * Anything the tick drives needs an idle path — the app polls this to decide
+   * whether peer poses can wait for the next tick or must be applied now.
+   * Generous enough to cover the slowest speed setting between ticks.
+   */
+  const COOP_TICK_STALE_MS = 500;
+
+  function coopTicksRunning(maxAgeMs) {
+    const at = Number(root.__mpCoopLastTickAt) || 0;
+    if (!at) return false;
+    const max = Number(maxAgeMs) > 0 ? Number(maxAgeMs) : COOP_TICK_STALE_MS;
+    const age = Date.now() - at;
+    return age >= 0 && age <= max;
+  }
+
+  /**
    * Tick: apply peer poses, then body-collide vs remotes (not peaceful / YY).
    * Fruit is applied only on COLLECTABLES_DELTA (not every tick).
    */
@@ -32753,6 +33178,7 @@ window.RemixMod.runCodeAfter = function () {
     if (root.__mpCoopOnTickInstalled) return;
     root.__mpCoopOnTickInstalled = true;
     root.__mpCoopOnTick = function (game) {
+      root.__mpCoopLastTickAt = Date.now();
       if (!root.__mpCoopInject || !root.__mpCoopSession) return;
       try {
         if (typeof root.__mpCoopFlushPendingDeltas === "function") {
@@ -32797,13 +33223,12 @@ window.RemixMod.runCodeAfter = function () {
   root.__mpCoopFindFreeSpawn = findFreeSpawnCell;
   root.__mpCoopInstallSpawnOcc = installRemixSpawnOccupancyHooks;
   root.__mpCoopDrawRemotes = drawCoopRemotes;
-  root.__mpCoopStampPhantomWalls = stampPhantomWalls;
-  root.__mpCoopClearPhantomWalls = clearPhantomWalls;
-  root.__mpCoopPhantomKeys = phantomKeys;
   root.__mpCoopIsSolidWall = isSolidWallCell;
   root.__mpCoopWallOccupancy = wallOccupancyKeys;
+  root.__mpCoopTicksRunning = coopTicksRunning;
   root.__mpCoopDisplayColorIds = coopDisplayColorIds;
   root.__mpCoopRecolorPalette = coopRecolorPalette;
+  root.__mpCoopWallSpawnRejected = wallSpawnRejected;
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       CoopNative: CoopNative,
@@ -32812,6 +33237,7 @@ window.RemixMod.runCodeAfter = function () {
       isSolidWallCell: isSolidWallCell,
       findFreeSpawnCell: findFreeSpawnCell,
       wallOccupancyKeys: wallOccupancyKeys,
+      coopTicksRunning: coopTicksRunning,
     };
   }
 })(typeof window !== "undefined" ? window : globalThis);
@@ -33325,6 +33751,27 @@ window.RemixMod.runCodeAfter = function () {
     return 0;
   }
 
+  /**
+   * Live in-game run clock: ticks × tick length (Fb), same as TimeKeeper hooks.
+   * Falls back to resetTime wall elapsed, then last apple/death sample.
+   */
+  function readLiveRunTimeMs(game) {
+    const g = game || gameInstance();
+    try {
+      if (g && typeof g.ticks === "number" && typeof g.Fb === "number") {
+        const ms = Math.floor(Number(g.ticks) * Number(g.Fb));
+        if (Number.isFinite(ms) && ms >= 0) return ms;
+      }
+    } catch (e) { /* ignore */ }
+    try {
+      if (typeof root.resetTime === "number" && root.resetTime > 0) {
+        const ms = Date.now() - root.resetTime;
+        if (Number.isFinite(ms) && ms >= 0) return ms;
+      }
+    } catch (e2) { /* ignore */ }
+    return null;
+  }
+
   function readScoreAndAlive() {
     const g = gameInstance();
     let score = 0;
@@ -33341,6 +33788,12 @@ window.RemixMod.runCodeAfter = function () {
       if (typeof root.timeKeeper.lastAppleTime === "number") {
         timeMs = timeMs || root.timeKeeper.lastAppleTime;
       }
+    }
+    // Prefer the engine's live run clock while the snake is still playing —
+    // _lastTimeMs only updates on apple/death and freezes mosaic timers.
+    if (alive !== false) {
+      const live = readLiveRunTimeMs(g);
+      if (live != null) timeMs = live;
     }
     return { score: score, timeMs: timeMs, alive: alive };
   }
@@ -33590,6 +34043,13 @@ window.RemixMod.runCodeAfter = function () {
         const sm = Number(a.slotMode);
         if (Number.isFinite(sm)) slotMode = sm | 0;
       }
+      // Winged/Magnet: fractional velocity He — seed peers once, then trust local sim
+      let he = undefined;
+      if (a && a.He && typeof a.He.x === "number" && typeof a.He.y === "number") {
+        he = { x: Number(a.He.x), y: Number(a.He.y) };
+      } else if (a && a.he && typeof a.he.x === "number") {
+        he = { x: Number(a.he.x), y: Number(a.he.y) };
+      }
       return {
         x: pos.x != null ? pos.x : 0,
         y: pos.y != null ? pos.y : 0,
@@ -33600,6 +34060,7 @@ window.RemixMod.runCodeAfter = function () {
         chessPiece: chessPiece,
         chessColor: chessColor,
         slotMode: slotMode,
+        he: he,
         // Light mode: apple.light radius in tiles (native spawn 1.5, decays)
         light:
           a.light != null && Number.isFinite(Number(a.light))
@@ -33808,25 +34269,26 @@ window.RemixMod.runCodeAfter = function () {
     const out = [];
     const wallHost = g && g.Ca;
     if (!wallHost) return out;
+    // Live grid meta first: g.settings / g.width are absent on the native game,
+    // and a null size makes the corner filter below assume 17×15. On a smaller
+    // board only the top-left corner then matches, so the other three leak
+    // sentinel cells into the wall list peers stamp as solid walls.
+    const meta =
+      (g && g.wa && g.wa.oa && g.wa.oa.oa) ||
+      (g && g.oa && g.oa.oa) ||
+      (g && g.settings && g.settings.grid) ||
+      {};
     const bw =
+      firstNumber(meta.width, meta.W) ||
       (g && g.settings && (g.settings.width || g.settings.boardWidth)) ||
       (g && g.width) ||
       null;
     const bh =
+      firstNumber(meta.height, meta.H) ||
       (g && g.settings && (g.settings.height || g.settings.boardHeight)) ||
       (g && g.height) ||
       null;
     // Co-op: scrape real walls only (snakes are never walls)
-    let clearedPhantoms = false;
-    if (
-      root.__mpCoopSession &&
-      typeof root.__mpCoopClearPhantomWalls === "function"
-    ) {
-      try {
-        root.__mpCoopClearPhantomWalls(g);
-        clearedPhantoms = true;
-      } catch (eClear) { /* ignore */ }
-    }
     let result = out;
     try {
       const byKey = Object.create(null);
@@ -33873,24 +34335,7 @@ window.RemixMod.runCodeAfter = function () {
       try {
         const wa = wallHost.wa || wallHost.oa;
         if (wa) {
-          let mapped = mapPointList(wa);
-          if (
-            root.__mpCoopSession &&
-            typeof root.__mpCoopPhantomKeys === "function"
-          ) {
-            try {
-              const phantoms = root.__mpCoopPhantomKeys() || [];
-              if (phantoms.length) {
-                const skip = {};
-                for (let i = 0; i < phantoms.length; i++) {
-                  skip[phantoms[i]] = 1;
-                }
-                mapped = mapped.filter(function (p) {
-                  return !skip[(p.x | 0) + "," + (p.y | 0)];
-                });
-              }
-            } catch (ePh) { /* ignore */ }
-          }
+          const mapped = mapPointList(wa);
           for (let i = 0; i < mapped.length; i++) addWall(mapped[i]);
         }
       } catch (eWa) { /* ignore */ }
@@ -33901,15 +34346,8 @@ window.RemixMod.runCodeAfter = function () {
       // Drop corner sentinels from wa-only cells; keep temp/lock/hotdog
       result = filterMosaicWalls(merged, bw, bh);
       return result;
-    } finally {
-      if (
-        clearedPhantoms &&
-        typeof root.__mpCoopStampPhantomWalls === "function"
-      ) {
-        try {
-          root.__mpCoopStampPhantomWalls(g);
-        } catch (eStamp) { /* ignore */ }
-      }
+    } catch (eScr) {
+      return result;
     }
   }
 
@@ -34065,15 +34503,14 @@ window.RemixMod.runCodeAfter = function () {
   }
 
   /**
-   * Companion body for Twin / Yin Yang.
-   * Twin: only a real second ka (same-color twin) — never invent a mirror.
+   * Companion body for Yin Yang only.
+   * Twin has no second snake — do not invent or scrape a body2 for it.
    * Yin Yang: prefer real second ka; else mirror across center (native j7).
    */
   function scrapeCompanionBody(g, primaryBody, width, height) {
     const mode = scrapeModeKey();
     const isYy = boardHasMode({ modeKey: mode }, "yin_yang");
-    const isTwin = boardHasMode({ modeKey: mode }, "twin");
-    if (!isYy && !isTwin) return null;
+    if (!isYy) return null;
     const candidates = [];
     try {
       if (g && g.Ra && g.Ra.ka) candidates.push(g.Ra.ka);
@@ -34085,7 +34522,6 @@ window.RemixMod.runCodeAfter = function () {
     } catch (eCand) { /* ignore */ }
     const primary = primaryBody || [];
     const p0 = primary[0];
-    // Twin bodies are index-aligned with the primary, so they share its flags
     const dims = snakeDimFlags(g && g.oa);
     for (let i = 0; i < candidates.length; i++) {
       const mapped = mapBody(candidates[i], dims);
@@ -34103,7 +34539,6 @@ window.RemixMod.runCodeAfter = function () {
       return mapped;
     }
     // Yin Yang only: geometric mirror fallback
-    if (!isYy) return null;
     if (!primary.length) return null;
     const w = width || 17;
     const h = height || 15;
@@ -34484,11 +34919,14 @@ window.RemixMod.runCodeAfter = function () {
 
     try {
       if (entities.walls != null) {
+        // Never stamp cells native itself keeps clear (the 2×2 board corners) —
+        // a sender on another board size would otherwise paint solid corners.
+        const walls = filterMosaicWalls(entities.walls, bw, bh);
         if (g.Ca && Array.isArray(g.Ca.wa) && g.Ca.wa.length) {
-          writeNumericGrid(g.Ca.wa, entities.walls, 0, 1);
+          writeNumericGrid(g.Ca.wa, walls, 0, 1);
         }
         if (g.Ca && g.Ca.Aa && typeof g.Ca.Aa.forEach === "function") {
-          writeMap(g.Ca.Aa, entities.walls);
+          writeMap(g.Ca.Aa, walls);
         }
       }
     } catch (eW) { /* ignore */ }
@@ -34580,7 +35018,33 @@ window.RemixMod.runCodeAfter = function () {
           : Array.isArray(g.Qa.oa)
             ? g.Qa.oa
             : null;
-        if (bucket) writeList(bucket, list);
+        if (bucket) {
+          // A gate's cell lives on Upa (the 2×2 corner), not pos, so writeList
+          // would swap the native instance for a bare point and leave the
+          // engine drawing the old footprint. Move them in place instead.
+          const template = bucket[0] && typeof bucket[0] === "object" ? bucket[0] : null;
+          while (bucket.length > list.length) bucket.pop();
+          for (let i = 0; i < list.length; i++) {
+            const src = list[i];
+            if (!src) continue;
+            let dst = bucket[i];
+            if (!dst || typeof dst !== "object") {
+              dst = {};
+              if (template) {
+                try {
+                  Object.keys(template).forEach(function (k) {
+                    if (k === "Upa" || k === "pos") return;
+                    dst[k] = template[k];
+                  });
+                } catch (eGc) { /* ignore */ }
+              }
+              bucket[i] = dst;
+            }
+            dst.Upa = makeNativePoint(src.x, src.y, dst.Upa);
+            paintEntityFields(dst, src);
+            applied = true;
+          }
+        }
       }
     } catch (eG) { /* ignore */ }
     try {
@@ -34820,28 +35284,114 @@ window.RemixMod.runCodeAfter = function () {
   }
 
   function scrapeModeKey() {
+    return effectiveModeKey();
+  }
+
+  /**
+   * ModeRegistry key, with Slot Machine's active roll folded in as `+id`.
+   * Under Slot Machine getCurrentModeKey() is just "slot_machine", so co-op
+   * rules (peaceful, borderless, cheese, dimension, light, yin_yang) would
+   * otherwise miss the roll.
+   */
+  function effectiveModeKey() {
+    let key = "";
     try {
       if (root.ModeRegistry && typeof root.ModeRegistry.getCurrentModeKey === "function") {
-        return String(root.ModeRegistry.getCurrentModeKey() || "");
+        key = String(root.ModeRegistry.getCurrentModeKey() || "");
+      }
+    } catch (e) { /* ignore */ }
+    if (!key) {
+      try {
+        if (root.timeKeeper && root.timeKeeper.mode) {
+          key = String(root.timeKeeper.mode);
+        }
+      } catch (e2) { /* ignore */ }
+    }
+    try {
+      if (
+        typeof root.isSlotMachineActive === "function" &&
+        root.isSlotMachineActive() &&
+        root.__slotActive != null
+      ) {
+        const roll = resolveSlotModeId(root.__slotActive);
+        if (roll) {
+          const parts = key
+            ? String(key)
+                .toLowerCase()
+                .split("+")
+                .filter(Boolean)
+            : [];
+          if (parts.indexOf(roll) < 0) parts.push(roll);
+          if (parts.indexOf("slot_machine") < 0 && key.indexOf("slot") >= 0) {
+            /* keep slot_machine if already present */
+          }
+          key = parts.join("+") || roll;
+        }
+      }
+    } catch (eSlot) { /* ignore */ }
+    return key;
+  }
+
+  /** Map Slot Machine mode index → ModeRegistry id (peaceful = 20). */
+  function resolveSlotModeId(modeNum) {
+    const n = Number(modeNum);
+    if (!Number.isFinite(n)) return null;
+    const idx = n | 0;
+    if (idx === 20) return "peaceful";
+    try {
+      if (
+        root.ModeRegistry &&
+        typeof root.ModeRegistry._matchMiddleId === "function" &&
+        typeof root.slot_trophy_url_for_mode === "function"
+      ) {
+        const url = root.slot_trophy_url_for_mode(idx);
+        const id = root.ModeRegistry._matchMiddleId(url);
+        if (id) return id;
       }
     } catch (e) { /* ignore */ }
     try {
-      if (root.timeKeeper && root.timeKeeper.mode) {
-        return String(root.timeKeeper.mode);
+      const middle = root.ModeRegistry && root.ModeRegistry.MIDDLE;
+      if (Array.isArray(middle)) {
+        const byBit = middle.find(function (m) {
+          return m && m.bitIndexV3 === idx;
+        });
+        if (byBit && byBit.id) return byBit.id;
+        if (middle[idx] && middle[idx].id) return middle[idx].id;
       }
     } catch (e2) { /* ignore */ }
-    return "";
+    // Remix custom rolls
+    if (idx === 23) return "candy";
+    if (idx === 24) return "chess";
+    if (idx === 25) return "burger";
+    if (idx === 26) return "cat";
+    if (idx === 27) return "mexico";
+    if (idx === 28) return "bomb_fruit";
+    return null;
   }
 
   function boardHasMode(board, id) {
-    if (!board || !id) return false;
-    const key = String(board.modeKey || "");
+    if (!id) return false;
+    const key = String((board && board.modeKey) || scrapeModeKey() || "");
     if (!key) return false;
     if (key === id) return true;
     const parts = key.split("+");
     for (let i = 0; i < parts.length; i++) {
       if (parts[i] === id) return true;
     }
+    return false;
+  }
+
+  /**
+   * Winged (and Slot winged roll): fruit drifts on He each tick. Co-op must seed
+   * spawn pos + direction once, then trust each client's native motion — late
+   * pos sync rubber-bands fruit backwards.
+   */
+  function isCoopFruitMotionMode() {
+    if (boardHasMode({ modeKey: scrapeModeKey() }, "winged")) return true;
+    try {
+      const slot = root.__slotActive != null ? Number(root.__slotActive) | 0 : -1;
+      if (slot === 6) return true; // Winged roll
+    } catch (e) { /* ignore */ }
     return false;
   }
 
@@ -34916,6 +35466,17 @@ window.RemixMod.runCodeAfter = function () {
         body2[0].y,
         Math.max(LIGHT_HEAD_FLOOR, hr2)
       );
+    }
+    // Extra heads (co-op remotes) — same stamp as the local head
+    const extraHeads = board.heads || [];
+    for (let hi = 0; hi < extraHeads.length; hi++) {
+      const h = extraHeads[hi];
+      if (!h || h.x == null || h.y == null) continue;
+      const hr =
+        h.light != null && Number.isFinite(Number(h.light))
+          ? Number(h.light)
+          : LIGHT_HEAD_FLOOR;
+      pushMosaicLight(lights, h.x, h.y, Math.max(LIGHT_HEAD_FLOOR, hr));
     }
     const apples = board.apples || [];
     for (let i = 0; i < apples.length; i++) {
@@ -37358,8 +37919,8 @@ window.RemixMod.runCodeAfter = function () {
 
   /**
    * After Remix/Chess tick patches, also set __mpGame and cache board fields.
-   * Co-op: __mpCoopOnTick each tick; __mpCoopRenderEnter only caches PlayerRenderer
-   * (companions paint once per tick, not every render frame).
+   * Co-op: __mpCoopOnTick each tick; __mpCoopRenderEnter caches PlayerRenderer
+   * and companions paint every render frame.
    */
   function alterSnakeCodeExposeGame(code) {
     if (typeof code !== "string") return code;
@@ -37802,11 +38363,7 @@ window.RemixMod.runCodeAfter = function () {
       score: scoreInfo.score != null ? scoreInfo.score | 0 : 0,
     };
     try {
-      const key =
-        (root.ModeRegistry &&
-          typeof root.ModeRegistry.getCurrentModeKey === "function" &&
-          root.ModeRegistry.getCurrentModeKey()) ||
-        "";
+      const key = scrapeModeKey();
       const parts = String(key).toLowerCase().split("+");
       if (
         parts.indexOf("peaceful") >= 0 ||
@@ -37816,7 +38373,45 @@ window.RemixMod.runCodeAfter = function () {
       ) {
         out.peaceful = true;
       }
+      // Yin Yang companion (Twin has no second snake)
+      if (parts.indexOf("yin_yang") >= 0) {
+        let w = 17;
+        let h = 15;
+        try {
+          const meta =
+            (g && g.wa && g.wa.oa && g.wa.oa.oa) ||
+            (g && g.oa && g.oa.oa) ||
+            {};
+          if (meta.width) w = meta.width | 0;
+          if (meta.height) h = meta.height | 0;
+        } catch (eSz) { /* defaults */ }
+        const body2 = scrapeCompanionBody(g, body, w, h);
+        if (body2 && body2.length) out.body2 = body2;
+      }
     } catch (eP) { /* ignore */ }
+    try {
+      if (typeof boardSnakePoisoned === "function") {
+        if (boardSnakePoisoned({ poisonTicks: root.__mpBoardCache && root.__mpBoardCache.poisonTicks }) ||
+            (g && g.oa && (g.oa.Ja > 0 || g.oa.poisonTicks > 0))) {
+          out.poisoned = true;
+        }
+      }
+      // Poison ticks live on the snake / board in several builds
+      const ticks =
+        (g && g.oa && (g.oa.Ja != null ? g.oa.Ja : g.oa.poisonTicks)) ||
+        (root.__mpBoardCache && root.__mpBoardCache.poisonTicks);
+      if (ticks != null && Number(ticks) > 0) out.poisoned = true;
+    } catch (ePo) { /* ignore */ }
+    try {
+      const lights = scrapeSnakeLights(g);
+      if (lights && lights.headLight != null) out.headLight = lights.headLight;
+      if (lights && lights.headLight2 != null) out.headLight2 = lights.headLight2;
+    } catch (eL) { /* ignore */ }
+    try {
+      if (root.__slotActive != null && Number.isFinite(Number(root.__slotActive))) {
+        out.slotActive = Number(root.__slotActive) | 0;
+      }
+    } catch (eS) { /* ignore */ }
     if (!includeColors) return out;
 
     const Colors = root.MultiplayerColors;
@@ -38045,7 +38640,8 @@ window.RemixMod.runCodeAfter = function () {
     // Heavy board entities only when requested (trophy modes) — default fruit-only
     if (opts.includeEntities) {
       const entities = scrapeBoardEntities();
-      out.walls = entities.walls;
+      // Re-filter against the known size, same as the mosaic board scrape
+      out.walls = filterMosaicWalls(entities.walls, board.width, board.height);
       out.keys = entities.keys;
       out.boxes = entities.boxes;
       out.goals = entities.goals;
@@ -38067,21 +38663,24 @@ window.RemixMod.runCodeAfter = function () {
       return (arr && arr.length) || 0;
     }
     const apples = cols.apples || [];
+    // Winged: ignore live x/y so drifting fruit does not republish every tile.
+    // Reseeds use force=true on publish; peers trust local He between seeds.
+    const trustMotion =
+      !!cols.fruitMotionTrust || isCoopFruitMotionMode();
     let fruit = "";
     for (let i = 0; i < apples.length; i++) {
       const a = apples[i];
       if (!a) continue;
       fruit +=
         (i ? ";" : "") +
-        (a.x | 0) +
-        "," +
-        (a.y | 0) +
-        "," +
+        (trustMotion ? "m" : (a.x | 0) + "," + (a.y | 0) + ",") +
         (a.type != null ? a.type : "") +
         (a.poison ? "p" : "") +
         (a.slotMode != null ? "s" + a.slotMode : "") +
         (a.burgerTimer != null ? "b" + a.burgerTimer : "") +
         (a.isPiece ? "c" + (a.chessPiece || "") : "") +
+        // Shield mode gains/losses can be the only change on the board
+        (a.shields && a.shields.length ? "h" + a.shields.join("") : "") +
         (a.otherDim ? "d" : "");
     }
     return [
@@ -38161,9 +38760,7 @@ window.RemixMod.runCodeAfter = function () {
     const findFree = root.__mpCoopFindFreeSpawn;
     if (typeof readOcc !== "function") return apples;
 
-    const out = apples.map(function (a) {
-      return a ? Object.assign({}, a) : { x: 0, y: 0 };
-    });
+    const placed = [];
     const reserved = {};
 
     function blockedKeys() {
@@ -38174,8 +38771,9 @@ window.RemixMod.runCodeAfter = function () {
       return occ;
     }
 
-    for (let i = 0; i < out.length; i++) {
-      const a = out[i];
+    for (let i = 0; i < apples.length; i++) {
+      const src = apples[i];
+      const a = src ? Object.assign({}, src) : { x: 0, y: 0 };
       const x = a.x != null ? a.x | 0 : 0;
       const y = a.y != null ? a.y | 0 : 0;
       const k = x + "," + y;
@@ -38187,6 +38785,7 @@ window.RemixMod.runCodeAfter = function () {
         reserved[k] = true;
         a.x = x;
         a.y = y;
+        placed.push(a);
         continue;
       }
       let free = null;
@@ -38219,13 +38818,18 @@ window.RemixMod.runCodeAfter = function () {
         a.x = free.x;
         a.y = free.y;
         reserved[free.x + "," + free.y] = true;
+        placed.push(a);
       } else {
-        reserved[k] = true;
-        // Board full — signal ALL apples for co-op win detection
+        // Board full — drop the apple; ALL_APPLES win (not a blocked spawn)
         root.__mpCoopBoardFull = true;
+        if (typeof root.__mpCoopOnBoardFull === "function") {
+          try {
+            root.__mpCoopOnBoardFull();
+          } catch (eFull) { /* ignore */ }
+        }
       }
     }
-    return out;
+    return placed;
   }
 
   /** Max shared apples: board cells minus walls minus length-3 seats. */
@@ -38242,8 +38846,16 @@ window.RemixMod.runCodeAfter = function () {
     if (!payload || !payload.apples) return false;
     const g = gameInstance();
     let apples = payload.apples;
+    const motionMode =
+      !!payload.fruitMotionTrust ||
+      !!payload.fruitMotionSeed ||
+      isCoopFruitMotionMode();
+    // Between winged seeds, never yank live fruit back to a lagged peer pose
+    const trustLiveMotion = motionMode && !payload.fruitMotionSeed;
     try {
-      apples = nudgeCoopApplesOffSnakes(apples, g);
+      if (!trustLiveMotion) {
+        apples = nudgeCoopApplesOffSnakes(apples, g);
+      }
       if (g && g.wa && Array.isArray(g.wa.ka)) {
         // Native fruit render does `apple.pos.clone()` — keep a template Od/point.
         let templateApple = null;
@@ -38264,12 +38876,15 @@ window.RemixMod.runCodeAfter = function () {
         for (let i = 0; i < apples.length; i++) {
           const src = apples[i];
           let dst = g.wa.ka[i];
+          const isNew = !dst;
           if (!dst) {
             dst = {};
             if (templateApple) {
               try {
                 Object.keys(templateApple).forEach(function (k) {
-                  if (k === "pos") return;
+                  if (k === "pos" || k === "He" || k === "CAb" || k === "iL") {
+                    return;
+                  }
                   dst[k] = templateApple[k];
                 });
               } catch (e) { /* ignore */ }
@@ -38279,9 +38894,13 @@ window.RemixMod.runCodeAfter = function () {
             g.wa.ka[i] = dst;
             if (!templatePos && dst.pos) templatePos = dst.pos;
             if (!templateApple) templateApple = dst;
+            applyFruitHe(dst, src, g);
+          } else if (trustLiveMotion && !isNew) {
+            // Keep local pos + He; only refresh static fruit metadata below
           } else if (dst.pos || templatePos) {
             dst.pos = ensureNativePos(dst.pos, src.x, src.y, templatePos);
             if (!templatePos && dst.pos) templatePos = dst.pos;
+            applyFruitHe(dst, src, g);
           } else {
             // Rare: apple stored as a bare point
             dst.x = src.x;
@@ -38289,6 +38908,7 @@ window.RemixMod.runCodeAfter = function () {
             if (typeof dst.clone !== "function") {
               dst.pos = makeNativePoint(src.x, src.y, templatePos);
             }
+            applyFruitHe(dst, src, g);
           }
           if (src.type != null) dst.type = src.type;
           if (src.poison) {
@@ -38321,17 +38941,61 @@ window.RemixMod.runCodeAfter = function () {
           }
         }
         applyBoardEntities(payload);
-        if (typeof root.__mpCoopStampPhantomWalls === "function") {
-          try {
-            root.__mpCoopStampPhantomWalls(g);
-          } catch (ePh) { /* ignore */ }
-        }
+        // Sync Slot Machine roll from peer (idempotent; skip if we just ate)
+        try {
+          if (
+            payload.slotActive != null &&
+            Number.isFinite(Number(payload.slotActive)) &&
+            typeof root.setSlotActive === "function" &&
+            !root.__mpCoopSkipFruitReapply
+          ) {
+            const next = Number(payload.slotActive) | 0;
+            if ((root.__slotActive | 0) !== next) {
+              root.setSlotActive(next, g);
+              root.__mpCoopLastSlotActive = next;
+            }
+          }
+        } catch (eSlot) { /* ignore */ }
         return true;
       }
     } catch (e) {
       console.warn("applyCollectables", e);
     }
     return false;
+  }
+
+  /** Apply winged He / enable motion helpers on a fruit object. */
+  function applyFruitHe(dst, src, g) {
+    if (!dst) return;
+    if (src && src.he && typeof src.he.x === "number" && typeof src.he.y === "number") {
+      const hx = Number(src.he.x);
+      const hy = Number(src.he.y);
+      if (typeof root.slot_vec === "function") {
+        try {
+          dst.He = root.slot_vec(hx, hy);
+          dst.CAb = root.slot_vec(hx, hy);
+          if (!dst.iL || typeof dst.iL.x !== "number") {
+            dst.iL = root.slot_vec(1, 1);
+          } else if (!dst.iL.x && !dst.iL.y) {
+            dst.iL.x = 1;
+            dst.iL.y = 1;
+          }
+        } catch (eVec) {
+          dst.He = { x: hx, y: hy };
+          dst.CAb = { x: hx, y: hy };
+          dst.iL = dst.iL || { x: 1, y: 1 };
+        }
+      } else {
+        dst.He = { x: hx, y: hy };
+        dst.CAb = { x: hx, y: hy };
+        if (!dst.iL) dst.iL = { x: 1, y: 1 };
+      }
+    }
+    if (typeof root.slot_ensure_fruit_motion === "function") {
+      try {
+        root.slot_ensure_fruit_motion(dst, g);
+      } catch (eMot) { /* ignore */ }
+    }
   }
 
   /** Start native run clock for co-op players (not spectators). */
@@ -38510,6 +39174,7 @@ window.RemixMod.runCodeAfter = function () {
     dismissDeathOverlayForRun: dismissDeathOverlayForRun,
     gameInstance: gameInstance,
     readScoreAndAlive: readScoreAndAlive,
+    readLiveRunTimeMs: readLiveRunTimeMs,
     scrapeBoard: scrapeBoard,
     scrapeSnakeDelta: scrapeSnakeDelta,
     scrapeCoopSnakeDelta: scrapeCoopSnakeDelta,
@@ -38523,6 +39188,7 @@ window.RemixMod.runCodeAfter = function () {
     applyCollectables: applyCollectables,
     nudgeCoopApplesOffSnakes: nudgeCoopApplesOffSnakes,
     coopAppleGoal: coopAppleGoal,
+    isCoopFruitMotionMode: isCoopFruitMotionMode,
     applyBoardEntities: applyBoardEntities,
     applyCoopSpawnOffset: applyCoopSpawnOffset,
     applyCoopStartMoving: applyCoopStartMoving,
@@ -38564,6 +39230,8 @@ window.RemixMod.runCodeAfter = function () {
     ARROW_DEFAULT_COLOR: ARROW_DEFAULT_COLOR,
     boardHasMode: boardHasMode,
     scrapeModeKey: scrapeModeKey,
+    effectiveModeKey: effectiveModeKey,
+    resolveSlotModeId: resolveSlotModeId,
     collectMosaicLights: collectMosaicLights,
     mosaicCellLit: mosaicCellLit,
     mosaicPointLit: mosaicPointLit,
@@ -38571,6 +39239,9 @@ window.RemixMod.runCodeAfter = function () {
     LIGHT_FRUIT_DEFAULT: LIGHT_FRUIT_DEFAULT,
     LIGHT_OBJECT_RADIUS: LIGHT_OBJECT_RADIUS,
     drawWallSolverStyleSnake: drawWallSolverStyleSnake,
+    drawBoardApples: drawBoardApples,
+    drawBoardWalls: drawBoardWalls,
+    drawBoardModeEntities: drawBoardModeEntities,
     snakeMotion: snakeMotion,
     snakeMotionActive: snakeMotionActive,
     bodySegmentsAdjacent: bodySegmentsAdjacent,
@@ -39008,19 +39679,22 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 .mp-hud .mp-hud-meta{opacity:.85;margin:2px 0}
 .mp-color-icon{width:28px;height:28px;border-radius:6px;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.3)}
 #mp-mosaic{
-  position:fixed;left:50%;top:12px;transform:translateX(-50%);
+  position:fixed;inset:0;left:0;top:0;right:0;bottom:0;
   z-index:9996;display:none;
-  gap:10px;padding:10px;background:rgba(0,0,0,.45);border-radius:10px;
-  max-width:min(96vw,1100px);max-height:58vh;overflow:auto;
-  box-sizing:border-box;
+  gap:10px;padding:10px;background:rgba(0,0,0,.55);border-radius:0;
+  width:100vw;height:100vh;max-width:100vw;max-height:100vh;
+  overflow:hidden;box-sizing:border-box;
+  justify-content:center;align-content:center;
 }
 #mp-mosaic .mp-mosaic-cell{
   position:relative;cursor:pointer;
-  display:flex;flex-direction:column;align-items:stretch;gap:4px;
+  display:flex;flex-direction:column;align-items:center;gap:4px;
+  min-width:0;min-height:0;
 }
 #mp-mosaic .mp-mosaic-cell canvas{
   display:block;border-radius:4px;background:transparent;cursor:pointer;
-  box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none;width:100%;height:auto;
+  box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none;
+  width:auto;height:auto;max-width:100%;
 }
 #mp-mosaic .mp-mosaic-cell .mp-mosaic-label{
   position:static;
@@ -39483,13 +40157,14 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     const readyBtn = themedBtn("Ready");
     readyBtn.id = "mp-ready";
     playerBox.appendChild(readyBtn);
-    playerBox.appendChild(
-      el(
-        "div",
-        "mp-status",
-        "Co-op: pick your snake color in the in-game color row (unique)."
-      )
+    const colorHint = el(
+      "div",
+      "mp-status hidden",
+      "Co-op: pick your snake color in the in-game color row (unique)."
     );
+    colorHint.id = "mp-coop-color-hint";
+    colorHint.style.display = "none";
+    playerBox.appendChild(colorHint);
     panelMatch.appendChild(playerBox);
 
     const matchHint = el(
@@ -39575,7 +40250,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           .connect({
             url: urlIn.value.trim() || "ws://127.0.0.1:7777/ws",
             displayName: nameIn.value.trim(),
-            roomCode: roomIn.value.trim(),
+            // Codes are uppercase on the wire; an unused one opens a new room
+            roomCode: roomIn.value.trim().toUpperCase(),
             create: !roomIn.value.trim(),
           })
           .then(function (welcome) {
@@ -39602,12 +40278,16 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       paintModeButtons("versus");
       finishOngoingWrap.classList.remove("hidden");
       finishOngoingWrap.style.display = "";
+      colorHint.classList.add("hidden");
+      colorHint.style.display = "none";
       self.app.client && self.app.client.setMode("versus");
     };
     coopBtn.onclick = function () {
       paintModeButtons("coop");
       finishOngoingWrap.classList.add("hidden");
       finishOngoingWrap.style.display = "none";
+      colorHint.classList.remove("hidden");
+      colorHint.style.display = "";
       self.app.client && self.app.client.setMode("coop");
     };
     dur.onchange = function () {
@@ -39671,17 +40351,20 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       goalSel.value = g;
       lsSet("MULTIPLAYER_VERSUS_GOAL", g);
       if (self.app.client.setVersusGoal) self.app.client.setVersusGoal(g);
-      const finishOngoing = !!finishOngoingCb.checked;
-      lsSet(
-        "MULTIPLAYER_VERSUS_FINISH_ONGOING",
-        finishOngoing ? "1" : "0"
-      );
       // Bundle match rules into SESSION_START so co-op/versus peers apply
       // trophy/count/speed/size quietly under __mpStartingMatch (no menu open).
       const snap =
         self.app.syncMySettingsAsAdmin && self.app.syncMySettingsAsAdmin();
       const startPayload = snap ? { settings: snap } : {};
-      startPayload.finishOngoingRuns = finishOngoing;
+      // finishOngoingRuns is versus-only (checkbox hidden in co-op).
+      if (roster.mode === "versus") {
+        const finishOngoing = !!finishOngoingCb.checked;
+        lsSet(
+          "MULTIPLAYER_VERSUS_FINISH_ONGOING",
+          finishOngoing ? "1" : "0"
+        );
+        startPayload.finishOngoingRuns = finishOngoing;
+      }
       self.app.client.sessionStart(startPayload);
       const st = document.getElementById("mp-status");
       if (st) st.textContent = "Starting match…";
@@ -39936,6 +40619,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       }
       finishOngoingWrap.classList.toggle("hidden", !showVersusOpts);
       finishOngoingWrap.style.display = showVersusOpts ? "" : "none";
+      colorHint.classList.toggle("hidden", !isCoop);
+      colorHint.style.display = isCoop ? "" : "none";
       if (
         showVersusOpts &&
         rosterData.finishOngoingRuns != null &&
@@ -40141,6 +40826,16 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         const ds = colorDotStyle(c.colorId);
         if (ds) dot.style.cssText = ds;
         nameRow.appendChild(dot);
+        if (
+          isCoop &&
+          c.role === "player" &&
+          c.playerNumber != null &&
+          Number.isFinite(Number(c.playerNumber))
+        ) {
+          nameRow.appendChild(
+            el("span", "mp-chip mp-chip-player", "P" + (Number(c.playerNumber) | 0))
+          );
+        }
         nameRow.appendChild(
           el("span", null, c.resolvedName || c.displayName || c.clientId.slice(0, 8))
         );
@@ -40265,7 +40960,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       );
     }
 
-    // Co-op panel: combined score + per-player lives
+    // Co-op panel: combined score + shared run clock + per-player lives
     if (r.mode === "coop") {
       if (!r.sessionActive && !(app._coopTotal > 0)) {
         this.hud.style.display = "none";
@@ -40279,19 +40974,42 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
             ? app.ensureCoopAppleGoal()
             : "—";
       const total = app._coopTotal != null ? app._coopTotal : 0;
+      let runMs = null;
+      if (
+        app._coopFinalTimeMs != null &&
+        Number.isFinite(Number(app._coopFinalTimeMs))
+      ) {
+        runMs = Math.max(0, Number(app._coopFinalTimeMs));
+      } else if (
+        app._coopTimerStartedAtMs != null &&
+        Number.isFinite(Number(app._coopTimerStartedAtMs))
+      ) {
+        runMs = Math.max(0, Date.now() - Number(app._coopTimerStartedAtMs));
+      }
+      const clock =
+        runMs != null ? " · " + formatMs(runMs) : "";
       let html = "<h4>CO-OP</h4>";
       html +=
         '<div class="mp-hud-meta">Team score: <strong>' +
         total +
         "</strong> / " +
         goal +
+        clock +
         "</div>";
       if (r.sessionActive) {
         html += '<div class="mp-hud-meta">Fill the board together</div>';
-      } else if (app._coopWon) {
-        html += '<div class="mp-hud-winner">All apples!</div>';
       } else {
-        html += '<div class="mp-hud-meta">Match over</div>';
+        const reason = app._coopEndReason || (app._coopWon ? "ALL_APPLES" : null);
+        let endCopy = "Match over";
+        if (reason === "ALL_APPLES") endCopy = "All apples!";
+        else if (reason === "ALL_DEAD") endCopy = "All snakes down";
+        else if (reason === "aborted") endCopy = "Ended by admin";
+        html +=
+          '<div class="' +
+          (reason === "ALL_APPLES" ? "mp-hud-winner" : "mp-hud-meta") +
+          '">' +
+          endCopy +
+          "</div>";
       }
       const scores = app._coopScores || {};
       clients
@@ -41035,7 +41753,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     /**
      * Boards land one tick at a time and the renderer slides the snake between
      * cells, so cells that are mid-step need repainting between deltas. Canvas
-     * only — labels, classes and the cat strip stay on the 200ms tick.
+     * only — labels refresh on the mosaic label interval from live run clocks.
      */
     App.prototype._ensureMosaicAnim = function () {
       if (this._mosaicAnimRaf) return;
@@ -41101,8 +41819,103 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
             self.renderMosaic();
           }
         };
+        if (!this._mosaicResizeBound) {
+          this._mosaicResizeBound = function () {
+            if (self.versus && self.versus.spectateMode === "mosaic") {
+              self.renderMosaic();
+            }
+          };
+          window.addEventListener("resize", this._mosaicResizeBound);
+        }
       }
       return el;
+    };
+
+    /**
+     * Pick cols/rows + board CSS size so every cell fits in the viewport and
+     * boards use as much of the screen as possible (no scroll).
+     */
+    App.prototype._layoutMosaicGrid = function (el, players) {
+      const n = players.length;
+      const gap = 10;
+      const pad = 20;
+      const rootWin = typeof window !== "undefined" ? window : null;
+      const vw = (rootWin && rootWin.innerWidth) || 1280;
+      const vh = (rootWin && rootWin.innerHeight) || 720;
+      const availW = Math.max(120, vw - pad);
+      const availH = Math.max(120, vh - pad);
+
+      let gridW = 17;
+      let gridH = 15;
+      let chrome = 28; // label + flex gaps
+      for (let i = 0; i < players.length; i++) {
+        const b = this.versus && this.versus.boards[players[i].clientId];
+        if (b && b.width > 0 && b.height > 0) {
+          gridW = b.width | 0;
+          gridH = b.height | 0;
+        }
+        if (b && b.catLives != null) chrome = 48;
+      }
+      const aspect = gridW / Math.max(1, gridH);
+
+      let best = null;
+      for (let cols = 1; cols <= n; cols++) {
+        const rows = Math.ceil(n / cols);
+        const cellW = (availW - gap * (cols - 1)) / cols;
+        const cellH = (availH - gap * (rows - 1)) / rows;
+        const maxBoardH = Math.max(40, cellH - chrome);
+        let w = cellW;
+        let h = w / aspect;
+        if (h > maxBoardH) {
+          h = maxBoardH;
+          w = h * aspect;
+        }
+        if (w > cellW) {
+          w = cellW;
+          h = w / aspect;
+        }
+        const area = w * h;
+        if (!best || area > best.area) {
+          best = {
+            cols: cols,
+            rows: rows,
+            w: Math.max(40, Math.floor(w)),
+            h: Math.max(36, Math.floor(h)),
+            area: area,
+          };
+        }
+      }
+
+      el.style.display = "grid";
+      el.style.gridTemplateColumns =
+        "repeat(" + best.cols + ", " + best.w + "px)";
+      el.style.gridAutoRows = "auto";
+      el.style.justifyContent = "center";
+      el.style.alignContent = "center";
+      el.style.gap = gap + "px";
+      el.style.width = "100vw";
+      el.style.height = "100vh";
+      el.style.maxWidth = "100vw";
+      el.style.maxHeight = "100vh";
+      el.style.overflow = "hidden";
+      el.style.boxSizing = "border-box";
+      return { w: best.w, h: best.h, cols: best.cols, rows: best.rows };
+    };
+
+    App.prototype._sizeMosaicCanvas = function (canvas, cssW, cssH) {
+      if (!canvas || !(cssW > 0) || !(cssH > 0)) return;
+      canvas.style.width = cssW + "px";
+      canvas.style.height = cssH + "px";
+      const dpr =
+        typeof window !== "undefined" && window.devicePixelRatio
+          ? Math.min(2, Number(window.devicePixelRatio) || 1)
+          : 1;
+      const tw = Math.max(1, Math.round(cssW * dpr));
+      const th = Math.max(1, Math.round(cssH * dpr));
+      if (canvas.width !== tw || canvas.height !== th) {
+        canvas.width = tw;
+        canvas.height = th;
+      }
     };
 
     App.prototype.renderMosaic = function (opts) {
@@ -41139,9 +41952,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         el.style.display = "none";
         return;
       }
-      const cols = Math.min(players.length, players.length <= 4 ? 2 : 3);
-      el.style.display = "grid";
-      el.style.gridTemplateColumns = "repeat(" + cols + ", minmax(180px, 1fr))";
+      const boardCss = this._layoutMosaicGrid(el, players);
 
       if (!labelsOnly) {
         let chromeBorder = null;
@@ -41251,8 +42062,11 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           cell.querySelector(".mp-mosaic-cat"),
           self.versus.boards[p.clientId]
         );
-        if (labelsOnly) return;
         const canvas = cell.querySelector("canvas");
+        if (canvas) {
+          self._sizeMosaicCanvas(canvas, boardCss.w, boardCss.h);
+        }
+        if (labelsOnly) return;
         const board = self.versus.boards[p.clientId];
         const colorInfo = self._colorForClient(p.clientId);
         if (canvas && board) {
@@ -41303,6 +42117,9 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
   const Colors = root.MultiplayerColors;
   const Mp = root.MultiplayerRuntime;
 
+  /** Idle board-sync poll — tighter than a tick so a waiting player keeps up. */
+  const COOP_IDLE_SYNC_MS = 100;
+
   function MultiplayerApp() {
     this.client = null;
     this.versus = new VersusState();
@@ -41311,7 +42128,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     this.ui = new UI(this);
     this._boardTimer = null;
     this._scoreTimer = null;
-    this._coopSyncTimer = null;
+    this._coopIdleSyncTimer = null;
     this._coopPaintRaf = 0;
     this._focusCanvas = null;
     this._mosaicEl = null;
@@ -41319,7 +42136,9 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     this._coopPaused = false;
     this._nativeCanvasHidden = false;
     this._coopSessionActive = false;
+    this._coopSessionGen = 0;
     this._coopDeadSent = false;
+    this._coopSlots = [];
     this._statusEl = null;
     this._lastModeLabel = "—";
   }
@@ -41578,7 +42397,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     this.ui.updateHud(this);
   };
 
-  /** Mosaic clocks tick locally from runStartedAtMs — refresh labels without board redraw. */
+  /** Mosaic clocks follow live ticks×Fb from board/score pulses — refresh labels often. */
   MultiplayerApp.prototype._ensureMosaicLabelTick = function () {
     if (this._mosaicLabelTimer) return;
     const self = this;
@@ -41592,7 +42411,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       if (typeof self.renderMosaic === "function") {
         self.renderMosaic({ labelsOnly: true });
       }
-    }, 200);
+    }, 50);
   };
 
   MultiplayerApp.prototype._stopMosaicLabelTick = function () {
@@ -41624,6 +42443,42 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     this.client.on(P.TYPES.ROSTER, function (p) {
       self.versus.syncFromRoster(p);
       self.ui.updateHud(self);
+      // Prefer server-issued co-op seats from the roster (survives resync)
+      if (p && p.mode === "coop" && Array.isArray(p.clients)) {
+        const fromRoster = [];
+        for (let i = 0; i < p.clients.length; i++) {
+          const c = p.clients[i];
+          if (!c || c.role !== "player" || c.coopSlot == null) continue;
+          fromRoster.push({
+            clientId: c.clientId,
+            slot: Number(c.coopSlot) | 0,
+            oy: null,
+            playerNumber:
+              c.playerNumber != null
+                ? Number(c.playerNumber) | 0
+                : (Number(c.coopSlot) | 0) + 1,
+          });
+        }
+        fromRoster.sort(function (a, b) {
+          return a.slot - b.slot;
+        });
+        if (fromRoster.length) {
+          // Preserve oy from SESSION_START slots when present
+          const prev = self._coopSlots || [];
+          for (let j = 0; j < fromRoster.length; j++) {
+            const match = prev.find(function (s) {
+              return s && s.clientId === fromRoster[j].clientId;
+            });
+            if (match && match.oy != null) fromRoster[j].oy = match.oy;
+          }
+          self._coopSlots = fromRoster;
+          self._coopSpawnOy = null;
+          // Late roster seats: try seating once if the match already started
+          if (self._coopSessionActive && !self._coopSpawnApplied) {
+            self.trySeatCoopOnce(!!(typeof window !== "undefined" && window.__mpCoopSpectator));
+          }
+        }
+      }
       const me = self.client.me();
       const prevRole = self._lastMyRole;
       const nextRole = me && me.role;
@@ -41796,11 +42651,14 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       if (p.timerArm || p.timerStartedAtMs != null) {
         self.armCoopRunTimer(p.timerStartedAtMs);
       }
-      // During a live co-op session, coalesce latest pose per peer (apply on tick)
+      // During a live co-op session, coalesce latest pose per peer (apply on
+      // tick) — but only while this engine actually ticks. An idle spawn or a
+      // spectator never ticks, and queued poses there froze the shared board.
       if (
         self._coopSessionActive &&
         typeof window !== "undefined" &&
-        typeof window.__mpCoopFlushPendingDeltas === "function"
+        typeof window.__mpCoopFlushPendingDeltas === "function" &&
+        self.coopTicksRunning()
       ) {
         if (!self._pendingCoopSnakeDeltas) {
           self._pendingCoopSnakeDeltas = Object.create(null);
@@ -41986,8 +42844,20 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         self.client.roster.sessionActive = false;
       }
       self._coopSessionActive = false;
+      self._coopEndReason = (p && p.reason) || null;
       if (p && p.reason === "ALL_APPLES") {
         self._coopWon = true;
+      }
+      // Freeze shared run clock for the post-match HUD
+      if (
+        self._coopFinalTimeMs == null &&
+        self._coopTimerStartedAtMs != null &&
+        Number.isFinite(Number(self._coopTimerStartedAtMs))
+      ) {
+        self._coopFinalTimeMs = Math.max(
+          0,
+          Date.now() - Number(self._coopTimerStartedAtMs)
+        );
       }
       if (typeof window !== "undefined") {
         window.__mpCoopAfterTick = null;
@@ -42024,6 +42894,26 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     });
     this.client.on(P.TYPES.SESSION_START, function (p) {
       self._log("SESSION_START", p && p.mode);
+      // Mid-match RESYNC: restore seats only — do not reset the live run
+      if (p && p.resync) {
+        if (p.mode === "coop" && Array.isArray(p.slots)) {
+          self._coopSlots = p.slots.slice();
+          self._coopSpawnOy = null;
+          if (self.coopNative && p.collectablesOwnerId) {
+            self.coopNative.collectablesOwnerId = p.collectablesOwnerId;
+          }
+          if (
+            self._coopSessionActive &&
+            !self._coopSpawnApplied &&
+            typeof self.trySeatCoopOnce === "function"
+          ) {
+            self.trySeatCoopOnce(
+              !!(typeof window !== "undefined" && window.__mpCoopSpectator)
+            );
+          }
+        }
+        return;
+      }
       // Block SETTINGS_SYNC from opening menus before PLAY_SYNC / triggerPlay
       if (typeof window !== "undefined") {
       window.__mpStartingMatch = true;
@@ -42048,6 +42938,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       self._coopTotal = 0;
       self._coopGoal = null;
       self._coopWon = false;
+      self._coopEndReason = null;
+      self._coopFinalTimeMs = null;
       if (self.client && self.client.roster) {
         self.client.roster.sessionActive = true;
         // Clear stale "no new runs" before PLAY_SYNC (ROSTER may arrive later)
@@ -42077,9 +42969,9 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         self._coopSpawnApplied = false;
         self._coopPlayerMoved = false;
         self._coopTimerArmed = false;
-        self._coopRunAccepted = false;
         self._coopColsFp = null;
         self._coopSpawnPose = null;
+        self._coopSpawnOy = null;
         // Timer arms on first move (COOP_TIMER_START), not at SESSION_START
         self._coopTimerStartedAtMs = null;
         if (typeof window !== "undefined") {
@@ -42810,6 +43702,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 
   MultiplayerApp.prototype.beginCoopNativeSession = function (opts) {
     opts = opts || {};
+    const self = this;
+    this._coopSessionGen = (this._coopSessionGen | 0) + 1;
     this._coopSessionActive = true;
     this._coopLastPoseFp = null;
     this._coopColorsSent = false;
@@ -42817,7 +43711,6 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     this._coopTimerArmed = false;
     this._coopTimerStartedAtMs = null;
     this._coopPlayerMoved = false;
-    this._coopRunAccepted = false;
     this._coopColsFp = null;
     this._coopIgnoreStartUntil = Date.now() + 2000;
     if (typeof window !== "undefined") {
@@ -42827,6 +43720,11 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       } else {
         window.__mpCoopLocalDead = false;
       }
+      window.__mpCoopOnBoardFull = function () {
+        if (typeof self.maybeCoopAllApples === "function") {
+          self.maybeCoopAllApples("board_full");
+        }
+      };
     }
     if (this.coopNative) {
       this.coopNative.sessionActive = true;
@@ -42836,13 +43734,10 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       this.coopNative.syncBridge();
     }
     // Native run clock starts when any player first moves (see armCoopRunTimer)
-    if (opts.spectator && Gsm.installSpectatorTimeKeeperGuard) {
-      Gsm.installSpectatorTimeKeeperGuard();
-    } else if (Gsm.installSpectatorTimeKeeperGuard) {
+    if (Gsm.installSpectatorTimeKeeperGuard) {
       Gsm.installSpectatorTimeKeeperGuard();
     }
 
-    const self = this;
     this._coopSpawnApplied = false;
     this._coopSpawnOy = null;
     // Pose publish on engine tick only after seated (or spectator)
@@ -42874,8 +43769,12 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         self.publishCoopState();
         // Any seated player may publish — key unlocks / soko pushes must sync
         // even when this client is not the fruit owner. Fingerprint dedupes.
+        // Wall growth is gated inside publishCoopCollectables (eater-only grow).
         if (!opts.spectator) self.publishCoopCollectables();
       };
+      // Idle engines never reach __mpCoopOnTick — keep peer poses flowing
+      window.__mpCoopLastTickAt = 0;
+      self.startCoopIdleSync();
       window.__mpCoopOnLocalReset = function () {
         self._killLocalCoopForReset();
       };
@@ -42894,48 +43793,64 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         }
       };
     }
-    // Seat when run is live; re-assert until body matches oy (native may clobber)
-    let tries = 0;
-    function trySpawnLoop() {
-      if (opts.spectator) {
-        self.applyCoopSpawnOrPark(true);
-        self.seedCoopRemotesFromSlots();
-        return;
-      }
-      const live = Gsm.isNativeRunLive ? Gsm.isNativeRunLive() : false;
-      const g = Gsm.gameInstance && Gsm.gameInstance();
-      if (live && g && g.oa) {
-        self.applyCoopSpawnOrPark(false);
-        self.seedCoopRemotesFromSlots();
-        if (self._bodyMatchesSpawnOy()) {
-          self._coopSpawnApplied = true;
-          self._coopSeatedPublish = true;
-          self._coopRunAccepted = true;
-          self.publishCoopState({ forceColors: true });
-          // Push wall/entity board immediately so peers collide with the same walls
-          self.publishCoopCollectables(true);
-          return;
-        }
-      }
-      tries++;
-      if (tries < 40) setTimeout(trySpawnLoop, 40);
-      else {
-        // Give up waiting — publish whatever we have so peers see something
-        self._coopSeatedPublish = true;
-        self.seedCoopRemotesFromSlots();
-        if (!opts.spectator) self.publishCoopState({ forceColors: true });
-      }
+    // Seat once when the native run is already live (startNativeRun onDone).
+    // If the body is clobbered later, __mpCoopAfterTick → _reassertCoopSpawnIfNeeded
+    // rewrites it; idle engines that never tick get a second chance from idle sync.
+    this.trySeatCoopOnce(!!opts.spectator);
+  };
+
+  /**
+   * One-shot co-op seat. Returns true when the local body is locked in place
+   * (or parked for spectators). Safe to call again; no-ops once seated.
+   */
+  MultiplayerApp.prototype.trySeatCoopOnce = function (spectator) {
+    if (!this._coopSessionActive) return false;
+    if (this._coopSpawnApplied) return true;
+    if (spectator || (typeof window !== "undefined" && window.__mpCoopSpectator)) {
+      this.applyCoopSpawnOrPark(true);
+      this.seedCoopRemotesFromSlots();
+      return true;
     }
-    setTimeout(trySpawnLoop, 20);
+    if (this._myCoopSlotIndex() == null || this._myCoopSpawnOy() == null) {
+      return false;
+    }
+    const live = Gsm.isNativeRunLive ? Gsm.isNativeRunLive() : false;
+    const g = Gsm.gameInstance && Gsm.gameInstance();
+    if (!live || !g || !g.oa) return false;
+
+    this.applyCoopSpawnOrPark(false);
+    this.seedCoopRemotesFromSlots();
+    if (this._bodyMatchesSpawnOy()) {
+      this._coopSpawnApplied = true;
+      this._coopSeatedPublish = true;
+      this.publishCoopState({ forceColors: true });
+      this.publishCoopCollectables(true);
+      return true;
+    }
+    // Wrote a seat but native may still settle — tick reassert finishes the lock
+    return false;
   };
 
   MultiplayerApp.prototype._myCoopSlotIndex = function () {
     const myId = this.client && this.client.clientId;
+    if (!myId) return null;
+    // Prefer SESSION_START / frozen slots list
     const slots = this._coopSlots || [];
     for (let i = 0; i < slots.length; i++) {
-      if (slots[i] && slots[i].clientId === myId) return i;
+      if (slots[i] && slots[i].clientId === myId) {
+        return slots[i].slot != null ? Number(slots[i].slot) | 0 : i;
+      }
     }
-    return 0;
+    // Roster fallback (same server numbers)
+    const roster = this.client && this.client.roster;
+    const clients = (roster && roster.clients) || [];
+    for (let j = 0; j < clients.length; j++) {
+      const c = clients[j];
+      if (c && c.clientId === myId && c.coopSlot != null) {
+        return Number(c.coopSlot) | 0;
+      }
+    }
+    return null;
   };
 
   MultiplayerApp.prototype._coopSpawnPoseFor = function (slotIndex, oy, width, height) {
@@ -42963,6 +43878,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
   MultiplayerApp.prototype._applyMyCoopSpawn = function () {
     const oy = this._myCoopSpawnOy();
     const slot = this._myCoopSlotIndex();
+    if (slot == null || oy == null) return false;
     // Let applyCoopSpawnOffset read live engine size — do not pass a pose
     // built against classic 17×15 defaults (small boards OOB → fake walls).
     if (Gsm.applyCoopSpawnOffset) {
@@ -42986,15 +43902,32 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     const slots = this._coopSlots || [];
     for (let i = 0; i < slots.length; i++) {
       if (slots[i] && slots[i].clientId === myId) {
-        this._coopSpawnOy = slots[i].oy != null ? Number(slots[i].oy) : 0;
+        if (slots[i].oy != null) {
+          this._coopSpawnOy = Number(slots[i].oy);
+          return this._coopSpawnOy;
+        }
+        // Roster may lack oy — derive from slot count like the server
+        const n = slots.length;
+        const offsets =
+          n === 2
+            ? [-1, 1]
+            : n === 3
+              ? [0, 3, -2]
+              : n === 4
+                ? [-1, 1, -4, 4]
+                : [0];
+        const idx = slots[i].slot != null ? Number(slots[i].slot) | 0 : i;
+        this._coopSpawnOy = offsets[idx] != null ? offsets[idx] : 0;
         return this._coopSpawnOy;
       }
     }
-    this._coopSpawnOy = 0;
-    return 0;
+    return null;
   };
 
   MultiplayerApp.prototype._bodyMatchesSpawnOy = function () {
+    if (this._myCoopSlotIndex() == null || this._myCoopSpawnOy() == null) {
+      return false;
+    }
     const g = Gsm.gameInstance && Gsm.gameInstance();
     const body = g && g.oa && g.oa.ka;
     if (!body || !body.length) return false;
@@ -43160,10 +44093,11 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       return;
     }
     this._applyMyCoopSpawn();
-    // Do not lock _coopSpawnApplied yet — beginCoopNativeSession reasserts until match
+    // Lock happens in trySeatCoopOnce / _reassertCoopSpawnIfNeeded when the body matches
   };
 
   MultiplayerApp.prototype.endCoopNativeSession = function () {
+    this._coopSessionGen = (this._coopSessionGen | 0) + 1;
     this._coopSessionActive = false;
     this._coopDeadSent = false;
     this._coopSpawnApplied = false;
@@ -43186,25 +44120,77 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       window.__mpCoopAfterTick = null;
       window.__mpCoopFlushPendingDeltas = null;
       window.__mpCoopOnFriendlyDeath = null;
+      window.__mpCoopOnBoardFull = null;
+      window.__mpCoopOnLocalReset = null;
+      window.__mpLastCoopSpawnPose = null;
+      window.__mpCoopBoardFull = false;
       window.__mpCoopPlayerRenderer = null;
       window.__mpCoopRenderArgs = null;
+      window.__mpCoopLastTickAt = 0;
       if (window.__mpCoopStopCorpsePaint) window.__mpCoopStopCorpsePaint();
     }
     this._pendingCoopSnakeDeltas = null;
+    this.stopCoopIdleSync();
+    this._stopCoopHudTick();
     this.stopCoopNativeLoop();
-    if (this._coopSyncTimer) {
-      clearInterval(this._coopSyncTimer);
-      this._coopSyncTimer = null;
-    }
     if (Gsm.restoreDeathScreen) Gsm.restoreDeathScreen();
     if (this.coopNative) this.coopNative.reset();
   };
 
-  /** @deprecated Pose publish is tick-driven via __mpCoopAfterTick. */
-  MultiplayerApp.prototype.startCoopSyncTimer = function () {
-    if (this._coopSyncTimer) {
-      clearInterval(this._coopSyncTimer);
-      this._coopSyncTimer = null;
+  /** Is the local engine ticking? Idle spawns and spectators are not. */
+  MultiplayerApp.prototype.coopTicksRunning = function () {
+    if (typeof window === "undefined") return false;
+    if (typeof window.__mpCoopTicksRunning !== "function") return false;
+    try {
+      return !!window.__mpCoopTicksRunning();
+    } catch (e) {
+      return false;
+    }
+  };
+
+  /**
+   * Keep the shared board live for a player whose engine is not ticking: still
+   * waiting on their first key, or spectating. Also finishes a one-shot seat if
+   * begin ran before the slot/engine was ready (no poll loop).
+   */
+  MultiplayerApp.prototype.coopIdleSyncStep = function () {
+    if (!this._coopSessionActive) return false;
+    if (typeof window === "undefined") return false;
+    let did = false;
+    if (!this._coopSpawnApplied) {
+      did = !!this.trySeatCoopOnce(
+        !!(window.__mpCoopSpectator)
+      );
+    }
+    if (this.coopTicksRunning()) return did;
+    const pending = this._pendingCoopSnakeDeltas;
+    if (!pending || !Object.keys(pending).length) return did;
+    if (typeof window.__mpCoopFlushPendingDeltas === "function") {
+      window.__mpCoopFlushPendingDeltas();
+      return true;
+    }
+    return did;
+  };
+
+  MultiplayerApp.prototype.startCoopIdleSync = function () {
+    this.stopCoopIdleSync();
+    if (typeof setInterval !== "function") return;
+    const self = this;
+    const timer = setInterval(function () {
+      try {
+        self.coopIdleSyncStep();
+      } catch (e) {
+        console.warn("coopIdleSyncStep", e);
+      }
+    }, COOP_IDLE_SYNC_MS);
+    if (timer && typeof timer.unref === "function") timer.unref();
+    this._coopIdleSyncTimer = timer;
+  };
+
+  MultiplayerApp.prototype.stopCoopIdleSync = function () {
+    if (this._coopIdleSyncTimer) {
+      clearInterval(this._coopIdleSyncTimer);
+      this._coopIdleSyncTimer = null;
     }
   };
 
@@ -43280,9 +44266,10 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
   /** Idempotent: start native TimeKeeper from shared wall-clock epoch. */
   MultiplayerApp.prototype.armCoopRunTimer = function (startedAtMs) {
     if (this._coopTimerArmed) return;
-    if (typeof window !== "undefined" && window.__mpCoopSpectator) return;
     const me = this.client && this.client.me && this.client.me();
-    if (me && me.role === "spectator") return;
+    const isSpectator =
+      !!(typeof window !== "undefined" && window.__mpCoopSpectator) ||
+      !!(me && me.role === "spectator");
     const t =
       startedAtMs != null && Number.isFinite(Number(startedAtMs))
         ? Number(startedAtMs)
@@ -43290,22 +44277,58 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     this._coopTimerArmed = true;
     this._coopTimerStartedAtMs = t;
     this._coopPlayerMoved = true;
-    if (Gsm.startCoopRunTimer) {
+    if (!isSpectator && Gsm.startCoopRunTimer) {
       Gsm.startCoopRunTimer({
         timerStartedAtMs: t,
         maxAttempts: 40,
         intervalMs: 50,
       });
     }
+    if (this.ui && this.ui.updateHud) this.ui.updateHud(this);
+    this._ensureCoopHudTick();
+    if (isSpectator) return;
     // Peers who are still idle start crawling on the shared first-move signal
-    const pose = this._coopSpawnPose || this._coopSpawnPoseFor(this._myCoopSlotIndex(), this._myCoopSpawnOy());
+    const pose = this._coopSpawnPose;
+    if (!pose) {
+      const slot = this._myCoopSlotIndex();
+      const oy = this._myCoopSpawnOy();
+      if (slot == null || oy == null) return;
+      this._coopSpawnPose = this._coopSpawnPoseFor(slot, oy);
+    }
     if (Gsm.applyCoopStartMoving) {
-      Gsm.applyCoopStartMoving(pose && pose.dir);
+      Gsm.applyCoopStartMoving(
+        (this._coopSpawnPose && this._coopSpawnPose.dir) || undefined
+      );
+    }
+  };
+
+  /** Keep the co-op HUD clock advancing between pose publishes. */
+  MultiplayerApp.prototype._ensureCoopHudTick = function () {
+    if (this._coopHudTimer) return;
+    if (typeof setInterval !== "function") return;
+    const self = this;
+    this._coopHudTimer = setInterval(function () {
+      if (!self._coopSessionActive || self._coopTimerStartedAtMs == null) {
+        self._stopCoopHudTick();
+        return;
+      }
+      if (self.ui && self.ui.updateHud) self.ui.updateHud(self);
+    }, 200);
+    if (this._coopHudTimer && typeof this._coopHudTimer.unref === "function") {
+      this._coopHudTimer.unref();
+    }
+  };
+
+  MultiplayerApp.prototype._stopCoopHudTick = function () {
+    if (this._coopHudTimer) {
+      clearInterval(this._coopHudTimer);
+      this._coopHudTimer = null;
     }
   };
 
   /** Eater publishes full native fruit board after collect (shared spawn rules). */
-  MultiplayerApp.prototype.publishCoopCollectables = function (force) {
+  MultiplayerApp.prototype.publishCoopCollectables = function (force, opts) {
+    opts = opts || {};
     if (!this.client || !this.client.connected) return;
     if (!this._coopSessionActive) return;
     if (!this.client.roster || !this.client.roster.sessionActive) return;
@@ -43327,6 +44350,44 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       ) {
         this.maybeCoopAllApples("board_full");
       }
+    }
+    // Wall growth: only the post-eat publisher may grow the wall list. Peers
+    // publish other entity changes but must not shrink/grow regular walls.
+    const wallGrow = !!opts.wallGrow || !!this._coopWallGrowArmed;
+    this._coopWallGrowArmed = false;
+    const prevWalls = this._coopLastWallCount;
+    const nextWalls = Array.isArray(cols.walls) ? cols.walls.length : 0;
+    if (
+      !wallGrow &&
+      prevWalls != null &&
+      nextWalls < prevWalls &&
+      Array.isArray(cols.walls)
+    ) {
+      // Keep last known wall count by reusing prior scrape walls if present
+      if (this._coopLastWalls) cols.walls = this._coopLastWalls;
+    }
+    if (wallGrow || prevWalls == null || nextWalls >= (prevWalls | 0)) {
+      this._coopLastWallCount = nextWalls;
+      this._coopLastWalls = Array.isArray(cols.walls)
+        ? cols.walls.map(function (w) {
+            return w ? Object.assign({}, w) : w;
+          })
+        : null;
+    }
+    // Slot Machine roll — ship so peers can activate the same badge
+    try {
+      if (
+        typeof window !== "undefined" &&
+        window.__slotActive != null &&
+        Number.isFinite(Number(window.__slotActive))
+      ) {
+        cols.slotActive = Number(window.__slotActive) | 0;
+      }
+    } catch (eSlot) { /* ignore */ }
+    // Winged: seed pos+He only on forced publishes (seat / eat); peers trust motion
+    if (Gsm.isCoopFruitMotionMode && Gsm.isCoopFruitMotionMode()) {
+      cols.fruitMotionTrust = true;
+      if (force) cols.fruitMotionSeed = true;
     }
     const fp =
       Gsm.collectablesFingerprint && Gsm.collectablesFingerprint(cols);
@@ -43444,14 +44505,6 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       cancelAnimationFrame(this._coopPaintRaf);
       this._coopPaintRaf = 0;
     }
-    if (this.coopNative && this.coopNative.stopOverlay) {
-      this.coopNative.stopOverlay();
-    }
-  };
-
-  /** Soft collision retired — remotes collide inside __mpCoopOnTick. */
-  MultiplayerApp.prototype.maybeCoopCrossCollision = function () {
-    // no-op (true inject)
   };
 
   MultiplayerApp.prototype._killLocalCoopForReset = function () {
@@ -43509,7 +44562,6 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
             self._coopIgnoreStartUntil &&
             Date.now() < self._coopIgnoreStartUntil
           ) {
-            self._coopRunAccepted = true;
             return;
           }
           if (!self._coopDeadSent) self._killLocalCoopForReset();
@@ -43536,7 +44588,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
               window.__mpCoopSkipFruitReapply = true;
             }
             setTimeout(function () {
-              self.publishCoopCollectables();
+              self._coopWallGrowArmed = true;
+              self.publishCoopCollectables(true, { wallGrow: true });
               if (typeof self.refreshCoopScores === "function") {
                 self.refreshCoopScores();
               }
@@ -43697,7 +44750,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
             ? Number(self._versusRunStartedAtMs)
             : undefined,
       });
-    }, 800);
+    }, 250);
   };
 
   MultiplayerApp.prototype._pulseScore = function (score, timeMs, alive, extra) {

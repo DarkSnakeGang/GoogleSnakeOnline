@@ -275,19 +275,22 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 .mp-hud .mp-hud-meta{opacity:.85;margin:2px 0}
 .mp-color-icon{width:28px;height:28px;border-radius:6px;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.3)}
 #mp-mosaic{
-  position:fixed;left:50%;top:12px;transform:translateX(-50%);
+  position:fixed;inset:0;left:0;top:0;right:0;bottom:0;
   z-index:9996;display:none;
-  gap:10px;padding:10px;background:rgba(0,0,0,.45);border-radius:10px;
-  max-width:min(96vw,1100px);max-height:58vh;overflow:auto;
-  box-sizing:border-box;
+  gap:10px;padding:10px;background:rgba(0,0,0,.55);border-radius:0;
+  width:100vw;height:100vh;max-width:100vw;max-height:100vh;
+  overflow:hidden;box-sizing:border-box;
+  justify-content:center;align-content:center;
 }
 #mp-mosaic .mp-mosaic-cell{
   position:relative;cursor:pointer;
-  display:flex;flex-direction:column;align-items:stretch;gap:4px;
+  display:flex;flex-direction:column;align-items:center;gap:4px;
+  min-width:0;min-height:0;
 }
 #mp-mosaic .mp-mosaic-cell canvas{
   display:block;border-radius:4px;background:transparent;cursor:pointer;
-  box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none;width:100%;height:auto;
+  box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none;
+  width:auto;height:auto;max-width:100%;
 }
 #mp-mosaic .mp-mosaic-cell .mp-mosaic-label{
   position:static;
@@ -750,13 +753,14 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     const readyBtn = themedBtn("Ready");
     readyBtn.id = "mp-ready";
     playerBox.appendChild(readyBtn);
-    playerBox.appendChild(
-      el(
-        "div",
-        "mp-status",
-        "Co-op: pick your snake color in the in-game color row (unique)."
-      )
+    const colorHint = el(
+      "div",
+      "mp-status hidden",
+      "Co-op: pick your snake color in the in-game color row (unique)."
     );
+    colorHint.id = "mp-coop-color-hint";
+    colorHint.style.display = "none";
+    playerBox.appendChild(colorHint);
     panelMatch.appendChild(playerBox);
 
     const matchHint = el(
@@ -842,7 +846,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           .connect({
             url: urlIn.value.trim() || "ws://127.0.0.1:7777/ws",
             displayName: nameIn.value.trim(),
-            roomCode: roomIn.value.trim(),
+            // Codes are uppercase on the wire; an unused one opens a new room
+            roomCode: roomIn.value.trim().toUpperCase(),
             create: !roomIn.value.trim(),
           })
           .then(function (welcome) {
@@ -869,12 +874,16 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       paintModeButtons("versus");
       finishOngoingWrap.classList.remove("hidden");
       finishOngoingWrap.style.display = "";
+      colorHint.classList.add("hidden");
+      colorHint.style.display = "none";
       self.app.client && self.app.client.setMode("versus");
     };
     coopBtn.onclick = function () {
       paintModeButtons("coop");
       finishOngoingWrap.classList.add("hidden");
       finishOngoingWrap.style.display = "none";
+      colorHint.classList.remove("hidden");
+      colorHint.style.display = "";
       self.app.client && self.app.client.setMode("coop");
     };
     dur.onchange = function () {
@@ -938,17 +947,20 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       goalSel.value = g;
       lsSet("MULTIPLAYER_VERSUS_GOAL", g);
       if (self.app.client.setVersusGoal) self.app.client.setVersusGoal(g);
-      const finishOngoing = !!finishOngoingCb.checked;
-      lsSet(
-        "MULTIPLAYER_VERSUS_FINISH_ONGOING",
-        finishOngoing ? "1" : "0"
-      );
       // Bundle match rules into SESSION_START so co-op/versus peers apply
       // trophy/count/speed/size quietly under __mpStartingMatch (no menu open).
       const snap =
         self.app.syncMySettingsAsAdmin && self.app.syncMySettingsAsAdmin();
       const startPayload = snap ? { settings: snap } : {};
-      startPayload.finishOngoingRuns = finishOngoing;
+      // finishOngoingRuns is versus-only (checkbox hidden in co-op).
+      if (roster.mode === "versus") {
+        const finishOngoing = !!finishOngoingCb.checked;
+        lsSet(
+          "MULTIPLAYER_VERSUS_FINISH_ONGOING",
+          finishOngoing ? "1" : "0"
+        );
+        startPayload.finishOngoingRuns = finishOngoing;
+      }
       self.app.client.sessionStart(startPayload);
       const st = document.getElementById("mp-status");
       if (st) st.textContent = "Starting match…";
@@ -1203,6 +1215,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       }
       finishOngoingWrap.classList.toggle("hidden", !showVersusOpts);
       finishOngoingWrap.style.display = showVersusOpts ? "" : "none";
+      colorHint.classList.toggle("hidden", !isCoop);
+      colorHint.style.display = isCoop ? "" : "none";
       if (
         showVersusOpts &&
         rosterData.finishOngoingRuns != null &&
@@ -1408,6 +1422,16 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         const ds = colorDotStyle(c.colorId);
         if (ds) dot.style.cssText = ds;
         nameRow.appendChild(dot);
+        if (
+          isCoop &&
+          c.role === "player" &&
+          c.playerNumber != null &&
+          Number.isFinite(Number(c.playerNumber))
+        ) {
+          nameRow.appendChild(
+            el("span", "mp-chip mp-chip-player", "P" + (Number(c.playerNumber) | 0))
+          );
+        }
         nameRow.appendChild(
           el("span", null, c.resolvedName || c.displayName || c.clientId.slice(0, 8))
         );
@@ -1532,7 +1556,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       );
     }
 
-    // Co-op panel: combined score + per-player lives
+    // Co-op panel: combined score + shared run clock + per-player lives
     if (r.mode === "coop") {
       if (!r.sessionActive && !(app._coopTotal > 0)) {
         this.hud.style.display = "none";
@@ -1546,19 +1570,42 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
             ? app.ensureCoopAppleGoal()
             : "—";
       const total = app._coopTotal != null ? app._coopTotal : 0;
+      let runMs = null;
+      if (
+        app._coopFinalTimeMs != null &&
+        Number.isFinite(Number(app._coopFinalTimeMs))
+      ) {
+        runMs = Math.max(0, Number(app._coopFinalTimeMs));
+      } else if (
+        app._coopTimerStartedAtMs != null &&
+        Number.isFinite(Number(app._coopTimerStartedAtMs))
+      ) {
+        runMs = Math.max(0, Date.now() - Number(app._coopTimerStartedAtMs));
+      }
+      const clock =
+        runMs != null ? " · " + formatMs(runMs) : "";
       let html = "<h4>CO-OP</h4>";
       html +=
         '<div class="mp-hud-meta">Team score: <strong>' +
         total +
         "</strong> / " +
         goal +
+        clock +
         "</div>";
       if (r.sessionActive) {
         html += '<div class="mp-hud-meta">Fill the board together</div>';
-      } else if (app._coopWon) {
-        html += '<div class="mp-hud-winner">All apples!</div>';
       } else {
-        html += '<div class="mp-hud-meta">Match over</div>';
+        const reason = app._coopEndReason || (app._coopWon ? "ALL_APPLES" : null);
+        let endCopy = "Match over";
+        if (reason === "ALL_APPLES") endCopy = "All apples!";
+        else if (reason === "ALL_DEAD") endCopy = "All snakes down";
+        else if (reason === "aborted") endCopy = "Ended by admin";
+        html +=
+          '<div class="' +
+          (reason === "ALL_APPLES" ? "mp-hud-winner" : "mp-hud-meta") +
+          '">' +
+          endCopy +
+          "</div>";
       }
       const scores = app._coopScores || {};
       clients

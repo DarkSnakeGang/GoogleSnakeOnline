@@ -55,10 +55,50 @@
     return m.threshold != null ? m.threshold : null;
   };
 
+  function scoreOf(sc) {
+    if (!sc) return 0;
+    if (sc.bestScore != null) return Number(sc.bestScore) || 0;
+    return Number(sc.score) || 0;
+  }
+
+  /** Time at which a player reached their best score (null when unknown). */
+  function bestScoreTimeOf(sc) {
+    const t = sc && sc.bestScoreTimeMs;
+    if (t == null || !Number.isFinite(Number(t)) || Number(t) <= 0) return null;
+    return Number(t);
+  }
+
+  /** Highest score first, then the player who got there fastest. */
+  function compareScoreThenFastest(sa, sb) {
+    const diff = scoreOf(sb) - scoreOf(sa);
+    if (diff !== 0) return diff;
+    const ta = bestScoreTimeOf(sa);
+    const tb = bestScoreTimeOf(sb);
+    if (ta == null && tb == null) return 0;
+    if (ta == null) return 1;
+    if (tb == null) return -1;
+    return ta - tb;
+  }
+
+  /** Best scorer (fastest on ties) — the fallback when nobody hits a timed goal. */
+  function pickTopScorer(map, ids) {
+    let bestId = null;
+    ids.forEach(function (id) {
+      const sc = map[id];
+      if (!sc) return;
+      if (!scoreOf(sc) && !(sc.score > 0)) return;
+      if (bestId == null || compareScoreThenFastest(sc, map[bestId]) < 0) {
+        bestId = id;
+      }
+    });
+    return bestId;
+  }
+
   /**
    * Pick leader/winner from local score map for the active goal.
    * Score → highest bestScore (tie: longer bestTimeMs).
-   * Timed → fastest bestGoalTimeMs among completions.
+   * Timed → fastest bestGoalTimeMs among completions; if nobody completed the
+   * goal, the highest score wins, with the fastest time to it breaking ties.
    */
   VersusState.pickLeader = function (scores, goal) {
     const map = scores || {};
@@ -79,7 +119,7 @@
           bestId = id;
         }
       });
-      return bestId;
+      return bestId || pickTopScorer(map, ids);
     }
 
     let bestId = null;
@@ -115,7 +155,12 @@
     const g = VersusState.normalizeGoal(goal);
     if (VersusState.isTimedGoal(g)) {
       if (sc.bestGoalTimeMs == null) {
-        return sc.goalCompleted ? "done" : "not yet";
+        if (sc.goalCompleted) return "done";
+        // Goal not reached — show the score that counts instead, plus how fast
+        const s = scoreOf(sc);
+        if (!s) return "not yet";
+        const t = bestScoreTimeOf(sc);
+        return s + " apples" + (t != null ? " (" + formatMs(t) + ")" : "");
       }
       return formatMs(sc.bestGoalTimeMs);
     }
@@ -126,7 +171,8 @@
 
   /**
    * Rank clientIds by active goal (best first). Timed: completed by fastest
-   * bestGoalTimeMs; Score: highest bestScore (tie → longer bestTimeMs).
+   * bestGoalTimeMs, then everyone else by highest score / fastest time to it;
+   * Score: highest bestScore (tie → longer bestTimeMs).
    */
   VersusState.rankPlayers = function (scores, goal) {
     const map = scores || {};
@@ -143,9 +189,7 @@
         if (ca && cb) {
           return Number(sa.bestGoalTimeMs) - Number(sb.bestGoalTimeMs);
         }
-        const aScore = sa.bestScore != null ? Number(sa.bestScore) : Number(sa.score) || 0;
-        const bScore = sb.bestScore != null ? Number(sb.bestScore) : Number(sb.score) || 0;
-        return bScore - aScore;
+        return compareScoreThenFastest(sa, sb);
       }
       const aScore = sa.bestScore != null ? Number(sa.bestScore) : Number(sa.score) || 0;
       const bScore = sb.bestScore != null ? Number(sb.bestScore) : Number(sb.score) || 0;
@@ -191,6 +235,7 @@
       alive: payload.alive,
       bestScore: payload.bestScore,
       bestTimeMs: payload.bestTimeMs,
+      bestScoreTimeMs: payload.bestScoreTimeMs,
       bestGoalTimeMs: payload.bestGoalTimeMs,
       goalCompleted: !!payload.goalCompleted,
     };
@@ -203,8 +248,9 @@
   };
 
   /**
-   * Mosaic timers arm once at run start (runStartedAtMs) and tick locally.
-   * Apple / periodic timeMs pulses must not jump the live clock.
+   * Mosaic/Focus run clocks track each player's in-game timer (ticks×Fb).
+   * SCORE_PULSE / BOARD_DELTA re-anchor liveMs; labels show that value so the
+   * clock advances on the same cadence as the on-screen run timer.
    */
   VersusState.prototype._applyRunClockPulse = function (payload) {
     if (!payload || !payload.clientId) return;
@@ -213,8 +259,11 @@
     const prev = this.runClocks[id] || {};
     const next = {
       startedAtMs: prev.startedAtMs != null ? prev.startedAtMs : null,
+      liveMs: prev.liveMs != null ? prev.liveMs : null,
+      syncedAtMs: prev.syncedAtMs != null ? prev.syncedAtMs : null,
       frozenMs: prev.frozenMs != null ? prev.frozenMs : null,
     };
+    const now = Date.now();
     if (
       payload.runStartedAtMs != null &&
       Number.isFinite(Number(payload.runStartedAtMs))
@@ -223,26 +272,37 @@
       if (next.startedAtMs !== started) {
         next.startedAtMs = started;
         next.frozenMs = null;
+        next.liveMs = 0;
+        next.syncedAtMs = now;
       }
     }
+    const timeOk =
+      payload.timeMs != null && Number.isFinite(Number(payload.timeMs));
+    const timeMs = timeOk ? Math.max(0, Number(payload.timeMs)) : null;
     if (payload.alive === false) {
-      if (
-        payload.timeMs != null &&
-        Number.isFinite(Number(payload.timeMs))
-      ) {
-        next.frozenMs = Number(payload.timeMs);
-      } else if (next.startedAtMs != null && next.frozenMs == null) {
-        next.frozenMs = Math.max(0, Date.now() - next.startedAtMs);
+      if (timeMs != null) next.frozenMs = timeMs;
+      else if (next.frozenMs == null) {
+        next.frozenMs = VersusState.resolveRunClockMs(next, now, 0) || 0;
+      }
+    } else {
+      // Live again — never keep a death freeze across a new / continuing run
+      next.frozenMs = null;
+      if (timeMs != null) {
+        next.liveMs = timeMs;
+        next.syncedAtMs = now;
       }
     }
     this.runClocks[id] = next;
   };
 
-  /** Elapsed ms for mosaic labels: local tick from start, or frozen on death. */
+  /** Elapsed ms for mosaic labels: frozen death time, or last live in-game sync. */
   VersusState.resolveRunClockMs = function (clock, nowMs, fallbackMs) {
     if (clock) {
       if (clock.frozenMs != null && Number.isFinite(Number(clock.frozenMs))) {
         return Math.max(0, Number(clock.frozenMs));
+      }
+      if (clock.liveMs != null && Number.isFinite(Number(clock.liveMs))) {
+        return Math.max(0, Number(clock.liveMs));
       }
       if (
         clock.startedAtMs != null &&
@@ -339,7 +399,7 @@
     this.winnerClientId = null;
   };
 
-  /** Format a player's run timer (SpeedInfo-style). */
+  /** Format a player's run timer (SpeedInfo-style hundredths). */
   VersusState.formatRunClock = function (ms) {
     if (ms == null || !Number.isFinite(Number(ms))) return "—";
     const total = Math.max(0, Math.floor(Number(ms)));
@@ -347,11 +407,12 @@
     if (total > 24 * 60 * 60 * 1000) return "—";
     const m = Math.floor(total / 60000);
     const s = Math.floor((total % 60000) / 1000);
-    const tenths = Math.floor((total % 1000) / 100);
+    const hundredths = Math.floor((total % 1000) / 10);
+    const frac = String(hundredths).padStart(2, "0");
     if (m > 0) {
-      return m + ":" + String(s).padStart(2, "0") + "." + tenths;
+      return m + ":" + String(s).padStart(2, "0") + "." + frac;
     }
-    return s + "." + tenths + "s";
+    return s + "." + frac + "s";
   };
 
   /** Format remaining attempt time as MM:SS. */
@@ -371,6 +432,15 @@
     const id = payload.clientId;
     const board = payload.board || payload;
     if (id) this.boards[id] = board;
+    // Board scrapes carry live ticks×Fb — keep mosaic clocks aligned every tick
+    if (id && board && typeof this._applyRunClockPulse === "function") {
+      this._applyRunClockPulse({
+        clientId: id,
+        timeMs: board.timeMs,
+        alive: board.alive !== false,
+        runStartedAtMs: board.runStartedAtMs,
+      });
+    }
   };
 
   VersusState.prototype.onBoardSnapshot = function (payload) {

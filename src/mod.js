@@ -12,6 +12,9 @@
   const Colors = root.MultiplayerColors;
   const Mp = root.MultiplayerRuntime;
 
+  /** Idle board-sync poll — tighter than a tick so a waiting player keeps up. */
+  const COOP_IDLE_SYNC_MS = 100;
+
   function MultiplayerApp() {
     this.client = null;
     this.versus = new VersusState();
@@ -20,7 +23,7 @@
     this.ui = new UI(this);
     this._boardTimer = null;
     this._scoreTimer = null;
-    this._coopSyncTimer = null;
+    this._coopIdleSyncTimer = null;
     this._coopPaintRaf = 0;
     this._focusCanvas = null;
     this._mosaicEl = null;
@@ -28,7 +31,9 @@
     this._coopPaused = false;
     this._nativeCanvasHidden = false;
     this._coopSessionActive = false;
+    this._coopSessionGen = 0;
     this._coopDeadSent = false;
+    this._coopSlots = [];
     this._statusEl = null;
     this._lastModeLabel = "—";
   }
@@ -287,7 +292,7 @@
     this.ui.updateHud(this);
   };
 
-  /** Mosaic clocks tick locally from runStartedAtMs — refresh labels without board redraw. */
+  /** Mosaic clocks follow live ticks×Fb from board/score pulses — refresh labels often. */
   MultiplayerApp.prototype._ensureMosaicLabelTick = function () {
     if (this._mosaicLabelTimer) return;
     const self = this;
@@ -301,7 +306,7 @@
       if (typeof self.renderMosaic === "function") {
         self.renderMosaic({ labelsOnly: true });
       }
-    }, 200);
+    }, 50);
   };
 
   MultiplayerApp.prototype._stopMosaicLabelTick = function () {
@@ -333,6 +338,42 @@
     this.client.on(P.TYPES.ROSTER, function (p) {
       self.versus.syncFromRoster(p);
       self.ui.updateHud(self);
+      // Prefer server-issued co-op seats from the roster (survives resync)
+      if (p && p.mode === "coop" && Array.isArray(p.clients)) {
+        const fromRoster = [];
+        for (let i = 0; i < p.clients.length; i++) {
+          const c = p.clients[i];
+          if (!c || c.role !== "player" || c.coopSlot == null) continue;
+          fromRoster.push({
+            clientId: c.clientId,
+            slot: Number(c.coopSlot) | 0,
+            oy: null,
+            playerNumber:
+              c.playerNumber != null
+                ? Number(c.playerNumber) | 0
+                : (Number(c.coopSlot) | 0) + 1,
+          });
+        }
+        fromRoster.sort(function (a, b) {
+          return a.slot - b.slot;
+        });
+        if (fromRoster.length) {
+          // Preserve oy from SESSION_START slots when present
+          const prev = self._coopSlots || [];
+          for (let j = 0; j < fromRoster.length; j++) {
+            const match = prev.find(function (s) {
+              return s && s.clientId === fromRoster[j].clientId;
+            });
+            if (match && match.oy != null) fromRoster[j].oy = match.oy;
+          }
+          self._coopSlots = fromRoster;
+          self._coopSpawnOy = null;
+          // Late roster seats: try seating once if the match already started
+          if (self._coopSessionActive && !self._coopSpawnApplied) {
+            self.trySeatCoopOnce(!!(typeof window !== "undefined" && window.__mpCoopSpectator));
+          }
+        }
+      }
       const me = self.client.me();
       const prevRole = self._lastMyRole;
       const nextRole = me && me.role;
@@ -505,11 +546,14 @@
       if (p.timerArm || p.timerStartedAtMs != null) {
         self.armCoopRunTimer(p.timerStartedAtMs);
       }
-      // During a live co-op session, coalesce latest pose per peer (apply on tick)
+      // During a live co-op session, coalesce latest pose per peer (apply on
+      // tick) — but only while this engine actually ticks. An idle spawn or a
+      // spectator never ticks, and queued poses there froze the shared board.
       if (
         self._coopSessionActive &&
         typeof window !== "undefined" &&
-        typeof window.__mpCoopFlushPendingDeltas === "function"
+        typeof window.__mpCoopFlushPendingDeltas === "function" &&
+        self.coopTicksRunning()
       ) {
         if (!self._pendingCoopSnakeDeltas) {
           self._pendingCoopSnakeDeltas = Object.create(null);
@@ -695,8 +739,20 @@
         self.client.roster.sessionActive = false;
       }
       self._coopSessionActive = false;
+      self._coopEndReason = (p && p.reason) || null;
       if (p && p.reason === "ALL_APPLES") {
         self._coopWon = true;
+      }
+      // Freeze shared run clock for the post-match HUD
+      if (
+        self._coopFinalTimeMs == null &&
+        self._coopTimerStartedAtMs != null &&
+        Number.isFinite(Number(self._coopTimerStartedAtMs))
+      ) {
+        self._coopFinalTimeMs = Math.max(
+          0,
+          Date.now() - Number(self._coopTimerStartedAtMs)
+        );
       }
       if (typeof window !== "undefined") {
         window.__mpCoopAfterTick = null;
@@ -733,6 +789,26 @@
     });
     this.client.on(P.TYPES.SESSION_START, function (p) {
       self._log("SESSION_START", p && p.mode);
+      // Mid-match RESYNC: restore seats only — do not reset the live run
+      if (p && p.resync) {
+        if (p.mode === "coop" && Array.isArray(p.slots)) {
+          self._coopSlots = p.slots.slice();
+          self._coopSpawnOy = null;
+          if (self.coopNative && p.collectablesOwnerId) {
+            self.coopNative.collectablesOwnerId = p.collectablesOwnerId;
+          }
+          if (
+            self._coopSessionActive &&
+            !self._coopSpawnApplied &&
+            typeof self.trySeatCoopOnce === "function"
+          ) {
+            self.trySeatCoopOnce(
+              !!(typeof window !== "undefined" && window.__mpCoopSpectator)
+            );
+          }
+        }
+        return;
+      }
       // Block SETTINGS_SYNC from opening menus before PLAY_SYNC / triggerPlay
       if (typeof window !== "undefined") {
       window.__mpStartingMatch = true;
@@ -757,6 +833,8 @@
       self._coopTotal = 0;
       self._coopGoal = null;
       self._coopWon = false;
+      self._coopEndReason = null;
+      self._coopFinalTimeMs = null;
       if (self.client && self.client.roster) {
         self.client.roster.sessionActive = true;
         // Clear stale "no new runs" before PLAY_SYNC (ROSTER may arrive later)
@@ -786,9 +864,9 @@
         self._coopSpawnApplied = false;
         self._coopPlayerMoved = false;
         self._coopTimerArmed = false;
-        self._coopRunAccepted = false;
         self._coopColsFp = null;
         self._coopSpawnPose = null;
+        self._coopSpawnOy = null;
         // Timer arms on first move (COOP_TIMER_START), not at SESSION_START
         self._coopTimerStartedAtMs = null;
         if (typeof window !== "undefined") {
@@ -1519,6 +1597,8 @@
 
   MultiplayerApp.prototype.beginCoopNativeSession = function (opts) {
     opts = opts || {};
+    const self = this;
+    this._coopSessionGen = (this._coopSessionGen | 0) + 1;
     this._coopSessionActive = true;
     this._coopLastPoseFp = null;
     this._coopColorsSent = false;
@@ -1526,7 +1606,6 @@
     this._coopTimerArmed = false;
     this._coopTimerStartedAtMs = null;
     this._coopPlayerMoved = false;
-    this._coopRunAccepted = false;
     this._coopColsFp = null;
     this._coopIgnoreStartUntil = Date.now() + 2000;
     if (typeof window !== "undefined") {
@@ -1536,6 +1615,11 @@
       } else {
         window.__mpCoopLocalDead = false;
       }
+      window.__mpCoopOnBoardFull = function () {
+        if (typeof self.maybeCoopAllApples === "function") {
+          self.maybeCoopAllApples("board_full");
+        }
+      };
     }
     if (this.coopNative) {
       this.coopNative.sessionActive = true;
@@ -1545,13 +1629,10 @@
       this.coopNative.syncBridge();
     }
     // Native run clock starts when any player first moves (see armCoopRunTimer)
-    if (opts.spectator && Gsm.installSpectatorTimeKeeperGuard) {
-      Gsm.installSpectatorTimeKeeperGuard();
-    } else if (Gsm.installSpectatorTimeKeeperGuard) {
+    if (Gsm.installSpectatorTimeKeeperGuard) {
       Gsm.installSpectatorTimeKeeperGuard();
     }
 
-    const self = this;
     this._coopSpawnApplied = false;
     this._coopSpawnOy = null;
     // Pose publish on engine tick only after seated (or spectator)
@@ -1583,8 +1664,12 @@
         self.publishCoopState();
         // Any seated player may publish — key unlocks / soko pushes must sync
         // even when this client is not the fruit owner. Fingerprint dedupes.
+        // Wall growth is gated inside publishCoopCollectables (eater-only grow).
         if (!opts.spectator) self.publishCoopCollectables();
       };
+      // Idle engines never reach __mpCoopOnTick — keep peer poses flowing
+      window.__mpCoopLastTickAt = 0;
+      self.startCoopIdleSync();
       window.__mpCoopOnLocalReset = function () {
         self._killLocalCoopForReset();
       };
@@ -1603,48 +1688,64 @@
         }
       };
     }
-    // Seat when run is live; re-assert until body matches oy (native may clobber)
-    let tries = 0;
-    function trySpawnLoop() {
-      if (opts.spectator) {
-        self.applyCoopSpawnOrPark(true);
-        self.seedCoopRemotesFromSlots();
-        return;
-      }
-      const live = Gsm.isNativeRunLive ? Gsm.isNativeRunLive() : false;
-      const g = Gsm.gameInstance && Gsm.gameInstance();
-      if (live && g && g.oa) {
-        self.applyCoopSpawnOrPark(false);
-        self.seedCoopRemotesFromSlots();
-        if (self._bodyMatchesSpawnOy()) {
-          self._coopSpawnApplied = true;
-          self._coopSeatedPublish = true;
-          self._coopRunAccepted = true;
-          self.publishCoopState({ forceColors: true });
-          // Push wall/entity board immediately so peers collide with the same walls
-          self.publishCoopCollectables(true);
-          return;
-        }
-      }
-      tries++;
-      if (tries < 40) setTimeout(trySpawnLoop, 40);
-      else {
-        // Give up waiting — publish whatever we have so peers see something
-        self._coopSeatedPublish = true;
-        self.seedCoopRemotesFromSlots();
-        if (!opts.spectator) self.publishCoopState({ forceColors: true });
-      }
+    // Seat once when the native run is already live (startNativeRun onDone).
+    // If the body is clobbered later, __mpCoopAfterTick → _reassertCoopSpawnIfNeeded
+    // rewrites it; idle engines that never tick get a second chance from idle sync.
+    this.trySeatCoopOnce(!!opts.spectator);
+  };
+
+  /**
+   * One-shot co-op seat. Returns true when the local body is locked in place
+   * (or parked for spectators). Safe to call again; no-ops once seated.
+   */
+  MultiplayerApp.prototype.trySeatCoopOnce = function (spectator) {
+    if (!this._coopSessionActive) return false;
+    if (this._coopSpawnApplied) return true;
+    if (spectator || (typeof window !== "undefined" && window.__mpCoopSpectator)) {
+      this.applyCoopSpawnOrPark(true);
+      this.seedCoopRemotesFromSlots();
+      return true;
     }
-    setTimeout(trySpawnLoop, 20);
+    if (this._myCoopSlotIndex() == null || this._myCoopSpawnOy() == null) {
+      return false;
+    }
+    const live = Gsm.isNativeRunLive ? Gsm.isNativeRunLive() : false;
+    const g = Gsm.gameInstance && Gsm.gameInstance();
+    if (!live || !g || !g.oa) return false;
+
+    this.applyCoopSpawnOrPark(false);
+    this.seedCoopRemotesFromSlots();
+    if (this._bodyMatchesSpawnOy()) {
+      this._coopSpawnApplied = true;
+      this._coopSeatedPublish = true;
+      this.publishCoopState({ forceColors: true });
+      this.publishCoopCollectables(true);
+      return true;
+    }
+    // Wrote a seat but native may still settle — tick reassert finishes the lock
+    return false;
   };
 
   MultiplayerApp.prototype._myCoopSlotIndex = function () {
     const myId = this.client && this.client.clientId;
+    if (!myId) return null;
+    // Prefer SESSION_START / frozen slots list
     const slots = this._coopSlots || [];
     for (let i = 0; i < slots.length; i++) {
-      if (slots[i] && slots[i].clientId === myId) return i;
+      if (slots[i] && slots[i].clientId === myId) {
+        return slots[i].slot != null ? Number(slots[i].slot) | 0 : i;
+      }
     }
-    return 0;
+    // Roster fallback (same server numbers)
+    const roster = this.client && this.client.roster;
+    const clients = (roster && roster.clients) || [];
+    for (let j = 0; j < clients.length; j++) {
+      const c = clients[j];
+      if (c && c.clientId === myId && c.coopSlot != null) {
+        return Number(c.coopSlot) | 0;
+      }
+    }
+    return null;
   };
 
   MultiplayerApp.prototype._coopSpawnPoseFor = function (slotIndex, oy, width, height) {
@@ -1672,6 +1773,7 @@
   MultiplayerApp.prototype._applyMyCoopSpawn = function () {
     const oy = this._myCoopSpawnOy();
     const slot = this._myCoopSlotIndex();
+    if (slot == null || oy == null) return false;
     // Let applyCoopSpawnOffset read live engine size — do not pass a pose
     // built against classic 17×15 defaults (small boards OOB → fake walls).
     if (Gsm.applyCoopSpawnOffset) {
@@ -1695,15 +1797,32 @@
     const slots = this._coopSlots || [];
     for (let i = 0; i < slots.length; i++) {
       if (slots[i] && slots[i].clientId === myId) {
-        this._coopSpawnOy = slots[i].oy != null ? Number(slots[i].oy) : 0;
+        if (slots[i].oy != null) {
+          this._coopSpawnOy = Number(slots[i].oy);
+          return this._coopSpawnOy;
+        }
+        // Roster may lack oy — derive from slot count like the server
+        const n = slots.length;
+        const offsets =
+          n === 2
+            ? [-1, 1]
+            : n === 3
+              ? [0, 3, -2]
+              : n === 4
+                ? [-1, 1, -4, 4]
+                : [0];
+        const idx = slots[i].slot != null ? Number(slots[i].slot) | 0 : i;
+        this._coopSpawnOy = offsets[idx] != null ? offsets[idx] : 0;
         return this._coopSpawnOy;
       }
     }
-    this._coopSpawnOy = 0;
-    return 0;
+    return null;
   };
 
   MultiplayerApp.prototype._bodyMatchesSpawnOy = function () {
+    if (this._myCoopSlotIndex() == null || this._myCoopSpawnOy() == null) {
+      return false;
+    }
     const g = Gsm.gameInstance && Gsm.gameInstance();
     const body = g && g.oa && g.oa.ka;
     if (!body || !body.length) return false;
@@ -1869,10 +1988,11 @@
       return;
     }
     this._applyMyCoopSpawn();
-    // Do not lock _coopSpawnApplied yet — beginCoopNativeSession reasserts until match
+    // Lock happens in trySeatCoopOnce / _reassertCoopSpawnIfNeeded when the body matches
   };
 
   MultiplayerApp.prototype.endCoopNativeSession = function () {
+    this._coopSessionGen = (this._coopSessionGen | 0) + 1;
     this._coopSessionActive = false;
     this._coopDeadSent = false;
     this._coopSpawnApplied = false;
@@ -1895,25 +2015,77 @@
       window.__mpCoopAfterTick = null;
       window.__mpCoopFlushPendingDeltas = null;
       window.__mpCoopOnFriendlyDeath = null;
+      window.__mpCoopOnBoardFull = null;
+      window.__mpCoopOnLocalReset = null;
+      window.__mpLastCoopSpawnPose = null;
+      window.__mpCoopBoardFull = false;
       window.__mpCoopPlayerRenderer = null;
       window.__mpCoopRenderArgs = null;
+      window.__mpCoopLastTickAt = 0;
       if (window.__mpCoopStopCorpsePaint) window.__mpCoopStopCorpsePaint();
     }
     this._pendingCoopSnakeDeltas = null;
+    this.stopCoopIdleSync();
+    this._stopCoopHudTick();
     this.stopCoopNativeLoop();
-    if (this._coopSyncTimer) {
-      clearInterval(this._coopSyncTimer);
-      this._coopSyncTimer = null;
-    }
     if (Gsm.restoreDeathScreen) Gsm.restoreDeathScreen();
     if (this.coopNative) this.coopNative.reset();
   };
 
-  /** @deprecated Pose publish is tick-driven via __mpCoopAfterTick. */
-  MultiplayerApp.prototype.startCoopSyncTimer = function () {
-    if (this._coopSyncTimer) {
-      clearInterval(this._coopSyncTimer);
-      this._coopSyncTimer = null;
+  /** Is the local engine ticking? Idle spawns and spectators are not. */
+  MultiplayerApp.prototype.coopTicksRunning = function () {
+    if (typeof window === "undefined") return false;
+    if (typeof window.__mpCoopTicksRunning !== "function") return false;
+    try {
+      return !!window.__mpCoopTicksRunning();
+    } catch (e) {
+      return false;
+    }
+  };
+
+  /**
+   * Keep the shared board live for a player whose engine is not ticking: still
+   * waiting on their first key, or spectating. Also finishes a one-shot seat if
+   * begin ran before the slot/engine was ready (no poll loop).
+   */
+  MultiplayerApp.prototype.coopIdleSyncStep = function () {
+    if (!this._coopSessionActive) return false;
+    if (typeof window === "undefined") return false;
+    let did = false;
+    if (!this._coopSpawnApplied) {
+      did = !!this.trySeatCoopOnce(
+        !!(window.__mpCoopSpectator)
+      );
+    }
+    if (this.coopTicksRunning()) return did;
+    const pending = this._pendingCoopSnakeDeltas;
+    if (!pending || !Object.keys(pending).length) return did;
+    if (typeof window.__mpCoopFlushPendingDeltas === "function") {
+      window.__mpCoopFlushPendingDeltas();
+      return true;
+    }
+    return did;
+  };
+
+  MultiplayerApp.prototype.startCoopIdleSync = function () {
+    this.stopCoopIdleSync();
+    if (typeof setInterval !== "function") return;
+    const self = this;
+    const timer = setInterval(function () {
+      try {
+        self.coopIdleSyncStep();
+      } catch (e) {
+        console.warn("coopIdleSyncStep", e);
+      }
+    }, COOP_IDLE_SYNC_MS);
+    if (timer && typeof timer.unref === "function") timer.unref();
+    this._coopIdleSyncTimer = timer;
+  };
+
+  MultiplayerApp.prototype.stopCoopIdleSync = function () {
+    if (this._coopIdleSyncTimer) {
+      clearInterval(this._coopIdleSyncTimer);
+      this._coopIdleSyncTimer = null;
     }
   };
 
@@ -1989,9 +2161,10 @@
   /** Idempotent: start native TimeKeeper from shared wall-clock epoch. */
   MultiplayerApp.prototype.armCoopRunTimer = function (startedAtMs) {
     if (this._coopTimerArmed) return;
-    if (typeof window !== "undefined" && window.__mpCoopSpectator) return;
     const me = this.client && this.client.me && this.client.me();
-    if (me && me.role === "spectator") return;
+    const isSpectator =
+      !!(typeof window !== "undefined" && window.__mpCoopSpectator) ||
+      !!(me && me.role === "spectator");
     const t =
       startedAtMs != null && Number.isFinite(Number(startedAtMs))
         ? Number(startedAtMs)
@@ -1999,22 +2172,58 @@
     this._coopTimerArmed = true;
     this._coopTimerStartedAtMs = t;
     this._coopPlayerMoved = true;
-    if (Gsm.startCoopRunTimer) {
+    if (!isSpectator && Gsm.startCoopRunTimer) {
       Gsm.startCoopRunTimer({
         timerStartedAtMs: t,
         maxAttempts: 40,
         intervalMs: 50,
       });
     }
+    if (this.ui && this.ui.updateHud) this.ui.updateHud(this);
+    this._ensureCoopHudTick();
+    if (isSpectator) return;
     // Peers who are still idle start crawling on the shared first-move signal
-    const pose = this._coopSpawnPose || this._coopSpawnPoseFor(this._myCoopSlotIndex(), this._myCoopSpawnOy());
+    const pose = this._coopSpawnPose;
+    if (!pose) {
+      const slot = this._myCoopSlotIndex();
+      const oy = this._myCoopSpawnOy();
+      if (slot == null || oy == null) return;
+      this._coopSpawnPose = this._coopSpawnPoseFor(slot, oy);
+    }
     if (Gsm.applyCoopStartMoving) {
-      Gsm.applyCoopStartMoving(pose && pose.dir);
+      Gsm.applyCoopStartMoving(
+        (this._coopSpawnPose && this._coopSpawnPose.dir) || undefined
+      );
+    }
+  };
+
+  /** Keep the co-op HUD clock advancing between pose publishes. */
+  MultiplayerApp.prototype._ensureCoopHudTick = function () {
+    if (this._coopHudTimer) return;
+    if (typeof setInterval !== "function") return;
+    const self = this;
+    this._coopHudTimer = setInterval(function () {
+      if (!self._coopSessionActive || self._coopTimerStartedAtMs == null) {
+        self._stopCoopHudTick();
+        return;
+      }
+      if (self.ui && self.ui.updateHud) self.ui.updateHud(self);
+    }, 200);
+    if (this._coopHudTimer && typeof this._coopHudTimer.unref === "function") {
+      this._coopHudTimer.unref();
+    }
+  };
+
+  MultiplayerApp.prototype._stopCoopHudTick = function () {
+    if (this._coopHudTimer) {
+      clearInterval(this._coopHudTimer);
+      this._coopHudTimer = null;
     }
   };
 
   /** Eater publishes full native fruit board after collect (shared spawn rules). */
-  MultiplayerApp.prototype.publishCoopCollectables = function (force) {
+  MultiplayerApp.prototype.publishCoopCollectables = function (force, opts) {
+    opts = opts || {};
     if (!this.client || !this.client.connected) return;
     if (!this._coopSessionActive) return;
     if (!this.client.roster || !this.client.roster.sessionActive) return;
@@ -2036,6 +2245,44 @@
       ) {
         this.maybeCoopAllApples("board_full");
       }
+    }
+    // Wall growth: only the post-eat publisher may grow the wall list. Peers
+    // publish other entity changes but must not shrink/grow regular walls.
+    const wallGrow = !!opts.wallGrow || !!this._coopWallGrowArmed;
+    this._coopWallGrowArmed = false;
+    const prevWalls = this._coopLastWallCount;
+    const nextWalls = Array.isArray(cols.walls) ? cols.walls.length : 0;
+    if (
+      !wallGrow &&
+      prevWalls != null &&
+      nextWalls < prevWalls &&
+      Array.isArray(cols.walls)
+    ) {
+      // Keep last known wall count by reusing prior scrape walls if present
+      if (this._coopLastWalls) cols.walls = this._coopLastWalls;
+    }
+    if (wallGrow || prevWalls == null || nextWalls >= (prevWalls | 0)) {
+      this._coopLastWallCount = nextWalls;
+      this._coopLastWalls = Array.isArray(cols.walls)
+        ? cols.walls.map(function (w) {
+            return w ? Object.assign({}, w) : w;
+          })
+        : null;
+    }
+    // Slot Machine roll — ship so peers can activate the same badge
+    try {
+      if (
+        typeof window !== "undefined" &&
+        window.__slotActive != null &&
+        Number.isFinite(Number(window.__slotActive))
+      ) {
+        cols.slotActive = Number(window.__slotActive) | 0;
+      }
+    } catch (eSlot) { /* ignore */ }
+    // Winged: seed pos+He only on forced publishes (seat / eat); peers trust motion
+    if (Gsm.isCoopFruitMotionMode && Gsm.isCoopFruitMotionMode()) {
+      cols.fruitMotionTrust = true;
+      if (force) cols.fruitMotionSeed = true;
     }
     const fp =
       Gsm.collectablesFingerprint && Gsm.collectablesFingerprint(cols);
@@ -2153,14 +2400,6 @@
       cancelAnimationFrame(this._coopPaintRaf);
       this._coopPaintRaf = 0;
     }
-    if (this.coopNative && this.coopNative.stopOverlay) {
-      this.coopNative.stopOverlay();
-    }
-  };
-
-  /** Soft collision retired — remotes collide inside __mpCoopOnTick. */
-  MultiplayerApp.prototype.maybeCoopCrossCollision = function () {
-    // no-op (true inject)
   };
 
   MultiplayerApp.prototype._killLocalCoopForReset = function () {
@@ -2218,7 +2457,6 @@
             self._coopIgnoreStartUntil &&
             Date.now() < self._coopIgnoreStartUntil
           ) {
-            self._coopRunAccepted = true;
             return;
           }
           if (!self._coopDeadSent) self._killLocalCoopForReset();
@@ -2245,7 +2483,8 @@
               window.__mpCoopSkipFruitReapply = true;
             }
             setTimeout(function () {
-              self.publishCoopCollectables();
+              self._coopWallGrowArmed = true;
+              self.publishCoopCollectables(true, { wallGrow: true });
               if (typeof self.refreshCoopScores === "function") {
                 self.refreshCoopScores();
               }
@@ -2406,7 +2645,7 @@
             ? Number(self._versusRunStartedAtMs)
             : undefined,
       });
-    }, 800);
+    }, 250);
   };
 
   MultiplayerApp.prototype._pulseScore = function (score, timeMs, alive, extra) {

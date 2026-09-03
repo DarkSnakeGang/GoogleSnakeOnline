@@ -22,7 +22,6 @@
     this.collectables = null;
     this.sessionActive = false;
     this._seedStickyUntil = 0;
-    clearPhantomWalls();
     invalidateLightMask();
     this.syncBridge();
   };
@@ -71,11 +70,17 @@
         "score",
         "otherDim",
         "peaceful",
+        "body2",
+        "headLight",
+        "headLight2",
+        "poisoned",
+        "slotActive",
       ].forEach(function (k) {
         if (payload[k] != null) keep[k] = payload[k];
       });
       this.remotes[payload.clientId] = keep;
       this.syncBridge();
+      maybeApplyPeerSlot(payload);
       return;
     }
     const next = Object.assign(Object.create(null), prev || null, payload);
@@ -140,7 +145,24 @@
     }
     this.remotes[payload.clientId] = next;
     this.syncBridge();
+    maybeApplyPeerSlot(payload);
   };
+
+  /** Apply a peer's Slot Machine roll without ping-ponging our own eat. */
+  function maybeApplyPeerSlot(payload) {
+    if (!payload || payload.slotActive == null) return;
+    if (root.__mpCoopSkipFruitReapply) return;
+    if (typeof root.setSlotActive !== "function") return;
+    const next = Number(payload.slotActive) | 0;
+    if (!Number.isFinite(next)) return;
+    if ((root.__slotActive | 0) === next) return;
+    if (root.__mpCoopLastSlotActive === next) return;
+    try {
+      const game = root.__mpGame || root.__remixGame;
+      root.setSlotActive(next, game);
+      root.__mpCoopLastSlotActive = next;
+    } catch (e) { /* ignore */ }
+  }
 
   CoopNative.prototype.applyCollectables = function (payload) {
     this.collectables = payload;
@@ -191,6 +213,15 @@
 
   /** Mode key from Remix ModeRegistry (e.g. "peaceful", "wall+cheese"). */
   function coopModeKey() {
+    try {
+      const Gsm = root.MultiplayerGsm;
+      if (Gsm && typeof Gsm.effectiveModeKey === "function") {
+        return String(Gsm.effectiveModeKey() || "");
+      }
+      if (Gsm && typeof Gsm.scrapeModeKey === "function") {
+        return String(Gsm.scrapeModeKey() || "");
+      }
+    } catch (eGsm) { /* ignore */ }
     try {
       if (
         root.ModeRegistry &&
@@ -274,13 +305,53 @@
     return null;
   }
 
+  function boardWraps() {
+    const key = coopModeKey();
+    return modeKeyHas(key, "borderless") || modeKeyHas(key, "peaceful");
+  }
+
+  function wrapCell(x, y, size) {
+    let xx = x | 0;
+    let yy = y | 0;
+    if (!size || !(size.width > 0) || !(size.height > 0)) {
+      return { x: xx, y: yy };
+    }
+    const w = size.width | 0;
+    const h = size.height | 0;
+    xx = ((xx % w) + w) % w;
+    yy = ((yy % h) + h) % h;
+    return { x: xx, y: yy };
+  }
+
   function predictedHead(game) {
     const snake = game && game.oa;
     const head = snake && snake.ka && snake.ka[0];
     if (!head) return null;
     const d = dirDelta(snake.direction || snake.dir);
     if (!d) return null;
-    return { x: (head.x | 0) + d.x, y: (head.y | 0) + d.y };
+    let x = (head.x | 0) + d.x;
+    let y = (head.y | 0) + d.y;
+    if (boardWraps()) {
+      const size = boardSizeFromGame(game);
+      const w = wrapCell(x, y, size);
+      x = w.x;
+      y = w.y;
+    }
+    return { x: x, y: y };
+  }
+
+  function remoteBodyCells(remote) {
+    const cells = [];
+    const body = (remote && remote.body) || [];
+    for (let i = 0; i < body.length; i++) {
+      if (body[i]) cells.push(body[i]);
+    }
+    // Yin Yang companion occupies cells for spawn; hits stay friendly
+    const body2 = (remote && remote.body2) || [];
+    for (let j = 0; j < body2.length; j++) {
+      if (body2[j]) cells.push(body2[j]);
+    }
+    return cells;
   }
 
   function remoteOccupies(x, y) {
@@ -288,16 +359,22 @@
     const hostDim = localOtherDim(root.__mpGame || root.__remixGame);
     const remotes = root.__mpCoopRemotes || {};
     const myId = root.__mpCoopMyId;
+    const wraps = boardWraps();
+    const size = wraps
+      ? boardSizeFromGame(root.__mpGame || root.__remixGame)
+      : null;
+    const probe = wraps ? wrapCell(x, y, size) : { x: x | 0, y: y | 0 };
     const ids = Object.keys(remotes);
     for (let i = 0; i < ids.length; i++) {
       if (myId && ids[i] === myId) continue;
-      const body = (remotes[ids[i]] && remotes[ids[i]].body) || [];
-      for (let j = 0; j < body.length; j++) {
-        const p = body[j];
+      const cells = remoteBodyCells(remotes[ids[i]]);
+      for (let j = 0; j < cells.length; j++) {
+        const p = cells[j];
+        if (!p || p.x == null || p.y == null) continue;
+        const cell = wraps ? wrapCell(p.x, p.y, size) : { x: p.x | 0, y: p.y | 0 };
         if (
-          p &&
-          (p.x | 0) === (x | 0) &&
-          (p.y | 0) === (y | 0) &&
+          cell.x === probe.x &&
+          cell.y === probe.y &&
           remoteCellBlocks(p, hostDim)
         ) {
           return true;
@@ -364,11 +441,24 @@
     if (coopSkipFriendlyHits()) return false;
     const hostDim = localOtherDim(root.__mpGame || root.__remixGame);
     const remotes = this.remoteList(excludeId);
+    const wraps = boardWraps();
+    const size = wraps
+      ? boardSizeFromGame(root.__mpGame || root.__remixGame)
+      : null;
+    const probe = wraps
+      ? wrapCell(head.x, head.y, size)
+      : { x: head.x | 0, y: head.y | 0 };
     for (let i = 0; i < remotes.length; i++) {
-      const body = (remotes[i] && remotes[i].body) || [];
-      for (let j = 0; j < body.length; j++) {
-        const p = body[j];
-        if (p && p.x === head.x && p.y === head.y && remoteCellBlocks(p, hostDim)) {
+      const cells = remoteBodyCells(remotes[i]);
+      for (let j = 0; j < cells.length; j++) {
+        const p = cells[j];
+        if (!p || p.x == null || p.y == null) continue;
+        const cell = wraps ? wrapCell(p.x, p.y, size) : { x: p.x | 0, y: p.y | 0 };
+        if (
+          cell.x === probe.x &&
+          cell.y === probe.y &&
+          remoteCellBlocks(p, hostDim)
+        ) {
           return true;
         }
       }
@@ -395,12 +485,17 @@
       });
     }
     Object.keys(this.remotes).forEach(function (id) {
-      addBody(this.remotes[id] && this.remotes[id].body);
+      const r = this.remotes[id];
+      addBody(r && r.body);
+      addBody(r && r.body2);
     }, this);
     if (includeLocal) {
       try {
         const g = root.__mpGame || root.__remixGame;
         if (g && g.oa && g.oa.ka) addBody(g.oa.ka);
+        // Local Yin Yang companion
+        if (g && g.Ra && g.Ra.ka) addBody(g.Ra.ka);
+        else if (g && g.oa && g.oa.Ra && g.oa.Ra.ka) addBody(g.oa.Ra.ka);
       } catch (e) { /* ignore */ }
     }
     return keys;
@@ -426,12 +521,15 @@
     const cheese = coopIsCheeseMode();
     const remotes = root.__mpCoopRemotes || {};
     Object.keys(remotes).forEach(function (id) {
-      const body = remotes[id] && remotes[id].body;
-      (body || []).forEach(function (p) {
-        if (!p || p.x == null || p.y == null) return;
-        if (cheese && isCheeseLightTile(p.x, p.y)) return;
-        keys[(p.x | 0) + "," + (p.y | 0)] = true;
-      });
+      const r = remotes[id];
+      const bodies = [(r && r.body) || [], (r && r.body2) || []];
+      for (let bi = 0; bi < bodies.length; bi++) {
+        (bodies[bi] || []).forEach(function (p) {
+          if (!p || p.x == null || p.y == null) return;
+          if (cheese && isCheeseLightTile(p.x, p.y)) return;
+          keys[(p.x | 0) + "," + (p.y | 0)] = true;
+        });
+      }
     });
     return keys;
   }
@@ -522,15 +620,6 @@
     const g = game || root.__mpGame || root.__remixGame;
     const wa = g && g.Ca && g.Ca.wa;
     return Array.isArray(wa) && wa.length ? wa : null;
-  }
-
-  /** No-op stubs — older builds stamped snakes into Ca.wa; we never do that. */
-  function clearPhantomWalls() {}
-  function stampPhantomWalls() {
-    return 0;
-  }
-  function phantomKeys() {
-    return [];
   }
 
   /* ------------------------------------------------------------------ colors */
@@ -681,12 +770,46 @@
     if (_lightMask && now - _lightMaskAt < 40) return _lightMask;
     const Gsm = root.MultiplayerGsm;
     if (!Gsm || typeof Gsm.collectMosaicLights !== "function") return null;
+    const heads = [];
+    const remotes = root.__mpCoopRemotes || {};
+    const myId = root.__mpCoopMyId;
+    Object.keys(remotes).forEach(function (id) {
+      if (myId && id === myId) return;
+      const r = remotes[id];
+      if (!r || r.alive === false) return;
+      const body = r.body || [];
+      if (body[0]) {
+        heads.push({
+          x: body[0].x,
+          y: body[0].y,
+          light: r.headLight != null ? r.headLight : 2,
+        });
+      }
+      const body2 = r.body2 || [];
+      if (body2[0]) {
+        heads.push({
+          x: body2[0].x,
+          y: body2[0].y,
+          light: r.headLight2 != null ? r.headLight2 : 2,
+        });
+      }
+    });
     let mask = null;
     try {
       mask = Gsm.collectMosaicLights({
         modeKey: "light",
         body: (game && game.oa && game.oa.ka) || [],
+        body2: (function () {
+          try {
+            if (game && game.Ra && game.Ra.ka) return game.Ra.ka;
+            if (game && game.oa && game.oa.Ra && game.oa.Ra.ka) {
+              return game.oa.Ra.ka;
+            }
+          } catch (e) { /* ignore */ }
+          return [];
+        })(),
         apples: (game && game.wa && game.wa.ka) || [],
+        heads: heads,
       });
     } catch (e) {
       mask = null;
@@ -697,6 +820,79 @@
   }
 
   let _drawWarnAt = 0;
+
+  /**
+   * Native fog only lights the local head. Clip to each remote light disk and
+   * repaint shared apples/walls so teammates actually reveal the board.
+   */
+  function revealRemoteLightDisks(ctx, game, tile, size, lights) {
+    if (!lights || !lights.length || !(tile > 0)) return;
+    const Gsm = root.MultiplayerGsm;
+    if (!Gsm) return;
+    const remotes = root.__mpCoopRemotes || {};
+    const myId = root.__mpCoopMyId;
+    const cols = root.__mpCoopCollectables || {};
+    const board = {
+      modeKey: "light",
+      width: size.width,
+      height: size.height,
+      apples: cols.apples || (game && game.wa && game.wa.ka) || [],
+      walls: cols.walls || [],
+      keys: cols.keys,
+      boxes: cols.boxes,
+      goals: cols.goals,
+      mines: cols.mines,
+      statues: cols.statues,
+      bridges: cols.bridges,
+      gates: cols.gates,
+      arrows: cols.arrows,
+    };
+    const theme = null;
+    Object.keys(remotes).forEach(function (id) {
+      if (myId && id === myId) return;
+      const r = remotes[id];
+      if (!r || r.alive === false) return;
+      const heads = [];
+      if (r.body && r.body[0]) {
+        heads.push({
+          x: r.body[0].x,
+          y: r.body[0].y,
+          light: r.headLight != null ? Number(r.headLight) : 2,
+        });
+      }
+      if (r.body2 && r.body2[0]) {
+        heads.push({
+          x: r.body2[0].x,
+          y: r.body2[0].y,
+          light: r.headLight2 != null ? Number(r.headLight2) : 2,
+        });
+      }
+      for (let i = 0; i < heads.length; i++) {
+        const h = heads[i];
+        const rTiles = Math.max(2, Number(h.light) || 2);
+        const cx = (Number(h.x) + 0.5) * tile;
+        const cy = (Number(h.y) + 0.5) * tile;
+        const rad = rTiles * tile;
+        ctx.save();
+        try {
+          ctx.beginPath();
+          ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+          ctx.clip();
+          if (typeof Gsm.drawBoardWalls === "function") {
+            Gsm.drawBoardWalls(ctx, board, 0, 0, tile, theme, lights);
+          }
+          if (typeof Gsm.drawBoardModeEntities === "function") {
+            Gsm.drawBoardModeEntities(ctx, board, 0, 0, tile, theme, lights);
+          }
+          if (typeof Gsm.drawBoardApples === "function") {
+            Gsm.drawBoardApples(ctx, board, 0, 0, tile, theme, lights);
+          }
+        } finally {
+          ctx.restore();
+        }
+      }
+    });
+  }
 
   /**
    * Draw every remote co-op snake into the layer the local snake was just
@@ -733,6 +929,11 @@
       wrapWidth: wraps ? size.width : 0,
       wrapHeight: wraps ? size.height : 0,
     };
+
+    // Reveal board tiles inside remote light disks (native fog only knows local head)
+    try {
+      revealRemoteLightDisks(ctx, game, tile, size, opts.lights);
+    } catch (eRev) { /* ignore */ }
 
     let drawn = 0;
     ctx.save();
@@ -775,9 +976,13 @@
             return out;
           });
         }
-        // A corpse reads as a faded snake, matching the mosaic corpse style.
+        // A corpse / poisoned snake reads faded / grey, matching the mosaic.
         const dead = r.alive === false;
+        const poisoned = !!r.poisoned;
         ctx.globalAlpha = dead ? 0.55 : 1;
+        const colorInfo = poisoned
+          ? { primary: "#eceff1", secondary: "#90a4ae", set: null }
+          : remoteColorInfo(r, colorsById[id]);
         try {
           Gsm.drawWallSolverStyleSnake(
             ctx,
@@ -785,10 +990,47 @@
             0,
             0,
             tile,
-            remoteColorInfo(r, colorsById[id]),
+            colorInfo,
             r.dir,
             opts
           );
+          // Yin Yang companion
+          let body2 = r.body2;
+          if (bodyIsRenderable(body2)) {
+            if (size.width > 0 && size.height > 0) {
+              const inB = body2.every(function (p) {
+                return (
+                  p &&
+                  (p.x | 0) >= 0 &&
+                  (p.y | 0) >= 0 &&
+                  (p.x | 0) < size.width &&
+                  (p.y | 0) < size.height
+                );
+              });
+              if (!inB) body2 = null;
+            }
+          } else {
+            body2 = null;
+          }
+          if (body2) {
+            let companionColor = poisoned
+              ? { primary: "#eceff1", secondary: "#90a4ae", set: null }
+              : { primary: "#eceff1", secondary: "#90a4ae", set: null };
+            opts.motion =
+              typeof Gsm.snakeMotion === "function"
+                ? Gsm.snakeMotion(r, "coop-body2", body2)
+                : null;
+            Gsm.drawWallSolverStyleSnake(
+              ctx,
+              body2,
+              0,
+              0,
+              tile,
+              companionColor,
+              r.dir,
+              opts
+            );
+          }
           drawn++;
         } catch (e) {
           const t = Date.now();
@@ -935,34 +1177,124 @@
   }
 
   /**
-   * Wrap game.Tb / game.Rb so freePos never lands on live/dead co-op snakes
-   * (including the local body) or solid wall cells.
+   * Wrap game freePos helpers so fruit never lands on co-op snakes / walls,
+   * and Wall-mode picks (arg === 5) obey shared-board wall spawn rules.
    */
   function wrapFreePos(game) {
     if (!game || game.__mpCoopFreePosWrapped) return;
     game.__mpCoopFreePosWrapped = true;
-    ["Tb", "Rb"].forEach(function (name) {
+    ["Tb", "Rb", "Sb", "Vb"].forEach(function (name) {
       const orig = game[name];
       if (typeof orig !== "function") return;
       game[name] = function () {
+        const wallPick = arguments.length >= 2 && Number(arguments[1]) === 5;
         let attempts = 0;
         let pos = orig.apply(this, arguments);
         while (pos && attempts < 64) {
-          const occ = readSpawnOccupancy(game || this, true);
-          if (!spawnCellBlocked(game || this, pos.x, pos.y, occ)) break;
+          if (wallPick) {
+            if (!wallSpawnRejected(game || this, pos.x, pos.y)) break;
+          } else {
+            const occ = readSpawnOccupancy(game || this, true);
+            if (!spawnCellBlocked(game || this, pos.x, pos.y, occ)) break;
+          }
           attempts++;
           pos = orig.apply(this, arguments);
         }
         if (pos) {
+          if (wallPick) {
+            if (wallSpawnRejected(game || this, pos.x, pos.y)) {
+              // Native Wall mode: skip the wall — never invent an illegal cell
+              return null;
+            }
+            return pos;
+          }
           const occ = readSpawnOccupancy(game || this, true);
           if (spawnCellBlocked(game || this, pos.x, pos.y, occ)) {
             const scanned = findFreeSpawnCell(game || this, occ);
             if (scanned) return scanned;
+            // Board full for fruit → ALL_APPLES
+            if (typeof root.__mpCoopOnBoardFull === "function") {
+              try {
+                root.__mpCoopOnBoardFull();
+              } catch (eFull) { /* ignore */ }
+            }
+            root.__mpCoopBoardFull = true;
+            return pos;
           }
         }
         return pos;
       };
     });
+  }
+
+  /** Taxicab distance. */
+  function manhattan(ax, ay, bx, by) {
+    return Math.abs((ax | 0) - (bx | 0)) + Math.abs((ay | 0) - (by | 0));
+  }
+
+  /**
+   * Regular Wall-mode freePos(null,5) rules on a shared multi-snake board.
+   * Rejects corners, snake/fruit/wall occupancy, and taxicab ≤3 of any head.
+   */
+  function wallSpawnRejected(game, x, y) {
+    const xi = x | 0;
+    const yi = y | 0;
+    const size = boardSizeFromGame(game);
+    const Gsm = root.MultiplayerGsm;
+    if (
+      Gsm &&
+      typeof Gsm.isIllegalNormalWallCell === "function" &&
+      Gsm.isIllegalNormalWallCell(xi, yi, size.width, size.height)
+    ) {
+      return true;
+    }
+    if (isSolidWallCell(game, xi, yi)) return true;
+    const occ = readSpawnOccupancy(game, true);
+    if (occ[xi + "," + yi]) return true;
+    // Fruit cells
+    try {
+      const apples = game && game.wa && game.wa.ka;
+      for (let i = 0; apples && i < apples.length; i++) {
+        const a = apples[i];
+        const pos = (a && a.pos) || a;
+        if (pos && (pos.x | 0) === xi && (pos.y | 0) === yi) return true;
+      }
+    } catch (eA) { /* ignore */ }
+    // Head radius 3 vs every live head (local + remotes + Yin Yang companions)
+    const heads = [];
+    try {
+      const local = game && game.oa && game.oa.ka && game.oa.ka[0];
+      if (local) heads.push(local);
+      if (game && game.Ra && game.Ra.ka && game.Ra.ka[0]) {
+        heads.push(game.Ra.ka[0]);
+      }
+    } catch (eL) { /* ignore */ }
+    const remotes = root.__mpCoopRemotes || {};
+    const myId = root.__mpCoopMyId;
+    Object.keys(remotes).forEach(function (id) {
+      if (myId && id === myId) return;
+      const r = remotes[id];
+      if (!r || r.alive === false) return;
+      if (r.body && r.body[0]) heads.push(r.body[0]);
+      if (r.body2 && r.body2[0]) heads.push(r.body2[0]);
+    });
+    for (let h = 0; h < heads.length; h++) {
+      if (manhattan(xi, yi, heads[h].x, heads[h].y) <= 3) return true;
+    }
+    // Adjacent to an existing solid wall (community / native freePos rule)
+    const dirs = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ];
+    for (let d = 0; d < dirs.length; d++) {
+      const nx = xi + dirs[d][0];
+      const ny = yi + dirs[d][1];
+      if (nx < 0 || ny < 0 || nx >= size.width || ny >= size.height) continue;
+      if (isSolidWallCell(game, nx, ny)) return true;
+    }
+    return false;
   }
 
   /**
@@ -1017,6 +1349,12 @@
               }
               return scanned;
             }
+            root.__mpCoopBoardFull = true;
+            if (typeof root.__mpCoopOnBoardFull === "function") {
+              try {
+                root.__mpCoopOnBoardFull();
+              } catch (eFull) { /* ignore */ }
+            }
           }
         }
         return p;
@@ -1028,6 +1366,23 @@
   /* -------------------------------------------------------------- tick hook */
 
   /**
+   * Native only ticks a snake that is moving: a player still sitting on their
+   * spawn, or a spectator (who never gets a direction), never reaches onTick.
+   * Anything the tick drives needs an idle path — the app polls this to decide
+   * whether peer poses can wait for the next tick or must be applied now.
+   * Generous enough to cover the slowest speed setting between ticks.
+   */
+  const COOP_TICK_STALE_MS = 500;
+
+  function coopTicksRunning(maxAgeMs) {
+    const at = Number(root.__mpCoopLastTickAt) || 0;
+    if (!at) return false;
+    const max = Number(maxAgeMs) > 0 ? Number(maxAgeMs) : COOP_TICK_STALE_MS;
+    const age = Date.now() - at;
+    return age >= 0 && age <= max;
+  }
+
+  /**
    * Tick: apply peer poses, then body-collide vs remotes (not peaceful / YY).
    * Fruit is applied only on COLLECTABLES_DELTA (not every tick).
    */
@@ -1035,6 +1390,7 @@
     if (root.__mpCoopOnTickInstalled) return;
     root.__mpCoopOnTickInstalled = true;
     root.__mpCoopOnTick = function (game) {
+      root.__mpCoopLastTickAt = Date.now();
       if (!root.__mpCoopInject || !root.__mpCoopSession) return;
       try {
         if (typeof root.__mpCoopFlushPendingDeltas === "function") {
@@ -1079,13 +1435,12 @@
   root.__mpCoopFindFreeSpawn = findFreeSpawnCell;
   root.__mpCoopInstallSpawnOcc = installRemixSpawnOccupancyHooks;
   root.__mpCoopDrawRemotes = drawCoopRemotes;
-  root.__mpCoopStampPhantomWalls = stampPhantomWalls;
-  root.__mpCoopClearPhantomWalls = clearPhantomWalls;
-  root.__mpCoopPhantomKeys = phantomKeys;
   root.__mpCoopIsSolidWall = isSolidWallCell;
   root.__mpCoopWallOccupancy = wallOccupancyKeys;
+  root.__mpCoopTicksRunning = coopTicksRunning;
   root.__mpCoopDisplayColorIds = coopDisplayColorIds;
   root.__mpCoopRecolorPalette = coopRecolorPalette;
+  root.__mpCoopWallSpawnRejected = wallSpawnRejected;
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       CoopNative: CoopNative,
@@ -1094,6 +1449,7 @@
       isSolidWallCell: isSolidWallCell,
       findFreeSpawnCell: findFreeSpawnCell,
       wallOccupancyKeys: wallOccupancyKeys,
+      coopTicksRunning: coopTicksRunning,
     };
   }
 })(typeof window !== "undefined" ? window : globalThis);

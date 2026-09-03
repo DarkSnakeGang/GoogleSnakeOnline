@@ -504,6 +504,27 @@
     return 0;
   }
 
+  /**
+   * Live in-game run clock: ticks × tick length (Fb), same as TimeKeeper hooks.
+   * Falls back to resetTime wall elapsed, then last apple/death sample.
+   */
+  function readLiveRunTimeMs(game) {
+    const g = game || gameInstance();
+    try {
+      if (g && typeof g.ticks === "number" && typeof g.Fb === "number") {
+        const ms = Math.floor(Number(g.ticks) * Number(g.Fb));
+        if (Number.isFinite(ms) && ms >= 0) return ms;
+      }
+    } catch (e) { /* ignore */ }
+    try {
+      if (typeof root.resetTime === "number" && root.resetTime > 0) {
+        const ms = Date.now() - root.resetTime;
+        if (Number.isFinite(ms) && ms >= 0) return ms;
+      }
+    } catch (e2) { /* ignore */ }
+    return null;
+  }
+
   function readScoreAndAlive() {
     const g = gameInstance();
     let score = 0;
@@ -520,6 +541,12 @@
       if (typeof root.timeKeeper.lastAppleTime === "number") {
         timeMs = timeMs || root.timeKeeper.lastAppleTime;
       }
+    }
+    // Prefer the engine's live run clock while the snake is still playing —
+    // _lastTimeMs only updates on apple/death and freezes mosaic timers.
+    if (alive !== false) {
+      const live = readLiveRunTimeMs(g);
+      if (live != null) timeMs = live;
     }
     return { score: score, timeMs: timeMs, alive: alive };
   }
@@ -769,6 +796,13 @@
         const sm = Number(a.slotMode);
         if (Number.isFinite(sm)) slotMode = sm | 0;
       }
+      // Winged/Magnet: fractional velocity He — seed peers once, then trust local sim
+      let he = undefined;
+      if (a && a.He && typeof a.He.x === "number" && typeof a.He.y === "number") {
+        he = { x: Number(a.He.x), y: Number(a.He.y) };
+      } else if (a && a.he && typeof a.he.x === "number") {
+        he = { x: Number(a.he.x), y: Number(a.he.y) };
+      }
       return {
         x: pos.x != null ? pos.x : 0,
         y: pos.y != null ? pos.y : 0,
@@ -779,6 +813,7 @@
         chessPiece: chessPiece,
         chessColor: chessColor,
         slotMode: slotMode,
+        he: he,
         // Light mode: apple.light radius in tiles (native spawn 1.5, decays)
         light:
           a.light != null && Number.isFinite(Number(a.light))
@@ -987,25 +1022,26 @@
     const out = [];
     const wallHost = g && g.Ca;
     if (!wallHost) return out;
+    // Live grid meta first: g.settings / g.width are absent on the native game,
+    // and a null size makes the corner filter below assume 17×15. On a smaller
+    // board only the top-left corner then matches, so the other three leak
+    // sentinel cells into the wall list peers stamp as solid walls.
+    const meta =
+      (g && g.wa && g.wa.oa && g.wa.oa.oa) ||
+      (g && g.oa && g.oa.oa) ||
+      (g && g.settings && g.settings.grid) ||
+      {};
     const bw =
+      firstNumber(meta.width, meta.W) ||
       (g && g.settings && (g.settings.width || g.settings.boardWidth)) ||
       (g && g.width) ||
       null;
     const bh =
+      firstNumber(meta.height, meta.H) ||
       (g && g.settings && (g.settings.height || g.settings.boardHeight)) ||
       (g && g.height) ||
       null;
     // Co-op: scrape real walls only (snakes are never walls)
-    let clearedPhantoms = false;
-    if (
-      root.__mpCoopSession &&
-      typeof root.__mpCoopClearPhantomWalls === "function"
-    ) {
-      try {
-        root.__mpCoopClearPhantomWalls(g);
-        clearedPhantoms = true;
-      } catch (eClear) { /* ignore */ }
-    }
     let result = out;
     try {
       const byKey = Object.create(null);
@@ -1052,24 +1088,7 @@
       try {
         const wa = wallHost.wa || wallHost.oa;
         if (wa) {
-          let mapped = mapPointList(wa);
-          if (
-            root.__mpCoopSession &&
-            typeof root.__mpCoopPhantomKeys === "function"
-          ) {
-            try {
-              const phantoms = root.__mpCoopPhantomKeys() || [];
-              if (phantoms.length) {
-                const skip = {};
-                for (let i = 0; i < phantoms.length; i++) {
-                  skip[phantoms[i]] = 1;
-                }
-                mapped = mapped.filter(function (p) {
-                  return !skip[(p.x | 0) + "," + (p.y | 0)];
-                });
-              }
-            } catch (ePh) { /* ignore */ }
-          }
+          const mapped = mapPointList(wa);
           for (let i = 0; i < mapped.length; i++) addWall(mapped[i]);
         }
       } catch (eWa) { /* ignore */ }
@@ -1080,15 +1099,8 @@
       // Drop corner sentinels from wa-only cells; keep temp/lock/hotdog
       result = filterMosaicWalls(merged, bw, bh);
       return result;
-    } finally {
-      if (
-        clearedPhantoms &&
-        typeof root.__mpCoopStampPhantomWalls === "function"
-      ) {
-        try {
-          root.__mpCoopStampPhantomWalls(g);
-        } catch (eStamp) { /* ignore */ }
-      }
+    } catch (eScr) {
+      return result;
     }
   }
 
@@ -1244,15 +1256,14 @@
   }
 
   /**
-   * Companion body for Twin / Yin Yang.
-   * Twin: only a real second ka (same-color twin) — never invent a mirror.
+   * Companion body for Yin Yang only.
+   * Twin has no second snake — do not invent or scrape a body2 for it.
    * Yin Yang: prefer real second ka; else mirror across center (native j7).
    */
   function scrapeCompanionBody(g, primaryBody, width, height) {
     const mode = scrapeModeKey();
     const isYy = boardHasMode({ modeKey: mode }, "yin_yang");
-    const isTwin = boardHasMode({ modeKey: mode }, "twin");
-    if (!isYy && !isTwin) return null;
+    if (!isYy) return null;
     const candidates = [];
     try {
       if (g && g.Ra && g.Ra.ka) candidates.push(g.Ra.ka);
@@ -1264,7 +1275,6 @@
     } catch (eCand) { /* ignore */ }
     const primary = primaryBody || [];
     const p0 = primary[0];
-    // Twin bodies are index-aligned with the primary, so they share its flags
     const dims = snakeDimFlags(g && g.oa);
     for (let i = 0; i < candidates.length; i++) {
       const mapped = mapBody(candidates[i], dims);
@@ -1282,7 +1292,6 @@
       return mapped;
     }
     // Yin Yang only: geometric mirror fallback
-    if (!isYy) return null;
     if (!primary.length) return null;
     const w = width || 17;
     const h = height || 15;
@@ -1663,11 +1672,14 @@
 
     try {
       if (entities.walls != null) {
+        // Never stamp cells native itself keeps clear (the 2×2 board corners) —
+        // a sender on another board size would otherwise paint solid corners.
+        const walls = filterMosaicWalls(entities.walls, bw, bh);
         if (g.Ca && Array.isArray(g.Ca.wa) && g.Ca.wa.length) {
-          writeNumericGrid(g.Ca.wa, entities.walls, 0, 1);
+          writeNumericGrid(g.Ca.wa, walls, 0, 1);
         }
         if (g.Ca && g.Ca.Aa && typeof g.Ca.Aa.forEach === "function") {
-          writeMap(g.Ca.Aa, entities.walls);
+          writeMap(g.Ca.Aa, walls);
         }
       }
     } catch (eW) { /* ignore */ }
@@ -1759,7 +1771,33 @@
           : Array.isArray(g.Qa.oa)
             ? g.Qa.oa
             : null;
-        if (bucket) writeList(bucket, list);
+        if (bucket) {
+          // A gate's cell lives on Upa (the 2×2 corner), not pos, so writeList
+          // would swap the native instance for a bare point and leave the
+          // engine drawing the old footprint. Move them in place instead.
+          const template = bucket[0] && typeof bucket[0] === "object" ? bucket[0] : null;
+          while (bucket.length > list.length) bucket.pop();
+          for (let i = 0; i < list.length; i++) {
+            const src = list[i];
+            if (!src) continue;
+            let dst = bucket[i];
+            if (!dst || typeof dst !== "object") {
+              dst = {};
+              if (template) {
+                try {
+                  Object.keys(template).forEach(function (k) {
+                    if (k === "Upa" || k === "pos") return;
+                    dst[k] = template[k];
+                  });
+                } catch (eGc) { /* ignore */ }
+              }
+              bucket[i] = dst;
+            }
+            dst.Upa = makeNativePoint(src.x, src.y, dst.Upa);
+            paintEntityFields(dst, src);
+            applied = true;
+          }
+        }
       }
     } catch (eG) { /* ignore */ }
     try {
@@ -1999,28 +2037,114 @@
   }
 
   function scrapeModeKey() {
+    return effectiveModeKey();
+  }
+
+  /**
+   * ModeRegistry key, with Slot Machine's active roll folded in as `+id`.
+   * Under Slot Machine getCurrentModeKey() is just "slot_machine", so co-op
+   * rules (peaceful, borderless, cheese, dimension, light, yin_yang) would
+   * otherwise miss the roll.
+   */
+  function effectiveModeKey() {
+    let key = "";
     try {
       if (root.ModeRegistry && typeof root.ModeRegistry.getCurrentModeKey === "function") {
-        return String(root.ModeRegistry.getCurrentModeKey() || "");
+        key = String(root.ModeRegistry.getCurrentModeKey() || "");
+      }
+    } catch (e) { /* ignore */ }
+    if (!key) {
+      try {
+        if (root.timeKeeper && root.timeKeeper.mode) {
+          key = String(root.timeKeeper.mode);
+        }
+      } catch (e2) { /* ignore */ }
+    }
+    try {
+      if (
+        typeof root.isSlotMachineActive === "function" &&
+        root.isSlotMachineActive() &&
+        root.__slotActive != null
+      ) {
+        const roll = resolveSlotModeId(root.__slotActive);
+        if (roll) {
+          const parts = key
+            ? String(key)
+                .toLowerCase()
+                .split("+")
+                .filter(Boolean)
+            : [];
+          if (parts.indexOf(roll) < 0) parts.push(roll);
+          if (parts.indexOf("slot_machine") < 0 && key.indexOf("slot") >= 0) {
+            /* keep slot_machine if already present */
+          }
+          key = parts.join("+") || roll;
+        }
+      }
+    } catch (eSlot) { /* ignore */ }
+    return key;
+  }
+
+  /** Map Slot Machine mode index → ModeRegistry id (peaceful = 20). */
+  function resolveSlotModeId(modeNum) {
+    const n = Number(modeNum);
+    if (!Number.isFinite(n)) return null;
+    const idx = n | 0;
+    if (idx === 20) return "peaceful";
+    try {
+      if (
+        root.ModeRegistry &&
+        typeof root.ModeRegistry._matchMiddleId === "function" &&
+        typeof root.slot_trophy_url_for_mode === "function"
+      ) {
+        const url = root.slot_trophy_url_for_mode(idx);
+        const id = root.ModeRegistry._matchMiddleId(url);
+        if (id) return id;
       }
     } catch (e) { /* ignore */ }
     try {
-      if (root.timeKeeper && root.timeKeeper.mode) {
-        return String(root.timeKeeper.mode);
+      const middle = root.ModeRegistry && root.ModeRegistry.MIDDLE;
+      if (Array.isArray(middle)) {
+        const byBit = middle.find(function (m) {
+          return m && m.bitIndexV3 === idx;
+        });
+        if (byBit && byBit.id) return byBit.id;
+        if (middle[idx] && middle[idx].id) return middle[idx].id;
       }
     } catch (e2) { /* ignore */ }
-    return "";
+    // Remix custom rolls
+    if (idx === 23) return "candy";
+    if (idx === 24) return "chess";
+    if (idx === 25) return "burger";
+    if (idx === 26) return "cat";
+    if (idx === 27) return "mexico";
+    if (idx === 28) return "bomb_fruit";
+    return null;
   }
 
   function boardHasMode(board, id) {
-    if (!board || !id) return false;
-    const key = String(board.modeKey || "");
+    if (!id) return false;
+    const key = String((board && board.modeKey) || scrapeModeKey() || "");
     if (!key) return false;
     if (key === id) return true;
     const parts = key.split("+");
     for (let i = 0; i < parts.length; i++) {
       if (parts[i] === id) return true;
     }
+    return false;
+  }
+
+  /**
+   * Winged (and Slot winged roll): fruit drifts on He each tick. Co-op must seed
+   * spawn pos + direction once, then trust each client's native motion — late
+   * pos sync rubber-bands fruit backwards.
+   */
+  function isCoopFruitMotionMode() {
+    if (boardHasMode({ modeKey: scrapeModeKey() }, "winged")) return true;
+    try {
+      const slot = root.__slotActive != null ? Number(root.__slotActive) | 0 : -1;
+      if (slot === 6) return true; // Winged roll
+    } catch (e) { /* ignore */ }
     return false;
   }
 
@@ -2095,6 +2219,17 @@
         body2[0].y,
         Math.max(LIGHT_HEAD_FLOOR, hr2)
       );
+    }
+    // Extra heads (co-op remotes) — same stamp as the local head
+    const extraHeads = board.heads || [];
+    for (let hi = 0; hi < extraHeads.length; hi++) {
+      const h = extraHeads[hi];
+      if (!h || h.x == null || h.y == null) continue;
+      const hr =
+        h.light != null && Number.isFinite(Number(h.light))
+          ? Number(h.light)
+          : LIGHT_HEAD_FLOOR;
+      pushMosaicLight(lights, h.x, h.y, Math.max(LIGHT_HEAD_FLOOR, hr));
     }
     const apples = board.apples || [];
     for (let i = 0; i < apples.length; i++) {
@@ -4537,8 +4672,8 @@
 
   /**
    * After Remix/Chess tick patches, also set __mpGame and cache board fields.
-   * Co-op: __mpCoopOnTick each tick; __mpCoopRenderEnter only caches PlayerRenderer
-   * (companions paint once per tick, not every render frame).
+   * Co-op: __mpCoopOnTick each tick; __mpCoopRenderEnter caches PlayerRenderer
+   * and companions paint every render frame.
    */
   function alterSnakeCodeExposeGame(code) {
     if (typeof code !== "string") return code;
@@ -4981,11 +5116,7 @@
       score: scoreInfo.score != null ? scoreInfo.score | 0 : 0,
     };
     try {
-      const key =
-        (root.ModeRegistry &&
-          typeof root.ModeRegistry.getCurrentModeKey === "function" &&
-          root.ModeRegistry.getCurrentModeKey()) ||
-        "";
+      const key = scrapeModeKey();
       const parts = String(key).toLowerCase().split("+");
       if (
         parts.indexOf("peaceful") >= 0 ||
@@ -4995,7 +5126,45 @@
       ) {
         out.peaceful = true;
       }
+      // Yin Yang companion (Twin has no second snake)
+      if (parts.indexOf("yin_yang") >= 0) {
+        let w = 17;
+        let h = 15;
+        try {
+          const meta =
+            (g && g.wa && g.wa.oa && g.wa.oa.oa) ||
+            (g && g.oa && g.oa.oa) ||
+            {};
+          if (meta.width) w = meta.width | 0;
+          if (meta.height) h = meta.height | 0;
+        } catch (eSz) { /* defaults */ }
+        const body2 = scrapeCompanionBody(g, body, w, h);
+        if (body2 && body2.length) out.body2 = body2;
+      }
     } catch (eP) { /* ignore */ }
+    try {
+      if (typeof boardSnakePoisoned === "function") {
+        if (boardSnakePoisoned({ poisonTicks: root.__mpBoardCache && root.__mpBoardCache.poisonTicks }) ||
+            (g && g.oa && (g.oa.Ja > 0 || g.oa.poisonTicks > 0))) {
+          out.poisoned = true;
+        }
+      }
+      // Poison ticks live on the snake / board in several builds
+      const ticks =
+        (g && g.oa && (g.oa.Ja != null ? g.oa.Ja : g.oa.poisonTicks)) ||
+        (root.__mpBoardCache && root.__mpBoardCache.poisonTicks);
+      if (ticks != null && Number(ticks) > 0) out.poisoned = true;
+    } catch (ePo) { /* ignore */ }
+    try {
+      const lights = scrapeSnakeLights(g);
+      if (lights && lights.headLight != null) out.headLight = lights.headLight;
+      if (lights && lights.headLight2 != null) out.headLight2 = lights.headLight2;
+    } catch (eL) { /* ignore */ }
+    try {
+      if (root.__slotActive != null && Number.isFinite(Number(root.__slotActive))) {
+        out.slotActive = Number(root.__slotActive) | 0;
+      }
+    } catch (eS) { /* ignore */ }
     if (!includeColors) return out;
 
     const Colors = root.MultiplayerColors;
@@ -5224,7 +5393,8 @@
     // Heavy board entities only when requested (trophy modes) — default fruit-only
     if (opts.includeEntities) {
       const entities = scrapeBoardEntities();
-      out.walls = entities.walls;
+      // Re-filter against the known size, same as the mosaic board scrape
+      out.walls = filterMosaicWalls(entities.walls, board.width, board.height);
       out.keys = entities.keys;
       out.boxes = entities.boxes;
       out.goals = entities.goals;
@@ -5246,21 +5416,24 @@
       return (arr && arr.length) || 0;
     }
     const apples = cols.apples || [];
+    // Winged: ignore live x/y so drifting fruit does not republish every tile.
+    // Reseeds use force=true on publish; peers trust local He between seeds.
+    const trustMotion =
+      !!cols.fruitMotionTrust || isCoopFruitMotionMode();
     let fruit = "";
     for (let i = 0; i < apples.length; i++) {
       const a = apples[i];
       if (!a) continue;
       fruit +=
         (i ? ";" : "") +
-        (a.x | 0) +
-        "," +
-        (a.y | 0) +
-        "," +
+        (trustMotion ? "m" : (a.x | 0) + "," + (a.y | 0) + ",") +
         (a.type != null ? a.type : "") +
         (a.poison ? "p" : "") +
         (a.slotMode != null ? "s" + a.slotMode : "") +
         (a.burgerTimer != null ? "b" + a.burgerTimer : "") +
         (a.isPiece ? "c" + (a.chessPiece || "") : "") +
+        // Shield mode gains/losses can be the only change on the board
+        (a.shields && a.shields.length ? "h" + a.shields.join("") : "") +
         (a.otherDim ? "d" : "");
     }
     return [
@@ -5340,9 +5513,7 @@
     const findFree = root.__mpCoopFindFreeSpawn;
     if (typeof readOcc !== "function") return apples;
 
-    const out = apples.map(function (a) {
-      return a ? Object.assign({}, a) : { x: 0, y: 0 };
-    });
+    const placed = [];
     const reserved = {};
 
     function blockedKeys() {
@@ -5353,8 +5524,9 @@
       return occ;
     }
 
-    for (let i = 0; i < out.length; i++) {
-      const a = out[i];
+    for (let i = 0; i < apples.length; i++) {
+      const src = apples[i];
+      const a = src ? Object.assign({}, src) : { x: 0, y: 0 };
       const x = a.x != null ? a.x | 0 : 0;
       const y = a.y != null ? a.y | 0 : 0;
       const k = x + "," + y;
@@ -5366,6 +5538,7 @@
         reserved[k] = true;
         a.x = x;
         a.y = y;
+        placed.push(a);
         continue;
       }
       let free = null;
@@ -5398,13 +5571,18 @@
         a.x = free.x;
         a.y = free.y;
         reserved[free.x + "," + free.y] = true;
+        placed.push(a);
       } else {
-        reserved[k] = true;
-        // Board full — signal ALL apples for co-op win detection
+        // Board full — drop the apple; ALL_APPLES win (not a blocked spawn)
         root.__mpCoopBoardFull = true;
+        if (typeof root.__mpCoopOnBoardFull === "function") {
+          try {
+            root.__mpCoopOnBoardFull();
+          } catch (eFull) { /* ignore */ }
+        }
       }
     }
-    return out;
+    return placed;
   }
 
   /** Max shared apples: board cells minus walls minus length-3 seats. */
@@ -5421,8 +5599,16 @@
     if (!payload || !payload.apples) return false;
     const g = gameInstance();
     let apples = payload.apples;
+    const motionMode =
+      !!payload.fruitMotionTrust ||
+      !!payload.fruitMotionSeed ||
+      isCoopFruitMotionMode();
+    // Between winged seeds, never yank live fruit back to a lagged peer pose
+    const trustLiveMotion = motionMode && !payload.fruitMotionSeed;
     try {
-      apples = nudgeCoopApplesOffSnakes(apples, g);
+      if (!trustLiveMotion) {
+        apples = nudgeCoopApplesOffSnakes(apples, g);
+      }
       if (g && g.wa && Array.isArray(g.wa.ka)) {
         // Native fruit render does `apple.pos.clone()` — keep a template Od/point.
         let templateApple = null;
@@ -5443,12 +5629,15 @@
         for (let i = 0; i < apples.length; i++) {
           const src = apples[i];
           let dst = g.wa.ka[i];
+          const isNew = !dst;
           if (!dst) {
             dst = {};
             if (templateApple) {
               try {
                 Object.keys(templateApple).forEach(function (k) {
-                  if (k === "pos") return;
+                  if (k === "pos" || k === "He" || k === "CAb" || k === "iL") {
+                    return;
+                  }
                   dst[k] = templateApple[k];
                 });
               } catch (e) { /* ignore */ }
@@ -5458,9 +5647,13 @@
             g.wa.ka[i] = dst;
             if (!templatePos && dst.pos) templatePos = dst.pos;
             if (!templateApple) templateApple = dst;
+            applyFruitHe(dst, src, g);
+          } else if (trustLiveMotion && !isNew) {
+            // Keep local pos + He; only refresh static fruit metadata below
           } else if (dst.pos || templatePos) {
             dst.pos = ensureNativePos(dst.pos, src.x, src.y, templatePos);
             if (!templatePos && dst.pos) templatePos = dst.pos;
+            applyFruitHe(dst, src, g);
           } else {
             // Rare: apple stored as a bare point
             dst.x = src.x;
@@ -5468,6 +5661,7 @@
             if (typeof dst.clone !== "function") {
               dst.pos = makeNativePoint(src.x, src.y, templatePos);
             }
+            applyFruitHe(dst, src, g);
           }
           if (src.type != null) dst.type = src.type;
           if (src.poison) {
@@ -5500,17 +5694,61 @@
           }
         }
         applyBoardEntities(payload);
-        if (typeof root.__mpCoopStampPhantomWalls === "function") {
-          try {
-            root.__mpCoopStampPhantomWalls(g);
-          } catch (ePh) { /* ignore */ }
-        }
+        // Sync Slot Machine roll from peer (idempotent; skip if we just ate)
+        try {
+          if (
+            payload.slotActive != null &&
+            Number.isFinite(Number(payload.slotActive)) &&
+            typeof root.setSlotActive === "function" &&
+            !root.__mpCoopSkipFruitReapply
+          ) {
+            const next = Number(payload.slotActive) | 0;
+            if ((root.__slotActive | 0) !== next) {
+              root.setSlotActive(next, g);
+              root.__mpCoopLastSlotActive = next;
+            }
+          }
+        } catch (eSlot) { /* ignore */ }
         return true;
       }
     } catch (e) {
       console.warn("applyCollectables", e);
     }
     return false;
+  }
+
+  /** Apply winged He / enable motion helpers on a fruit object. */
+  function applyFruitHe(dst, src, g) {
+    if (!dst) return;
+    if (src && src.he && typeof src.he.x === "number" && typeof src.he.y === "number") {
+      const hx = Number(src.he.x);
+      const hy = Number(src.he.y);
+      if (typeof root.slot_vec === "function") {
+        try {
+          dst.He = root.slot_vec(hx, hy);
+          dst.CAb = root.slot_vec(hx, hy);
+          if (!dst.iL || typeof dst.iL.x !== "number") {
+            dst.iL = root.slot_vec(1, 1);
+          } else if (!dst.iL.x && !dst.iL.y) {
+            dst.iL.x = 1;
+            dst.iL.y = 1;
+          }
+        } catch (eVec) {
+          dst.He = { x: hx, y: hy };
+          dst.CAb = { x: hx, y: hy };
+          dst.iL = dst.iL || { x: 1, y: 1 };
+        }
+      } else {
+        dst.He = { x: hx, y: hy };
+        dst.CAb = { x: hx, y: hy };
+        if (!dst.iL) dst.iL = { x: 1, y: 1 };
+      }
+    }
+    if (typeof root.slot_ensure_fruit_motion === "function") {
+      try {
+        root.slot_ensure_fruit_motion(dst, g);
+      } catch (eMot) { /* ignore */ }
+    }
   }
 
   /** Start native run clock for co-op players (not spectators). */
@@ -5689,6 +5927,7 @@
     dismissDeathOverlayForRun: dismissDeathOverlayForRun,
     gameInstance: gameInstance,
     readScoreAndAlive: readScoreAndAlive,
+    readLiveRunTimeMs: readLiveRunTimeMs,
     scrapeBoard: scrapeBoard,
     scrapeSnakeDelta: scrapeSnakeDelta,
     scrapeCoopSnakeDelta: scrapeCoopSnakeDelta,
@@ -5702,6 +5941,7 @@
     applyCollectables: applyCollectables,
     nudgeCoopApplesOffSnakes: nudgeCoopApplesOffSnakes,
     coopAppleGoal: coopAppleGoal,
+    isCoopFruitMotionMode: isCoopFruitMotionMode,
     applyBoardEntities: applyBoardEntities,
     applyCoopSpawnOffset: applyCoopSpawnOffset,
     applyCoopStartMoving: applyCoopStartMoving,
@@ -5743,6 +5983,8 @@
     ARROW_DEFAULT_COLOR: ARROW_DEFAULT_COLOR,
     boardHasMode: boardHasMode,
     scrapeModeKey: scrapeModeKey,
+    effectiveModeKey: effectiveModeKey,
+    resolveSlotModeId: resolveSlotModeId,
     collectMosaicLights: collectMosaicLights,
     mosaicCellLit: mosaicCellLit,
     mosaicPointLit: mosaicPointLit,
@@ -5750,6 +5992,9 @@
     LIGHT_FRUIT_DEFAULT: LIGHT_FRUIT_DEFAULT,
     LIGHT_OBJECT_RADIUS: LIGHT_OBJECT_RADIUS,
     drawWallSolverStyleSnake: drawWallSolverStyleSnake,
+    drawBoardApples: drawBoardApples,
+    drawBoardWalls: drawBoardWalls,
+    drawBoardModeEntities: drawBoardModeEntities,
     snakeMotion: snakeMotion,
     snakeMotionActive: snakeMotionActive,
     bodySegmentsAdjacent: bodySegmentsAdjacent,

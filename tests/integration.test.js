@@ -747,15 +747,41 @@ describe("ws integration", { timeout: 60000 }, () => {
     spec.ws.close();
   });
 
-  it("rejects unknown room code without creating it", async () => {
+  it("opens a room for an unused code and lets a peer join it", async () => {
     const a = await wsClient();
     send(a.ws, "HELLO", {
       create: false,
       roomCode: "ZZZZ",
+      displayName: "First",
+    });
+    const welcome = await waitMsg(a.inbox, "WELCOME", 5000);
+    assert.equal(welcome.payload.roomCode, "ZZZZ");
+    assert.equal(welcome.payload.isAdmin, true, "opener owns the new room");
+
+    // Second client with the same code lands in the room that now exists
+    const b = await wsClient();
+    send(b.ws, "HELLO", {
+      create: false,
+      roomCode: "ZZZZ",
+      displayName: "Second",
+    });
+    const welcomeB = await waitMsg(b.inbox, "WELCOME", 5000);
+    assert.equal(welcomeB.payload.roomCode, "ZZZZ");
+    assert.equal(welcomeB.payload.isAdmin, false, "joiner does not take admin");
+
+    a.ws.close();
+    b.ws.close();
+  });
+
+  it("still rejects a malformed room code", async () => {
+    const a = await wsClient();
+    send(a.ws, "HELLO", {
+      create: false,
+      roomCode: "nope!",
       displayName: "Lost",
     });
     const err = await waitMsg(a.inbox, "ERROR", 5000);
-    assert.equal(err.payload.code, "room_not_found");
+    assert.equal(err.payload.code, "bad_room");
     a.ws.close();
   });
 

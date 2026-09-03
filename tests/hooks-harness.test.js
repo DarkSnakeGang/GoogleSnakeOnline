@@ -1137,6 +1137,48 @@ describe("GSM hook harness", () => {
     assert.equal(win.__remixGame.wa.ka[1].pos.y, 6);
   });
 
+  it("winged: seed applies pos+He once; later deltas trust local motion", () => {
+    win.__remixGame.wa.ka = [
+      {
+        pos: { x: 4, y: 4, clone: function () { return { x: this.x, y: this.y }; } },
+        type: 0,
+        He: { x: 0.5, y: 0 },
+        CAb: { x: 0.5, y: 0 },
+        iL: { x: 1, y: 1 },
+      },
+    ];
+    assert.equal(
+      Gsm.applyCollectables({
+        fruitMotionSeed: true,
+        apples: [{ x: 7, y: 3, type: 0, he: { x: -0.5, y: 0.5 } }],
+      }),
+      true
+    );
+    assert.equal(win.__remixGame.wa.ka[0].pos.x, 7);
+    assert.equal(win.__remixGame.wa.ka[0].pos.y, 3);
+    assert.equal(win.__remixGame.wa.ka[0].He.x, -0.5);
+    assert.equal(win.__remixGame.wa.ka[0].He.y, 0.5);
+
+    // Local sim advances the fruit
+    win.__remixGame.wa.ka[0].pos.x = 6.2;
+    win.__remixGame.wa.ka[0].pos.y = 3.7;
+    win.__remixGame.wa.ka[0].He.x = 0.5;
+    win.__remixGame.wa.ka[0].He.y = 0.5;
+
+    assert.equal(
+      Gsm.applyCollectables({
+        fruitMotionTrust: true,
+        apples: [{ x: 1, y: 1, type: 0, he: { x: -0.5, y: -0.5 } }],
+      }),
+      true,
+      "non-seed winged delta must not yank pos/He"
+    );
+    assert.equal(win.__remixGame.wa.ka[0].pos.x, 6.2);
+    assert.equal(win.__remixGame.wa.ka[0].pos.y, 3.7);
+    assert.equal(win.__remixGame.wa.ka[0].He.x, 0.5);
+    assert.equal(win.__remixGame.wa.ka[0].He.y, 0.5);
+  });
+
   it("applyCollectables nudges fruit off co-op snake cells", () => {
     const nativePath = require.resolve(path.join(ROOT, "src/coop/native.js"));
     delete require.cache[nativePath];
@@ -1739,6 +1781,103 @@ describe("mosaic / focus versus state", () => {
     assert.equal(v.spectateMode, "focus");
   });
 
+  it("renderMosaic fills the viewport and fits all boards without scrolling", () => {
+    const { window: win } = makeDom();
+    win.innerWidth = 1200;
+    win.innerHeight = 800;
+    win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
+    const MultiplayerApp = (function loadAppLocal() {
+      global.window = win;
+      global.document = win.document;
+      [
+        "shared/colors.js",
+        "shared/protocol.js",
+        "runtime/bridge.js",
+        "session/ready.js",
+        "versus/scoreboard.js",
+        "coop/state.js",
+        "coop/native.js",
+        "hooks/gsm.js",
+        "net/client.js",
+        "ui/settingsTab.js",
+        "versus/focus.js",
+        "versus/mosaic.js",
+        "mod.js",
+      ].forEach(function (rel) {
+        const p = require.resolve(path.join(ROOT, "src", rel));
+        delete require.cache[p];
+        require(path.join(ROOT, "src", rel));
+      });
+      return win.MultiplayerApp || require(path.join(ROOT, "src/mod.js")).MultiplayerApp;
+    })();
+    const app = new MultiplayerApp();
+    app.versus.setSpectateMode("mosaic");
+    app.versus.boards = {};
+    const players = [];
+    for (let i = 0; i < 4; i++) {
+      const id = "p" + (i + 1);
+      players.push({ clientId: id, role: "player", displayName: id });
+      app.versus.boards[id] = {
+        width: 17,
+        height: 15,
+        body: [],
+        apples: [],
+        timeMs: 1000,
+      };
+      app.versus.scores[id] = { score: i, bestScore: i, alive: true };
+    }
+    app.client = {
+      me: function () {
+        return { role: "spectator", clientId: "spec" };
+      },
+      roster: {
+        mode: "versus",
+        sessionActive: true,
+        clients: players.concat([{ clientId: "spec", role: "spectator" }]),
+      },
+    };
+    app._leaveVersusFocusSpectate = function () {};
+    app._colorForClient = function () {
+      return { primary: "#00f", secondary: "#00a" };
+    };
+    const Gsm = win.MultiplayerGsm;
+    const prevDraw = Gsm.drawBoardOnCanvas;
+    Gsm.drawBoardOnCanvas = function () {};
+    try {
+      app.renderMosaic();
+      const el = app._mosaicEl;
+      assert.ok(el);
+      assert.equal(el.style.display, "grid");
+      assert.equal(el.style.width, "100vw");
+      assert.equal(el.style.height, "100vh");
+      assert.equal(el.style.overflow, "hidden");
+      assert.match(el.style.gridTemplateColumns, /^repeat\(2, \d+px\)$/);
+      const canvas = app._mosaicCells.p1.querySelector("canvas");
+      const cssW = parseInt(canvas.style.width, 10);
+      const cssH = parseInt(canvas.style.height, 10);
+      assert.ok(cssW > 180, "boards should grow beyond the old 180px floor");
+      assert.ok(cssH > 100);
+      // 2×2 grid must fit: 2*w + gap <= viewport - pad
+      assert.ok(2 * cssW + 10 <= 1200 - 20 + 1);
+      assert.ok(2 * (cssH + 28) + 10 <= 800 - 20 + 40);
+
+      win.innerWidth = 640;
+      win.innerHeight = 480;
+      app.renderMosaic();
+      const cssW2 = parseInt(
+        app._mosaicCells.p1.querySelector("canvas").style.width,
+        10
+      );
+      assert.ok(cssW2 < cssW, "boards shrink to stay inside a smaller window");
+      assert.ok(2 * cssW2 + 10 <= 640 - 20 + 1);
+    } finally {
+      Gsm.drawBoardOnCanvas = prevDraw;
+      if (app._stopMosaicLabelTick) app._stopMosaicLabelTick();
+      if (app._stopMosaicAnim) app._stopMosaicAnim();
+      if (app._mosaicEl) app._mosaicEl.style.display = "none";
+    }
+  });
+
   it("renderMosaic labels show run timer, best, and lead star", () => {
     const { window: win } = makeDom();
     win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
@@ -1777,8 +1916,8 @@ describe("mosaic / focus versus state", () => {
       p2: { score: 1, timeMs: 5000, alive: false, bestScore: 8, bestTimeMs: 20000 },
     };
     app.versus.runClocks = {
-      p1: { startedAtMs: started, frozenMs: null },
-      p2: { startedAtMs: started - 100000, frozenMs: 5000 },
+      p1: { startedAtMs: started, liveMs: 12300, syncedAtMs: Date.now(), frozenMs: null },
+      p2: { startedAtMs: started - 100000, liveMs: 5000, frozenMs: 5000 },
     };
     app.versus.boards = {
       p1: { width: 17, height: 15, body: [], apples: [], timeMs: 10000 },
@@ -1811,12 +1950,12 @@ describe("mosaic / focus versus state", () => {
       const label1 = app._mosaicCells.p1.querySelector(".mp-mosaic-label");
       const label2 = app._mosaicCells.p2.querySelector(".mp-mosaic-label");
       assert.ok(label1);
-      // Live clock from startedAtMs (~12.3s), not score.timeMs 99999
-      assert.match(label1.textContent, /^★ Blue · 12\.[0-9]s · best 15$/);
+      // Live clock from liveMs (12.30s), not score.timeMs 99999
+      assert.match(label1.textContent, /^★ Blue · 12\.30s · best 15$/);
       assert.ok(app._mosaicCells.p1.classList.contains("mp-mosaic-lead"));
-      assert.match(label2.textContent, /^Red · 5\.0s · best 8$/);
+      assert.match(label2.textContent, /^Red · 5\.00s · best 8$/);
       assert.equal(app._mosaicCells.p2.classList.contains("mp-mosaic-lead"), false);
-      // Apple-style timeMs pulse must not jump the mosaic clock
+      // Live in-game timeMs pulse advances the mosaic clock
       app.versus.onScorePulse({
         clientId: "p1",
         score: 4,
@@ -1827,11 +1966,11 @@ describe("mosaic / focus versus state", () => {
       });
       app.versus.leaderClientId = "p2";
       app.renderMosaic({ labelsOnly: true });
-      assert.match(label1.textContent, /^Blue · 12\.[0-9]s · best 15$/);
-      assert.match(label2.textContent, /^★ Red · 5\.0s · best 8$/);
-      assert.equal(VersusState.formatRunClock(12300), "12.3s");
+      assert.match(label1.textContent, /^Blue · 45\.60s · best 15$/);
+      assert.match(label2.textContent, /^★ Red · 5\.00s · best 8$/);
+      assert.equal(VersusState.formatRunClock(12300), "12.30s");
       assert.equal(
-        VersusState.resolveRunClockMs({ startedAtMs: 1000, frozenMs: null }, 3500),
+        VersusState.resolveRunClockMs({ liveMs: 2500, frozenMs: null }, 3500),
         2500
       );
       assert.equal(
@@ -2152,16 +2291,22 @@ describe("versus Focus spectate (mosaic view)", () => {
     app.versus.scores = {
       admin: { score: 6, bestScore: 12, timeMs: 4200, alive: true },
     };
-    app.versus.runClocks = { admin: { startedAtMs: started, frozenMs: null } };
+    app.versus.runClocks = {
+      admin: { startedAtMs: started, liveMs: 4200, frozenMs: null },
+    };
     try {
       app.renderFocusBoard();
       const label = win.document.querySelector("#mp-focus-view .mp-focus-label");
-      assert.match(label.textContent, /^Ada · 6 · 4\.[0-9]s · best 12$/);
+      assert.match(label.textContent, /^Ada · 6 · 4\.20s · best 12$/);
       assert.equal(label.classList.contains("mp-focus-dead"), false);
       app.versus.boards.admin = liveBoard({ alive: false, score: 9 });
-      app.versus.runClocks.admin = { startedAtMs: started, frozenMs: 4300 };
+      app.versus.runClocks.admin = {
+        startedAtMs: started,
+        liveMs: 4300,
+        frozenMs: 4300,
+      };
       app.renderFocusBoard();
-      assert.match(label.textContent, /^Ada · 9 · 4\.3s · best 12 · dead$/);
+      assert.match(label.textContent, /^Ada · 9 · 4\.30s · best 12 · dead$/);
       assert.ok(label.classList.contains("mp-focus-dead"));
     } finally {
       app._leaveVersusFocusSpectate();
@@ -2320,6 +2465,70 @@ describe("Multiplayer settings tab layout", () => {
     assert.ok(ui.hud.innerHTML.indexOf("Last match results") >= 0);
   });
 
+  it("co-op HUD shows run clock and distinct SESSION_END reasons", () => {
+    const { JSDOM } = require("jsdom");
+    const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>");
+    const win = dom.window;
+    global.window = win;
+    global.document = win.document;
+    win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
+    win.MultiplayerSession = require(path.join(ROOT, "src/session/ready.js"));
+    win.VersusState = require(path.join(ROOT, "src/versus/scoreboard.js"));
+    const uiPath = require.resolve(path.join(ROOT, "src/ui/settingsTab.js"));
+    delete require.cache[uiPath];
+    require(path.join(ROOT, "src/ui/settingsTab.js"));
+    const UI = win.MultiplayerUI;
+    const app = {
+      _coopTotal: 12,
+      _coopGoal: 48,
+      _coopTimerStartedAtMs: Date.now() - 12300,
+      _coopScores: { a: { score: 7, alive: true }, b: { score: 5, alive: false } },
+      client: {
+        connected: true,
+        roster: {
+          mode: "coop",
+          sessionActive: true,
+          clients: [
+            { clientId: "a", role: "player", displayName: "Ada" },
+            { clientId: "b", role: "player", displayName: "Bob" },
+          ],
+        },
+        me: function () {
+          return { clientId: "a", role: "player" };
+        },
+      },
+    };
+    const ui = new UI(app);
+    ui.mountHud();
+    if (!ui.hud) {
+      ui.hud = win.document.createElement("div");
+      win.document.body.appendChild(ui.hud);
+    }
+    ui.updateHud(app);
+    assert.ok(ui.hud.innerHTML.indexOf("Team score:") >= 0);
+    assert.ok(ui.hud.innerHTML.indexOf("12") >= 0);
+    assert.ok(ui.hud.innerHTML.indexOf("48") >= 0);
+    assert.ok(/12\.[0-9]s/.test(ui.hud.innerHTML), "live clock next to score");
+    assert.ok(ui.hud.innerHTML.indexOf("Fill the board together") >= 0);
+
+    app.client.roster.sessionActive = false;
+    app._coopFinalTimeMs = 45100;
+    app._coopEndReason = "ALL_APPLES";
+    app._coopWon = true;
+    ui.updateHud(app);
+    assert.ok(ui.hud.innerHTML.indexOf("All apples!") >= 0);
+    assert.ok(ui.hud.innerHTML.indexOf("45.1s") >= 0);
+
+    app._coopEndReason = "ALL_DEAD";
+    app._coopWon = false;
+    ui.updateHud(app);
+    assert.ok(ui.hud.innerHTML.indexOf("All snakes down") >= 0);
+
+    app._coopEndReason = "aborted";
+    ui.updateHud(app);
+    assert.ok(ui.hud.innerHTML.indexOf("Ended by admin") >= 0);
+  });
+
   it("versus HUD announces ranked last-match results to all players", () => {
     const { JSDOM } = require("jsdom");
     const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>");
@@ -2448,17 +2657,21 @@ describe("Multiplayer settings tab layout", () => {
       .map(function (s) { return s.textContent || ""; })
       .join("\n");
     assert.ok(
-      /#mp-mosaic\{[^}]*left:\s*50%/.test(mosaicCss),
-      "mosaic should be horizontally centered"
+      /#mp-mosaic\{[^}]*inset:\s*0/.test(mosaicCss) ||
+        /#mp-mosaic\{[^}]*left:\s*0/.test(mosaicCss),
+      "mosaic should fill the viewport"
     );
     assert.ok(
-      /#mp-mosaic\{[^}]*top:\s*12px/.test(mosaicCss),
-      "mosaic should sit at the top of the screen"
+      /#mp-mosaic\{[^}]*width:\s*100vw/.test(mosaicCss),
+      "mosaic should span the full viewport width"
     );
     assert.ok(
-      /max-width:\s*min\(96vw,\s*1100px\)/.test(mosaicCss) ||
-        /max-width:min\(96vw,1100px\)/.test(mosaicCss),
-      "mosaic max width allows larger tiles"
+      /#mp-mosaic\{[^}]*height:\s*100vh/.test(mosaicCss),
+      "mosaic should span the full viewport height"
+    );
+    assert.ok(
+      /#mp-mosaic\{[^}]*overflow:\s*hidden/.test(mosaicCss),
+      "mosaic should fit all boards without scrolling"
     );
     assert.ok(
       win.document.getElementById("mp-panel-connect").classList.contains("mp-panel-on")

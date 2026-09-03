@@ -82,7 +82,7 @@
     /**
      * Boards land one tick at a time and the renderer slides the snake between
      * cells, so cells that are mid-step need repainting between deltas. Canvas
-     * only — labels, classes and the cat strip stay on the 200ms tick.
+     * only — labels refresh on the mosaic label interval from live run clocks.
      */
     App.prototype._ensureMosaicAnim = function () {
       if (this._mosaicAnimRaf) return;
@@ -148,8 +148,103 @@
             self.renderMosaic();
           }
         };
+        if (!this._mosaicResizeBound) {
+          this._mosaicResizeBound = function () {
+            if (self.versus && self.versus.spectateMode === "mosaic") {
+              self.renderMosaic();
+            }
+          };
+          window.addEventListener("resize", this._mosaicResizeBound);
+        }
       }
       return el;
+    };
+
+    /**
+     * Pick cols/rows + board CSS size so every cell fits in the viewport and
+     * boards use as much of the screen as possible (no scroll).
+     */
+    App.prototype._layoutMosaicGrid = function (el, players) {
+      const n = players.length;
+      const gap = 10;
+      const pad = 20;
+      const rootWin = typeof window !== "undefined" ? window : null;
+      const vw = (rootWin && rootWin.innerWidth) || 1280;
+      const vh = (rootWin && rootWin.innerHeight) || 720;
+      const availW = Math.max(120, vw - pad);
+      const availH = Math.max(120, vh - pad);
+
+      let gridW = 17;
+      let gridH = 15;
+      let chrome = 28; // label + flex gaps
+      for (let i = 0; i < players.length; i++) {
+        const b = this.versus && this.versus.boards[players[i].clientId];
+        if (b && b.width > 0 && b.height > 0) {
+          gridW = b.width | 0;
+          gridH = b.height | 0;
+        }
+        if (b && b.catLives != null) chrome = 48;
+      }
+      const aspect = gridW / Math.max(1, gridH);
+
+      let best = null;
+      for (let cols = 1; cols <= n; cols++) {
+        const rows = Math.ceil(n / cols);
+        const cellW = (availW - gap * (cols - 1)) / cols;
+        const cellH = (availH - gap * (rows - 1)) / rows;
+        const maxBoardH = Math.max(40, cellH - chrome);
+        let w = cellW;
+        let h = w / aspect;
+        if (h > maxBoardH) {
+          h = maxBoardH;
+          w = h * aspect;
+        }
+        if (w > cellW) {
+          w = cellW;
+          h = w / aspect;
+        }
+        const area = w * h;
+        if (!best || area > best.area) {
+          best = {
+            cols: cols,
+            rows: rows,
+            w: Math.max(40, Math.floor(w)),
+            h: Math.max(36, Math.floor(h)),
+            area: area,
+          };
+        }
+      }
+
+      el.style.display = "grid";
+      el.style.gridTemplateColumns =
+        "repeat(" + best.cols + ", " + best.w + "px)";
+      el.style.gridAutoRows = "auto";
+      el.style.justifyContent = "center";
+      el.style.alignContent = "center";
+      el.style.gap = gap + "px";
+      el.style.width = "100vw";
+      el.style.height = "100vh";
+      el.style.maxWidth = "100vw";
+      el.style.maxHeight = "100vh";
+      el.style.overflow = "hidden";
+      el.style.boxSizing = "border-box";
+      return { w: best.w, h: best.h, cols: best.cols, rows: best.rows };
+    };
+
+    App.prototype._sizeMosaicCanvas = function (canvas, cssW, cssH) {
+      if (!canvas || !(cssW > 0) || !(cssH > 0)) return;
+      canvas.style.width = cssW + "px";
+      canvas.style.height = cssH + "px";
+      const dpr =
+        typeof window !== "undefined" && window.devicePixelRatio
+          ? Math.min(2, Number(window.devicePixelRatio) || 1)
+          : 1;
+      const tw = Math.max(1, Math.round(cssW * dpr));
+      const th = Math.max(1, Math.round(cssH * dpr));
+      if (canvas.width !== tw || canvas.height !== th) {
+        canvas.width = tw;
+        canvas.height = th;
+      }
     };
 
     App.prototype.renderMosaic = function (opts) {
@@ -186,9 +281,7 @@
         el.style.display = "none";
         return;
       }
-      const cols = Math.min(players.length, players.length <= 4 ? 2 : 3);
-      el.style.display = "grid";
-      el.style.gridTemplateColumns = "repeat(" + cols + ", minmax(180px, 1fr))";
+      const boardCss = this._layoutMosaicGrid(el, players);
 
       if (!labelsOnly) {
         let chromeBorder = null;
@@ -298,8 +391,11 @@
           cell.querySelector(".mp-mosaic-cat"),
           self.versus.boards[p.clientId]
         );
-        if (labelsOnly) return;
         const canvas = cell.querySelector("canvas");
+        if (canvas) {
+          self._sizeMosaicCanvas(canvas, boardCss.w, boardCss.h);
+        }
+        if (labelsOnly) return;
         const board = self.versus.boards[p.clientId];
         const colorInfo = self._colorForClient(p.clientId);
         if (canvas && board) {

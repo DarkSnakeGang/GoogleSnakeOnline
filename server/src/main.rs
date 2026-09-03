@@ -419,20 +419,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     }
                     continue;
                 }
+                // A code nobody has opened yet becomes that room — joining and
+                // hosting are the same action, so peers can agree on a code first.
+                let requested = state.get_or_create_room(&requested);
                 let rooms = state.rooms.lock();
-                if !rooms.contains_key(&requested) {
-                    drop(rooms);
-                    let err = Envelope::new(
-                        "ERROR",
-                        json!({"code":"room_not_found","message":"Room does not exist"}),
-                    );
-                    if let Ok(s) = serde_json::to_string(&err) {
-                        if let Some(tx) = state.clients.lock().get(&client_id) {
-                            let _ = tx.send(s);
-                        }
-                    }
-                    continue;
-                }
                 if rooms.get(&requested).map(|r| r.clients.len()).unwrap_or(0) >= MAX_CONNECTIONS {
                     drop(rooms);
                     let err = Envelope::new(

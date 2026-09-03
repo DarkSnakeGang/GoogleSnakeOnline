@@ -133,6 +133,9 @@ pub struct VersusScore {
     pub time_ms: u64,
     pub best_score: u32,
     pub best_time_ms: Option<u64>,
+    /// Fastest run time at which `best_score` was reached. Breaks ties when a
+    /// timed goal is never met, so the highest score with the fastest time wins.
+    pub best_score_time_ms: Option<u64>,
     /// Fastest time to complete the room's timed versus goal (Best 25/50/100/All).
     pub best_goal_time_ms: Option<u64>,
     pub goal_completed: bool,
@@ -169,6 +172,9 @@ pub struct Room {
     pub coop_alive: HashMap<String, bool>,
     /// Wall-clock when any co-op player first moved (shared timer epoch).
     pub coop_timer_started_at_ms: Option<u64>,
+    /// Frozen co-op seat order for the live session (client ids by slot index).
+    /// Cleared when the session ends; while idle, seats are recomputed live.
+    pub coop_slots: Vec<String>,
     pub outbox: Vec<(Option<String>, Envelope)>, // None = broadcast
     pub server_seq: u64,
 }
@@ -198,6 +204,7 @@ impl Room {
             collectables_owner: None,
             coop_alive: HashMap::new(),
             coop_timer_started_at_ms: None,
+            coop_slots: Vec::new(),
             outbox: Vec::new(),
             server_seq: 0,
         }
@@ -251,6 +258,51 @@ impl Room {
         self.clients.values().filter(|c| c.role == Role::Player).collect()
     }
 
+    /// Deterministic co-op seat order: promote_order, then join_order.
+    fn ordered_coop_players(&self) -> Vec<&ClientState> {
+        let mut players: Vec<&ClientState> = self.players();
+        players.sort_by_key(|c| (c.promote_order.unwrap_or(u64::MAX), c.join_order));
+        players
+    }
+
+    /// Slot index (0-based) for a client. During a live session uses the frozen
+    /// `coop_slots` list; otherwise recomputes from current player order.
+    fn coop_slot_of(&self, client_id: &str) -> Option<usize> {
+        if self.mode != Mode::Coop {
+            return None;
+        }
+        if self.session_active && !self.coop_slots.is_empty() {
+            return self
+                .coop_slots
+                .iter()
+                .position(|id| id == client_id);
+        }
+        self.ordered_coop_players()
+            .iter()
+            .take(MAX_COOP_PLAYERS)
+            .position(|c| c.client_id == client_id)
+    }
+
+    /// SESSION_START / resync co-op seat list with spawn oy offsets.
+    fn build_coop_slots_json(player_ids: &[String]) -> Value {
+        let n = player_ids.len();
+        let offsets = crate::coop::spawn_offsets(n);
+        let slots: Vec<Value> = player_ids
+            .iter()
+            .enumerate()
+            .map(|(i, client_id)| {
+                let oy = offsets.get(i).copied().unwrap_or(0);
+                json!({
+                    "clientId": client_id,
+                    "slot": i,
+                    "oy": oy,
+                    "playerNumber": i + 1,
+                })
+            })
+            .collect();
+        json!(slots)
+    }
+
     fn all_players_ready(&self) -> bool {
         let players: Vec<_> = self.players();
         !players.is_empty() && players.iter().all(|p| p.ready)
@@ -262,6 +314,7 @@ impl Room {
             .values()
             .map(|c| {
                 let resolved = resolve_display_name(c, &self.clients);
+                let coop_slot = self.coop_slot_of(&c.client_id);
                 json!({
                     "clientId": c.client_id,
                     "displayName": c.display_name,
@@ -274,6 +327,8 @@ impl Room {
                     "joinOrder": c.join_order,
                     "promoteOrder": c.promote_order,
                     "spectateFocus": c.spectate_focus,
+                    "coopSlot": coop_slot,
+                    "playerNumber": coop_slot.map(|s| s + 1),
                 })
             })
             .collect();
@@ -350,13 +405,39 @@ impl Room {
     }
 
     pub fn leave(&mut self, client_id: &str) {
-        if self.clients.remove(client_id).is_none() {
-            return;
-        }
+        let leaving = match self.clients.get(client_id) {
+            Some(c) => c.clone(),
+            None => return,
+        };
+        let was_coop_player =
+            self.mode == Mode::Coop && self.session_active && leaving.role == Role::Player;
+
+        self.clients.remove(client_id);
         self.versus_scores.remove(client_id);
         self.versus_boards.remove(client_id);
-        self.coop_snakes.remove(client_id);
-        self.coop_alive.remove(client_id);
+
+        if was_coop_player {
+            // Disconnect = die on the board: keep corpse, broadcast death, then
+            // maybe_end_coop_all_dead. Do not drop coop_snakes / renumber seats.
+            self.coop_alive.insert(client_id.to_string(), false);
+            if let Some(snake) = self.coop_snakes.get_mut(client_id) {
+                if let Some(obj) = snake.as_object_mut() {
+                    obj.insert("alive".into(), json!(false));
+                }
+            }
+            self.push_broadcast(Envelope::new(
+                "COOP_PLAYER_DEAD",
+                json!({
+                    "clientId": client_id,
+                    "body": self.coop_snakes.get(client_id).and_then(|s| s.get("body")).cloned(),
+                    "reason": "disconnect",
+                }),
+            ));
+        } else {
+            self.coop_snakes.remove(client_id);
+            self.coop_alive.remove(client_id);
+        }
+
         if self.collectables_owner.as_deref() == Some(client_id) {
             self.collectables_owner = self.pick_collectables_owner();
         }
@@ -374,6 +455,7 @@ impl Room {
         } else if self.session_active {
             self.session_active = false;
             self.coop = None;
+            self.coop_slots.clear();
         }
     }
 
@@ -598,6 +680,7 @@ impl Room {
         self.collectables_owner = None;
         self.coop_alive.clear();
         self.coop_timer_started_at_ms = None;
+        self.coop_slots.clear();
         // Do not clear versus_scores / versus_boards here — SESSION_START resets them.
         for c in self.clients.values_mut() {
             c.ready = false;
@@ -617,7 +700,7 @@ impl Room {
         self.clients
             .values()
             .filter(|c| c.role == Role::Player)
-            .min_by_key(|c| c.promote_order.unwrap_or(u64::MAX))
+            .min_by_key(|c| (c.promote_order.unwrap_or(u64::MAX), c.join_order))
             .map(|c| c.client_id.clone())
     }
 
@@ -765,6 +848,7 @@ impl Room {
         self.coop_collectables = None;
         self.coop_alive.clear();
         self.coop_timer_started_at_ms = None;
+        self.coop_slots.clear();
         if self.mode == Mode::Versus {
             self.attempt_deadline =
                 Some(Instant::now() + Duration::from_secs(self.duration_min as u64 * 60));
@@ -802,22 +886,16 @@ impl Room {
             "settings": self.settings,
         });
         if self.mode == Mode::Coop {
-            // Spawn Y offsets depend on player count (promote order):
+            // Spawn Y offsets depend on player count (promote + join order):
             // 2: [-1,+1]  3: [0,+3,-2]  4: [-1,+1,-4,+4]
-            let mut slots = Vec::new();
-            let mut players: Vec<&ClientState> = self.players();
-            players.sort_by_key(|c| c.promote_order.unwrap_or(u64::MAX));
-            let n = players.len().min(MAX_COOP_PLAYERS);
-            let offsets = crate::coop::spawn_offsets(n);
-            for (i, p) in players.into_iter().enumerate().take(MAX_COOP_PLAYERS) {
-                let oy = offsets.get(i).copied().unwrap_or(0);
-                slots.push(json!({
-                    "clientId": p.client_id,
-                    "slot": i,
-                    "oy": oy,
-                }));
-            }
-            start_payload["slots"] = json!(slots);
+            let player_ids: Vec<String> = self
+                .ordered_coop_players()
+                .into_iter()
+                .take(MAX_COOP_PLAYERS)
+                .map(|p| p.client_id.clone())
+                .collect();
+            self.coop_slots = player_ids.clone();
+            start_payload["slots"] = Self::build_coop_slots_json(&player_ids);
             // Timer starts when any player first moves (COOP_TIMER_START), not at Start
         }
         self.push_broadcast(Envelope::new("SESSION_START", start_payload));
@@ -947,6 +1025,7 @@ impl Room {
         info!(roomId = %self.code, clientId = %from, event = "coop_goal");
         self.session_active = false;
         self.coop = None;
+        self.coop_slots.clear();
         for c in self.clients.values_mut() {
             c.ready = false;
         }
@@ -969,6 +1048,7 @@ impl Room {
             info!(roomId = %self.code, event = "coop_no_players");
             self.session_active = false;
             self.coop = None;
+            self.coop_slots.clear();
             for c in self.clients.values_mut() {
                 c.ready = false;
             }
@@ -985,6 +1065,7 @@ impl Room {
         info!(roomId = %self.code, event = "coop_all_dead");
         self.session_active = false;
         self.coop = None;
+        self.coop_slots.clear();
         for c in self.clients.values_mut() {
             c.ready = false;
         }
@@ -1026,6 +1107,7 @@ impl Room {
                 time_ms: 0,
                 best_score: 0,
                 best_time_ms: None,
+                best_score_time_ms: None,
                 best_goal_time_ms: None,
                 goal_completed: false,
                 alive: true,
@@ -1047,8 +1129,17 @@ impl Room {
             if !alive {
                 // Keep run_started_at_ms so late viewers can still show frozen duration via timeMs
             }
+            // Track the fastest run time each best score was reached at, so a
+            // match where nobody meets the goal still has a ranked winner.
             if score > entry.best_score {
                 entry.best_score = score;
+                entry.best_score_time_ms = if time_ms > 0 { Some(time_ms) } else { None };
+            } else if score == entry.best_score && time_ms > 0 {
+                match entry.best_score_time_ms {
+                    None => entry.best_score_time_ms = Some(time_ms),
+                    Some(best) if time_ms < best => entry.best_score_time_ms = Some(time_ms),
+                    _ => {}
+                }
             }
             // Survival clock (Score mode display) — longer finished run wins ties later
             if !alive {
@@ -1065,6 +1156,7 @@ impl Room {
             time_ms,
             best_score: score,
             best_time_ms: None,
+            best_score_time_ms: None,
             best_goal_time_ms: None,
             goal_completed: false,
             alive,
@@ -1078,6 +1170,7 @@ impl Room {
             "alive": alive,
             "bestScore": sc.best_score,
             "bestTimeMs": sc.best_time_ms,
+            "bestScoreTimeMs": sc.best_score_time_ms,
             "bestGoalTimeMs": sc.best_goal_time_ms,
             "goalCompleted": sc.goal_completed,
             "versusGoal": goal.as_str(),
@@ -1124,7 +1217,39 @@ impl Room {
         }
     }
 
-    /// Leader for the room versus goal (Score = highest best; timed = fastest completion).
+    /// Highest score, fastest time to it on ties. Used when a timed goal was
+    /// never met, so the match still has a winner.
+    fn versus_top_scorer_id(&self) -> Option<String> {
+        let mut best_id: Option<String> = None;
+        let mut best_s: Option<u32> = None;
+        let mut best_t: Option<u64> = None;
+        for (id, sc) in &self.versus_scores {
+            let s = sc.best_score;
+            if s == 0 && sc.score == 0 {
+                continue;
+            }
+            let t = sc.best_score_time_ms;
+            let better = match best_s {
+                None => true,
+                Some(bs) if s > bs => true,
+                Some(bs) if s == bs => match (t, best_t) {
+                    (Some(t), Some(bt)) => t < bt,
+                    (Some(_), None) => true,
+                    _ => false,
+                },
+                _ => false,
+            };
+            if better {
+                best_s = Some(s);
+                best_t = t;
+                best_id = Some(id.clone());
+            }
+        }
+        best_id
+    }
+
+    /// Leader for the room versus goal (Score = highest best; timed = fastest
+    /// completion, falling back to top scorer when nobody met the goal).
     fn versus_leader_id(&self) -> Option<String> {
         if self.mode != Mode::Versus {
             return None;
@@ -1142,6 +1267,9 @@ impl Room {
                     best_t = Some(t);
                     best_id = Some(id.clone());
                 }
+            }
+            if best_id.is_none() {
+                best_id = self.versus_top_scorer_id();
             }
         } else {
             let mut best_s: Option<u32> = None;
@@ -1176,6 +1304,7 @@ impl Room {
             "alive": sc.alive,
             "bestScore": sc.best_score,
             "bestTimeMs": sc.best_time_ms,
+            "bestScoreTimeMs": sc.best_score_time_ms,
             "bestGoalTimeMs": sc.best_goal_time_ms,
             "goalCompleted": sc.goal_completed,
             "versusGoal": self.versus_goal.as_str(),
@@ -1213,6 +1342,30 @@ impl Room {
             }
             if let Some(ref cols) = self.coop_collectables {
                 self.push_to(from, Envelope::new("COLLECTABLES_DELTA", cols.clone()));
+            }
+            if let Some(ms) = self.coop_timer_started_at_ms {
+                self.push_to(
+                    from,
+                    Envelope::new(
+                        "COOP_TIMER_START",
+                        json!({"timerStartedAtMs": ms}),
+                    ),
+                );
+            }
+            if !self.coop_slots.is_empty() {
+                // Same slot list as SESSION_START so the client restores oy/seat
+                self.push_to(
+                    from,
+                    Envelope::new(
+                        "SESSION_START",
+                        json!({
+                            "mode": "coop",
+                            "slots": Self::build_coop_slots_json(&self.coop_slots),
+                            "collectablesOwnerId": self.collectables_owner,
+                            "resync": true,
+                        }),
+                    ),
+                );
             }
         }
         if self.mode == Mode::Versus {
@@ -1728,6 +1881,46 @@ mod tests {
     }
 
     #[test]
+    fn timed_goal_falls_back_to_top_score_then_fastest_time() {
+        let mut r = room();
+        r.join("a".into(), None, None).unwrap();
+        r.join("b".into(), None, None).unwrap();
+        r.join("c".into(), None, None).unwrap();
+        for id in ["a", "b", "c"] {
+            r.cmd_set_role("a", &json!({"clientId": id, "role": "player"}))
+                .unwrap();
+            r.cmd_ready(id, &json!({"ready": true})).unwrap();
+        }
+        r.cmd_set_versus_goal("a", &json!({"goal": "best25"})).unwrap();
+        r.cmd_session_start("a", &json!({})).unwrap();
+
+        // Nobody reaches 25 apples
+        r.cmd_score_pulse("a", &json!({"score": 12, "timeMs": 9000, "alive": false}))
+            .unwrap();
+        r.cmd_score_pulse("b", &json!({"score": 18, "timeMs": 8000, "alive": false}))
+            .unwrap();
+        r.cmd_score_pulse("c", &json!({"score": 18, "timeMs": 5000, "alive": false}))
+            .unwrap();
+
+        assert_eq!(r.versus_scores["c"].best_score, 18);
+        assert_eq!(r.versus_scores["c"].best_score_time_ms, Some(5000));
+        // 18 beats 12; c reached 18 faster than b
+        assert_eq!(r.versus_leader_id().as_deref(), Some("c"));
+
+        // A later run to the same score in less time keeps the faster stamp
+        r.cmd_score_pulse("b", &json!({"score": 18, "timeMs": 4000, "alive": false}))
+            .unwrap();
+        assert_eq!(r.versus_scores["b"].best_score_time_ms, Some(4000));
+        assert_eq!(r.versus_leader_id().as_deref(), Some("b"));
+
+        // An actual goal completion outranks any unfinished score
+        r.cmd_score_pulse("a", &json!({"score": 25, "timeMs": 20000, "alive": true}))
+            .unwrap();
+        assert!(r.versus_scores["a"].goal_completed);
+        assert_eq!(r.versus_leader_id().as_deref(), Some("a"));
+    }
+
+    #[test]
     fn attempt_expire_hard_stop_clears_session_active() {
         let mut r = room();
         r.join("a".into(), None, None).unwrap();
@@ -1879,6 +2072,53 @@ mod tests {
     }
 
     #[test]
+    fn resync_coop_pushes_timer_and_slots() {
+        let mut r = room();
+        r.join("a".into(), None, None).unwrap();
+        r.join("b".into(), None, None).unwrap();
+        r.cmd_mode_change("a", &json!({"mode": "coop"})).unwrap();
+        r.cmd_set_role("a", &json!({"clientId": "a", "role": "player"}))
+            .unwrap();
+        r.cmd_set_role("a", &json!({"clientId": "b", "role": "player"}))
+            .unwrap();
+        r.cmd_ready("a", &json!({"ready": true})).unwrap();
+        r.cmd_ready("b", &json!({"ready": true})).unwrap();
+        r.take_outbox();
+        r.cmd_session_start("a", &json!({})).unwrap();
+        r.take_outbox();
+        r.cmd_snake_delta(
+            "a",
+            &json!({
+                "body":[{"x":1,"y":1},{"x":0,"y":1}],
+                "alive": true,
+                "timerArm": true
+            }),
+        )
+        .unwrap();
+        r.take_outbox();
+        assert!(r.coop_timer_started_at_ms.is_some());
+        r.cmd_resync("b").unwrap();
+        let out = r.take_outbox();
+        let timer = out.iter().find(|(to, e)| {
+            to.as_deref() == Some("b") && e.msg_type == "COOP_TIMER_START"
+        });
+        assert!(timer.is_some(), "resync must replay COOP_TIMER_START");
+        assert_eq!(
+            timer.unwrap().1.payload["timerStartedAtMs"],
+            r.coop_timer_started_at_ms.unwrap()
+        );
+        let seats = out.iter().find(|(to, e)| {
+            to.as_deref() == Some("b")
+                && e.msg_type == "SESSION_START"
+                && e.payload.get("resync") == Some(&json!(true))
+        });
+        assert!(seats.is_some(), "resync must replay coop slots");
+        let slots = seats.unwrap().1.payload["slots"].as_array().unwrap();
+        assert_eq!(slots.len(), 2);
+        assert!(slots.iter().any(|s| s["clientId"] == "b" && s["oy"].is_number()));
+    }
+
+    #[test]
     fn coop_snapshot_on_session_start() {
         let mut r = room();
         r.join("a".into(), None, None).unwrap();
@@ -1931,6 +2171,128 @@ mod tests {
         .unwrap();
         let out = r.take_outbox();
         assert!(out.iter().any(|(_, e)| e.msg_type == "SESSION_END"));
+        assert!(!r.session_active);
+    }
+
+    #[test]
+    fn coop_player_numbers_deterministic_and_in_roster() {
+        let mut r = room();
+        r.join("z".into(), None, None).unwrap();
+        r.join("a".into(), None, None).unwrap();
+        r.join("m".into(), None, None).unwrap();
+        r.cmd_mode_change("z", &json!({"mode": "coop"})).unwrap();
+        // Promote in non-join order so promote_order differs from join_order
+        r.cmd_set_role("z", &json!({"clientId": "m", "role": "player"}))
+            .unwrap();
+        r.cmd_set_role("z", &json!({"clientId": "a", "role": "player"}))
+            .unwrap();
+        r.cmd_set_role("z", &json!({"clientId": "z", "role": "player"}))
+            .unwrap();
+        r.take_outbox();
+        // Idle roster: seats by promote then join
+        r.broadcast_roster();
+        let out = r.take_outbox();
+        let roster = out
+            .iter()
+            .rev()
+            .find(|(_, e)| e.msg_type == "ROSTER")
+            .expect("ROSTER");
+        let clients = roster.1.payload["clients"].as_array().unwrap();
+        let mut by_id = std::collections::HashMap::new();
+        for c in clients {
+            by_id.insert(c["clientId"].as_str().unwrap().to_string(), c.clone());
+        }
+        assert_eq!(by_id["m"]["playerNumber"], 1);
+        assert_eq!(by_id["a"]["playerNumber"], 2);
+        assert_eq!(by_id["z"]["playerNumber"], 3);
+        assert_eq!(by_id["m"]["coopSlot"], 0);
+        assert_eq!(by_id["a"]["coopSlot"], 1);
+        assert_eq!(by_id["z"]["coopSlot"], 2);
+
+        r.cmd_ready("m", &json!({"ready": true})).unwrap();
+        r.cmd_ready("a", &json!({"ready": true})).unwrap();
+        r.cmd_ready("z", &json!({"ready": true})).unwrap();
+        r.take_outbox();
+        r.cmd_session_start("z", &json!({})).unwrap();
+        let out = r.take_outbox();
+        let start = out
+            .iter()
+            .find(|(_, e)| e.msg_type == "SESSION_START")
+            .expect("SESSION_START");
+        let slots = start.1.payload["slots"].as_array().unwrap();
+        assert_eq!(slots[0]["clientId"], "m");
+        assert_eq!(slots[0]["playerNumber"], 1);
+        assert_eq!(slots[1]["clientId"], "a");
+        assert_eq!(slots[2]["clientId"], "z");
+        assert_eq!(r.coop_slots, vec!["m".to_string(), "a".to_string(), "z".to_string()]);
+    }
+
+    #[test]
+    fn coop_disconnect_keeps_corpse_and_broadcasts_dead() {
+        let mut r = room();
+        r.join("a".into(), None, None).unwrap();
+        r.join("b".into(), None, None).unwrap();
+        r.cmd_mode_change("a", &json!({"mode": "coop"})).unwrap();
+        r.cmd_set_role("a", &json!({"clientId": "a", "role": "player"}))
+            .unwrap();
+        r.cmd_set_role("a", &json!({"clientId": "b", "role": "player"}))
+            .unwrap();
+        r.cmd_ready("a", &json!({"ready": true})).unwrap();
+        r.cmd_ready("b", &json!({"ready": true})).unwrap();
+        r.take_outbox();
+        r.cmd_session_start("a", &json!({})).unwrap();
+        r.take_outbox();
+        r.cmd_snake_delta(
+            "a",
+            &json!({"body":[{"x":1,"y":1},{"x":0,"y":1}],"alive":true}),
+        )
+        .unwrap();
+        r.take_outbox();
+        // a disconnects mid-run — corpse stays, seats frozen
+        let seats_before = r.coop_slots.clone();
+        r.leave("a");
+        let out = r.take_outbox();
+        assert!(out.iter().any(|(_, e)| {
+            e.msg_type == "COOP_PLAYER_DEAD" && e.payload["clientId"] == "a"
+        }));
+        assert!(r.coop_snakes.contains_key("a"));
+        assert_eq!(r.coop_alive.get("a"), Some(&false));
+        assert_eq!(r.coop_slots, seats_before);
+        assert!(r.session_active); // b still alive
+        // b dies → all remaining dead
+        r.cmd_coop_player_dead("b", &json!({"body":[{"x":2,"y":2}]})).unwrap();
+        let out = r.take_outbox();
+        assert!(out.iter().any(|(_, e)| {
+            e.msg_type == "SESSION_END" && e.payload["reason"] == "ALL_DEAD"
+        }));
+        assert!(!r.session_active);
+        assert!(r.coop_slots.is_empty());
+    }
+
+    #[test]
+    fn coop_three_players_all_dead_only_after_third() {
+        let mut r = room();
+        for id in ["a", "b", "c"] {
+            r.join(id.into(), None, None).unwrap();
+        }
+        r.cmd_mode_change("a", &json!({"mode": "coop"})).unwrap();
+        for id in ["a", "b", "c"] {
+            r.cmd_set_role("a", &json!({"clientId": id, "role": "player"}))
+                .unwrap();
+            r.cmd_ready(id, &json!({"ready": true})).unwrap();
+        }
+        r.take_outbox();
+        r.cmd_session_start("a", &json!({})).unwrap();
+        r.take_outbox();
+        r.cmd_coop_player_dead("a", &json!({"body":[]})).unwrap();
+        assert!(r.session_active);
+        r.cmd_coop_player_dead("b", &json!({"body":[]})).unwrap();
+        assert!(r.session_active);
+        r.cmd_coop_player_dead("c", &json!({"body":[]})).unwrap();
+        let out = r.take_outbox();
+        assert!(out.iter().any(|(_, e)| {
+            e.msg_type == "SESSION_END" && e.payload["reason"] == "ALL_DEAD"
+        }));
         assert!(!r.session_active);
     }
 }

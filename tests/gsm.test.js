@@ -651,13 +651,13 @@ describe("gsm hooks", () => {
     assert.equal(filtered[2].lock, true);
   });
 
-  it("scrapeWalls does not export co-op phantom remote cells", () => {
+  it("scrapeWalls does not export co-op remote snake cells as walls", () => {
     const game = {
       width: 6,
       height: 4,
       Ca: {
         wa: [
-          [0, 1, 1, 0, 0, 0],
+          [0, 0, 0, 0, 0, 0],
           [0, 0, 0, 1, 0, 0],
           [0, 0, 0, 0, 0, 0],
           [0, 0, 0, 0, 0, 0],
@@ -668,41 +668,20 @@ describe("gsm hooks", () => {
     global.__remixGame = game;
     global.__mpCoopSession = true;
     global.__mpCoopInject = true;
-    let cleared = 0;
-    let stamped = 0;
-    global.__mpCoopClearPhantomWalls = function () {
-      cleared++;
-      // Simulate phantoms at (1,0) and (2,0) being cleared
-      game.Ca.wa[0][1] = 0;
-      game.Ca.wa[0][2] = 0;
-    };
-    global.__mpCoopStampPhantomWalls = function () {
-      stamped++;
-      // Clear-only — must not put snake cells back into the wall grid
-    };
-    global.__mpCoopPhantomKeys = function () {
-      return [];
-    };
     global.__mpCoopRemotes = {
       other: { body: [{ x: 1, y: 0 }, { x: 2, y: 0 }] },
     };
     try {
       const walls = Gsm.scrapeBoardEntities(game).walls;
-      assert.equal(cleared, 1, "phantoms cleared before scrape");
-      assert.equal(stamped, 1, "clear-only stamp after scrape");
-      // Real wall at (3,1) remains; phantom cells must not appear
       const keys = walls.map(function (w) {
         return w.x + "," + w.y;
       });
       assert.ok(keys.indexOf("3,1") >= 0, "real wa wall kept");
-      assert.equal(keys.indexOf("1,0"), -1, "phantom not exported");
-      assert.equal(keys.indexOf("2,0"), -1, "phantom not exported");
+      assert.equal(keys.indexOf("1,0"), -1, "remote body not exported as wall");
+      assert.equal(keys.indexOf("2,0"), -1, "remote body not exported as wall");
     } finally {
       delete global.__mpCoopSession;
       delete global.__mpCoopInject;
-      delete global.__mpCoopClearPhantomWalls;
-      delete global.__mpCoopStampPhantomWalls;
-      delete global.__mpCoopPhantomKeys;
       delete global.__mpCoopRemotes;
       delete global.__mpGame;
       delete global.__remixGame;
@@ -1463,7 +1442,7 @@ describe("gsm hooks", () => {
     assert.ok(strokes >= 2, "primary + companion snakes stroked");
   });
 
-  it("scrapeCompanionBody: twin never invents yin-yang mirror", () => {
+  it("scrapeCompanionBody: twin has no second snake", () => {
     const prevMode = global.ModeRegistry;
     global.ModeRegistry = {
       getCurrentModeKey: function () {
@@ -1475,17 +1454,21 @@ describe("gsm hooks", () => {
         { x: 2, y: 2 },
         { x: 1, y: 2 },
       ];
-      const none = Gsm.scrapeCompanionBody({}, body, 10, 10);
-      assert.equal(none, null, "twin without Ra.ka → no fake mirror");
-      const twin = Gsm.scrapeCompanionBody(
-        { Ra: { ka: [{ x: 5, y: 4 }, { x: 5, y: 5 }] } },
-        body,
-        10,
-        10
+      assert.equal(
+        Gsm.scrapeCompanionBody({}, body, 10, 10),
+        null,
+        "twin without Ra → null"
       );
-      assert.ok(twin);
-      assert.equal(twin[0].x, 5);
-      assert.equal(twin[0].y, 4);
+      assert.equal(
+        Gsm.scrapeCompanionBody(
+          { Ra: { ka: [{ x: 5, y: 4 }, { x: 5, y: 5 }] } },
+          body,
+          10,
+          10
+        ),
+        null,
+        "twin ignores Ra.ka — only Yin Yang has a companion"
+      );
     } finally {
       if (prevMode) global.ModeRegistry = prevMode;
       else delete global.ModeRegistry;
@@ -3334,11 +3317,257 @@ describe("gsm hooks", () => {
     };
     g.__mpGame = g.__remixGame;
     Gsm.applyBoardEntities({
-      walls: [{ x: 1, y: 1 }],
+      // (1,1) sits in the top-left 2×2 native keeps clear — corner cells are
+      // dropped on write, so use a cell a real wall can occupy
+      walls: [{ x: 2, y: 2 }],
       boxes: [{ x: 2, y: 2 }],
     });
-    assert.equal(g.__remixGame.Ca.wa[1][1], 1);
+    assert.equal(g.__remixGame.Ca.wa[2][2], 1);
     assert.equal(g.__remixGame.Aa.oa[0].pos.x, 2);
+  });
+
+  it("co-op board sync round-trips every shared object type", () => {
+    const g = typeof globalThis !== "undefined" ? globalThis : global;
+    const W = 17;
+    const H = 15;
+    const wasSession = g.__mpCoopSession;
+    const wasInject = g.__mpCoopInject;
+    // Fruit nudging is a co-op-session behaviour; keep this a pure round trip
+    g.__mpCoopSession = false;
+    g.__mpCoopInject = false;
+
+    function build(fill) {
+      const rows = [];
+      for (let y = 0; y < H; y++) {
+        rows[y] = [];
+        for (let x = 0; x < W; x++) {
+          rows[y][x] = typeof fill === "function" ? fill() : fill;
+        }
+      }
+      return rows;
+    }
+
+    try {
+      const txWalls = new Map();
+      txWalls.set("lock", { pos: { x: 6, y: 6 }, yNa: 3 });
+      txWalls.set("dog", { pos: { x: 7, y: 6 }, ty: true });
+      const txWallGrid = build(0);
+      txWallGrid[6][5] = 1;
+      const txBridges = build(null);
+      txBridges[8][4] = { color: "#e68f1b" };
+      const txArrows = build(function () {
+        return { direction: "NONE" };
+      });
+      txArrows[9][3] = { direction: "UP", color: "#EA7E0B" };
+
+      g.__bombFruitZones = [{ x: 2, y: 11, bombX1a: 2 }];
+      g.__remixGame = {
+        oa: {
+          ka: [{ x: 3, y: 3 }],
+          oa: { width: W, height: H },
+          Aa: { light: 2.5 },
+        },
+        wa: {
+          ka: [
+            {
+              pos: { x: 10, y: 4 },
+              type: 3,
+              slotMode: 2,
+              burgerTimer: 9,
+              burgerTimerMax: 20,
+              light: 1.5,
+              nba: new Set(["UP", "LEFT"]),
+            },
+            { pos: { x: 11, y: 4 }, type: 0, Oka: true },
+            {
+              pos: { x: 12, y: 4 },
+              type: 0,
+              isPiece: true,
+              ChessPiece: "knight",
+              ChessColor: "w",
+            },
+          ],
+          oa: { oa: { width: W, height: H } },
+        },
+        Ca: { wa: txWallGrid, Aa: txWalls },
+        Ba: { keys: [{ pos: { x: 4, y: 5 }, type: 2, r7a: { x: 5, y: 5 } }] },
+        Aa: { oa: [{ pos: { x: 8, y: 7 } }], d_: [{ pos: { x: 9, y: 7 } }] },
+        Ma: { oa: [{ pos: { x: 2, y: 8 }, xL: 3 }] },
+        Ya: { oa: [{ pos: { x: 13, y: 9 }, WQ: { pdb: true, angle: 90 } }] },
+        Ga: { oa: txBridges },
+        Ka: { ka: txArrows },
+        Qa: { pfa: [{ Upa: { x: 6, y: 10 }, vertical: true, color: "#8ab35c" }] },
+      };
+      g.__mpGame = g.__remixGame;
+
+      const cols = Gsm.scrapeCollectables({ includeEntities: true });
+      assert.equal(cols.apples.length, 3);
+      assert.deepEqual(cols.apples[0].shields, ["UP", "LEFT"]);
+      assert.equal(cols.apples[0].slotMode, 2);
+      assert.equal(cols.apples[0].burgerTimer, 9);
+      assert.equal(cols.apples[0].light, 1.5);
+      assert.equal(cols.apples[1].poison, true);
+      assert.equal(cols.apples[2].chessPiece, "knight");
+      assert.equal(cols.walls.length, 3);
+      assert.equal(cols.keys.length, 1);
+      assert.equal(cols.boxes.length, 1);
+      assert.equal(cols.goals.length, 1);
+      assert.equal(cols.mines.length, 1);
+      assert.equal(cols.statues.length, 1);
+      assert.equal(cols.bridges.length, 1);
+      assert.equal(cols.gates.length, 1);
+      assert.equal(cols.arrows.length, 1);
+      assert.equal(cols.bombZones.length, 1);
+      assert.equal(cols.headLight, 2.5);
+
+      // A peer receiving that payload on an empty board of the same size
+      const rxWallGrid = build(0);
+      const rxBridges = build(null);
+      const rxArrows = build(function () {
+        return { direction: "NONE" };
+      });
+      const rx = {
+        oa: { ka: [{ x: 1, y: 1 }], oa: { width: W, height: H }, Aa: {} },
+        wa: { ka: [], oa: { oa: { width: W, height: H } } },
+        Ca: { wa: rxWallGrid, Aa: new Map() },
+        Ba: { keys: [] },
+        Aa: { oa: [], d_: [] },
+        Ma: { oa: [] },
+        Ya: { oa: [] },
+        Ga: { oa: rxBridges },
+        Ka: { ka: rxArrows },
+        // nativeOnly stands in for engine state we don't scrape: the apply must
+        // move the gate we were given, not replace it with a bare point
+        Qa: { pfa: [{ Upa: { x: 0, y: 0 }, vertical: false, nativeOnly: "keep" }] },
+      };
+      g.__remixGame = rx;
+      g.__mpGame = rx;
+      g.__bombFruitZones = [];
+      assert.equal(Gsm.applyCollectables(cols), true);
+
+      // Fruit, with every per-fruit mode flag
+      assert.equal(rx.wa.ka.length, 3);
+      assert.equal(rx.wa.ka[0].pos.x, 10);
+      assert.equal(rx.wa.ka[0].type, 3);
+      assert.equal(rx.wa.ka[0].slotMode, 2);
+      assert.equal(rx.wa.ka[0].burgerTimer, 9);
+      assert.equal(rx.wa.ka[0].light, 1.5);
+      assert.equal(rx.wa.ka[0].nba.has("UP"), true);
+      assert.equal(rx.wa.ka[1].Oka, true, "poison fruit");
+      assert.equal(rx.wa.ka[2].ChessPiece, "knight");
+
+      // Walls: plain grid cell, keyblock lock and hotdog all land
+      assert.equal(rxWallGrid[6][5], 1);
+      assert.equal(rxWallGrid[6][6], 1);
+      assert.equal(rxWallGrid[6][7], 1);
+      assert.equal(rx.Ca.Aa.size, 3);
+      const rxWallList = [];
+      rx.Ca.Aa.forEach(function (w) {
+        rxWallList.push(w);
+      });
+      assert.ok(rxWallList.some(function (w) {
+        return w.yNa === 3 && w.lock;
+      }), "keyblock wall keeps its lock type");
+      assert.ok(rxWallList.some(function (w) {
+        return w.ty === true;
+      }), "hotdog wall stays a hotdog");
+
+      // Mode entities
+      assert.equal(rx.Ba.keys[0].pos.x, 4);
+      assert.equal(rx.Ba.keys[0].r7a.x, 5, "keyblock cell");
+      assert.equal(rx.Aa.oa[0].pos.x, 8, "soko box");
+      assert.equal(rx.Aa.d_[0].pos.x, 9, "soko goal");
+      assert.equal(rx.Ma.oa[0].pos.x, 2, "mine");
+      assert.equal(rx.Ma.oa[0].xL, 3, "mine count");
+      assert.equal(rx.Ya.oa[0].pos.x, 13, "statue");
+      assert.equal(rx.Ya.oa[0].WQ.pdb, true, "cracked statue");
+      assert.equal(rx.Ya.oa[0].angle, 90);
+      assert.ok(rxBridges[8][4], "bridge tile");
+      assert.equal(rxBridges[8][4].color, "#e68f1b");
+      assert.equal(rxArrows[9][3].direction, "UP", "arrow");
+      assert.equal(rxArrows[9][2].direction, "NONE", "arrows elsewhere cleared");
+      assert.equal(rx.Qa.pfa[0].Upa.x, 6, "gate footprint moves with Upa");
+      assert.equal(rx.Qa.pfa[0].Upa.y, 10);
+      assert.equal(rx.Qa.pfa[0].vertical, true);
+      assert.equal(rx.Qa.pfa[0].nativeOnly, "keep", "gate keeps its instance");
+      assert.equal(g.__bombFruitZones[0].x, 2, "bomb zone");
+      assert.equal(g.__bombFruitZones[0].arm, 2);
+      assert.equal(rx.oa.Aa.light, 2.5, "light-mode head radius");
+
+      // Every one of those is in the change fingerprint, so a lone move of any
+      // of them republishes instead of waiting on the next fruit eat
+      const types = [
+        ["apples", { x: 10, y: 4, shields: ["UP"] }],
+        ["walls", { x: 5, y: 6 }],
+        ["keys", { x: 4, y: 5 }],
+        ["boxes", { x: 8, y: 7 }],
+        ["goals", { x: 9, y: 7 }],
+        ["mines", { x: 2, y: 8 }],
+        ["statues", { x: 13, y: 9 }],
+        ["bridges", { x: 4, y: 8 }],
+        ["gates", { x: 6, y: 10 }],
+        ["arrows", { x: 3, y: 9, dir: "UP" }],
+        ["bombZones", { x: 2, y: 11 }],
+      ];
+      types.forEach(function (pair) {
+        const base = {};
+        base[pair[0]] = [pair[1]];
+        const moved = {};
+        moved[pair[0]] = [Object.assign({}, pair[1], { x: pair[1].x + 1 })];
+        assert.notEqual(
+          Gsm.collectablesFingerprint(base),
+          Gsm.collectablesFingerprint(moved),
+          pair[0] + " must change the fingerprint"
+        );
+      });
+      assert.notEqual(
+        Gsm.collectablesFingerprint({ apples: [{ x: 1, y: 1 }] }),
+        Gsm.collectablesFingerprint({ apples: [{ x: 1, y: 1, shields: ["UP"] }] }),
+        "a shield gain must change the fingerprint"
+      );
+    } finally {
+      g.__mpCoopSession = wasSession;
+      g.__mpCoopInject = wasInject;
+      delete g.__bombFruitZones;
+    }
+  });
+
+  it("co-op wall sync drops board-corner cells on a small board", () => {
+    const g = typeof globalThis !== "undefined" ? globalThis : global;
+    const W = 10;
+    const H = 9;
+    const grid = [];
+    for (let y = 0; y < H; y++) {
+      grid[y] = [];
+      for (let x = 0; x < W; x++) grid[y][x] = 0;
+    }
+    // Native leaves markers in the 2×2 at every corner; only a real wall
+    // (here 4,4) may ship to peers, or they stamp solid corners pre-start.
+    [
+      [0, 0], [1, 0], [0, 1], [1, 1],
+      [W - 1, 0], [W - 2, 0], [W - 1, 1], [W - 2, 1],
+      [0, H - 1], [1, H - 1], [0, H - 2], [1, H - 2],
+      [W - 1, H - 1], [W - 2, H - 1], [W - 1, H - 2], [W - 2, H - 2],
+    ].forEach(function (c) {
+      grid[c[1]][c[0]] = 2;
+    });
+    grid[4][4] = 1;
+    g.__remixGame = {
+      oa: { ka: [{ x: 4, y: 4 }], oa: { width: W, height: H } },
+      Ca: { wa: grid, Aa: null },
+      wa: { ka: [], oa: { oa: { width: W, height: H } } },
+    };
+    g.__mpGame = g.__remixGame;
+    const cols = Gsm.scrapeCollectables({ includeEntities: true });
+    assert.deepEqual(cols.walls.map(function (w) {
+      return w.x + "," + w.y;
+    }), ["4,4"]);
+
+    // A payload that still carries corners must not paint them
+    grid[0][W - 1] = 0;
+    Gsm.applyBoardEntities({ walls: cols.walls.concat([{ x: W - 1, y: 0 }]) });
+    assert.equal(grid[0][W - 1], 0, "top-right corner is never stamped solid");
+    assert.equal(grid[4][4], 1, "real wall is kept");
   });
 
   it("collectablesFingerprint changes when a soko box or key moves", () => {
@@ -3438,5 +3667,126 @@ describe("gsm hooks", () => {
     g.__mpGame = g.__remixGame;
     assert.equal(Gsm.applyCoopStartMoving("LEFT"), true);
     assert.equal(g.__remixGame.oa.direction, "LEFT");
+  });
+
+  it("effectiveModeKey folds Slot Machine roll into the mode key", () => {
+    const g = typeof globalThis !== "undefined" ? globalThis : global;
+    const prevReg = g.ModeRegistry;
+    const prevSlot = g.isSlotMachineActive;
+    const prevActive = g.__slotActive;
+    g.ModeRegistry = {
+      getCurrentModeKey: function () {
+        return "slot_machine";
+      },
+      MIDDLE: [
+        { id: "wall", bitIndexV3: 0 },
+        { id: "dimension", bitIndexV3: 11 },
+      ],
+      _matchMiddleId: function () {
+        return null;
+      },
+    };
+    g.isSlotMachineActive = function () {
+      return true;
+    };
+    g.__slotActive = 11;
+    const key = Gsm.effectiveModeKey();
+    assert.ok(String(key).indexOf("dimension") >= 0, "got " + key);
+    g.__slotActive = 20;
+    assert.ok(String(Gsm.effectiveModeKey()).indexOf("peaceful") >= 0);
+    if (prevReg) g.ModeRegistry = prevReg;
+    else delete g.ModeRegistry;
+    if (prevSlot) g.isSlotMachineActive = prevSlot;
+    else delete g.isSlotMachineActive;
+    if (prevActive != null) g.__slotActive = prevActive;
+    else delete g.__slotActive;
+  });
+
+  it("scrapeCompanionBody is Yin Yang only (not Twin)", () => {
+    const g = typeof globalThis !== "undefined" ? globalThis : global;
+    g.ModeRegistry = {
+      getCurrentModeKey: function () {
+        return "twin";
+      },
+    };
+    const game = {
+      oa: { ka: [{ x: 4, y: 4 }, { x: 3, y: 4 }] },
+      Ra: { ka: [{ x: 12, y: 10 }, { x: 13, y: 10 }] },
+    };
+    assert.equal(Gsm.scrapeCompanionBody(game, game.oa.ka, 17, 15), null);
+    g.ModeRegistry.getCurrentModeKey = function () {
+      return "yin_yang";
+    };
+    const body2 = Gsm.scrapeCompanionBody(game, game.oa.ka, 17, 15);
+    assert.ok(body2 && body2.length);
+    assert.equal(body2[0].x, 12);
+    delete g.ModeRegistry;
+  });
+
+  it("winged fruitMotionTrust fingerprint ignores live apple xy", () => {
+    const a = {
+      fruitMotionTrust: true,
+      apples: [{ x: 3, y: 4, type: 0, he: { x: 0.5, y: -0.5 } }],
+    };
+    const b = {
+      fruitMotionTrust: true,
+      apples: [{ x: 8, y: 9, type: 0, he: { x: -0.5, y: 0.5 } }],
+    };
+    assert.equal(
+      Gsm.collectablesFingerprint(a),
+      Gsm.collectablesFingerprint(b),
+      "drifting winged fruit must not change collectables fingerprint"
+    );
+    const c = {
+      fruitMotionTrust: true,
+      apples: [{ x: 3, y: 4, type: 1 }],
+    };
+    assert.notEqual(
+      Gsm.collectablesFingerprint(a),
+      Gsm.collectablesFingerprint(c),
+      "type change still republishes"
+    );
+  });
+
+  it("nudgeCoopApplesOffSnakes drops unplaceable fruit and sets board-full", () => {
+    const g = typeof globalThis !== "undefined" ? globalThis : global;
+    g.__mpCoopSession = true;
+    g.__mpCoopInject = true;
+    g.__mpCoopBoardFull = false;
+    let fullCalls = 0;
+    g.__mpCoopOnBoardFull = function () {
+      fullCalls++;
+    };
+    g.__mpCoopReadSpawnOccupancy = function () {
+      return { "0,0": true, "1,0": true, "0,1": true, "1,1": true };
+    };
+    g.__mpCoopFindFreeSpawn = function () {
+      return null;
+    };
+    g.__mpCoopIsSolidWall = function () {
+      return false;
+    };
+    const game = { oa: { oa: { width: 2, height: 2 } }, wa: { oa: { oa: { width: 2, height: 2 } } } };
+    const out = Gsm.nudgeCoopApplesOffSnakes([{ x: 0, y: 0 }], game);
+    assert.equal(out.length, 0);
+    assert.equal(g.__mpCoopBoardFull, true);
+    assert.ok(fullCalls >= 1);
+    delete g.__mpCoopSession;
+    delete g.__mpCoopInject;
+    delete g.__mpCoopOnBoardFull;
+    delete g.__mpCoopReadSpawnOccupancy;
+    delete g.__mpCoopFindFreeSpawn;
+    delete g.__mpCoopIsSolidWall;
+  });
+
+  it("collectMosaicLights stamps optional remote heads", () => {
+    const lights = Gsm.collectMosaicLights({
+      modeKey: "light",
+      body: [{ x: 0, y: 0 }],
+      headLight: 2,
+      heads: [{ x: 8, y: 8, light: 3 }],
+      apples: [],
+    });
+    assert.ok(lights && lights.length >= 2);
   });
 });
