@@ -4451,18 +4451,13 @@
     });
   }
 
-  /** Empty local snake body (co-op spectator — companions only). */
+  /**
+   * Hide the local snake for co-op spectators. Must NOT clear `ka` — an empty
+   * body makes PlayerRenderer throw Closure `yi NaN×4` and kills the render loop.
+   * Park off-board instead (same as parkLocalSnakeOffBoard).
+   */
   function emptyLocalSnakeBody() {
-    const g = gameInstance();
-    if (!g || !g.oa) return false;
-    try {
-      if (!Array.isArray(g.oa.ka)) g.oa.ka = [];
-      g.oa.ka.length = 0;
-      return true;
-    } catch (e) {
-      console.warn("emptyLocalSnakeBody", e);
-      return false;
-    }
+    return parkLocalSnakeOffBoard();
   }
 
   /** Co-op / versus Focus spectate — never persist TimeKeeper PBs or attempts. */
@@ -4576,12 +4571,13 @@
       );
     }
 
-    // Capture PlayerRenderer ref for tick-synced companion paints
+    // Sanitize NaN lerp *before* native body runs (wrap alone misses the first
+    // call). Skip native snake draw when local body is empty/parked spectator.
     if (out.indexOf("__mpCoopRenderEnter") === -1) {
       if (/render\(a,b,c\)\{/.test(out)) {
         out = out.replace(
           /render\(a,b,c\)\{/g,
-          "render(a,b,c){try{window.__mpCoopRenderEnter&&window.__mpCoopRenderEnter(this,a,b,c);}catch(_mpRE){}"
+          "render(a,b,c){try{if(typeof a===\"number\"&&!isFinite(a))a=0;if(a==null)a=0;}catch(_mpSA){}try{window.__mpCoopRenderEnter&&window.__mpCoopRenderEnter(this,a,b,c);}catch(_mpRE){}try{if(window.__mpCoopSkipNativeRender&&window.__mpCoopSkipNativeRender(this)){try{window.__mpCoopDrawRemotes&&window.__mpCoopDrawRemotes(this);}catch(_mpDR){}return;}}catch(_mpSK){}"
         );
       }
     }

@@ -529,16 +529,17 @@ describe("coop native inject bridge", () => {
     assert.equal(typeof global.__mpCoopPaintCompanions, "function");
     assert.deepEqual(cn.occupancyKeys(false)["5,5"], true);
 
-    // Spectator tick empties local body
+    // Spectator tick parks local body off-board (never clears — yi NaN×4)
     global.__mpCoopInject = true;
     global.__mpCoopSpectator = true;
     const game = { oa: { ka: [{ x: 1, y: 1 }] }, Tb: function () {} };
     global.__mpCoopOnTick(game);
-    assert.equal(game.oa.ka.length, 0);
+    assert.ok(game.oa.ka.length >= 1, "spectator ka stays non-empty");
+    assert.equal(game.oa.ka[0].x, -8);
     global.__mpCoopSpectator = false;
   });
 
-  it("paints companions from tick and after each local render frame", () => {
+  it("drawCoopRemotes paints finite remotes after local render", () => {
     global.window = global;
     const modPath = require.resolve(path.join(root, "src/coop/native.js"));
     delete require.cache[modPath];
@@ -547,7 +548,19 @@ describe("coop native inject bridge", () => {
     require(path.join(root, "src/coop/native.js"));
     require(path.join(root, "src/shared/colors.js"));
 
-    const calls = [];
+    const drawn = [];
+    global.MultiplayerGsm = {
+      drawWallSolverStyleSnake: function (ctx, body, ox, oy, tile, color) {
+        drawn.push({
+          x: body[0] && body[0].x,
+          Sc: color && (color.primary || color.Sc),
+        });
+      },
+      snakeMotion: function () {
+        return null;
+      },
+    };
+
     const game = {
       oa: {
         ka: [
@@ -556,28 +569,31 @@ describe("coop native inject bridge", () => {
         ],
         Sc: "#4E7CF6",
         Yc: "#17439F",
-        color1: "#17439F",
-        color2: "#4E7CF6",
       },
+      ka: { ka: 20 },
       Tb: function () {},
+    };
+    const ctx = {
+      save: function () {},
+      restore: function () {},
+      globalAlpha: 1,
     };
     const renderer = {
       wb: game,
-      render: function (a, b, c) {
-        calls.push({
-          a: a,
-          body0: game.oa.ka[0] && game.oa.ka[0].x,
-          Sc: game.oa.Sc,
-        });
+      ka: ctx,
+      render: function (a) {
+        if (typeof a === "number" && !Number.isFinite(a)) {
+          throw new Error("yi `NaN`NaN`NaN`NaN`");
+        }
+        drawn.push({ local: true, a: a });
       },
     };
 
-    // Capture works even before inject
     global.__mpCoopInject = false;
     global.__mpCoopSession = false;
     global.__mpCoopRenderEnter(renderer, 0.5, true, {});
     assert.equal(global.__mpCoopPlayerRenderer, renderer);
-    assert.equal(calls.length, 0, "no companion paint before session");
+    assert.equal(drawn.length, 0, "no companion paint before session");
 
     global.__mpCoopInject = true;
     global.__mpCoopSession = true;
@@ -598,18 +614,22 @@ describe("coop native inject bridge", () => {
       },
     };
 
-    // Tick drives companion pass
-    global.__mpCoopOnTick(game);
-    assert.ok(calls.length >= 1, "tick should paint companions");
-    const companion = calls.find(function (c) {
-      return c.body0 === 8 && c.Sc === "#F53D40";
-    });
-    assert.ok(companion, "companion should draw at seeded body with Red Sc");
-    assert.equal(game.oa.Sc, "#4E7CF6");
-    assert.equal(game.oa.ka[0].x, 1);
+    renderer.render(0.5, true, {});
+    assert.ok(
+      drawn.some(function (d) {
+        return d.local && d.a === 0.5;
+      }),
+      "local render runs"
+    );
+    assert.ok(
+      drawn.some(function (d) {
+        return d.x === 8;
+      }),
+      "remote painted after local"
+    );
   });
 
-  it("skips companion paint for NaN bodies and sanitizes NaN lerp args", () => {
+  it("sanitizes NaN lerp and skips NaN remote bodies", () => {
     global.window = global;
     const modPath = require.resolve(path.join(root, "src/coop/native.js"));
     delete require.cache[modPath];
@@ -617,25 +637,38 @@ describe("coop native inject bridge", () => {
     delete global.__mpCoopOnTickInstalled;
     require(path.join(root, "src/coop/native.js"));
 
-    const calls = [];
+    const drawn = [];
+    global.MultiplayerGsm = {
+      drawWallSolverStyleSnake: function (ctx, body) {
+        drawn.push(body[0] && body[0].x);
+      },
+      snakeMotion: function () {
+        return null;
+      },
+    };
+
     const game = {
       oa: {
         ka: [
           { x: 1, y: 1 },
           { x: 0, y: 1 },
         ],
-        Sc: "#4E7CF6",
-        Yc: "#17439F",
       },
+      ka: { ka: 20 },
       Tb: function () {},
     };
     const renderer = {
       wb: game,
+      ka: {
+        save: function () {},
+        restore: function () {},
+        globalAlpha: 1,
+      },
       render: function (a) {
         if (typeof a === "number" && !Number.isFinite(a)) {
-          throw new Error("yi NaN NaN NaN");
+          throw new Error("yi `NaN`NaN`NaN`NaN`");
         }
-        calls.push({ a: a, x: game.oa.ka[0] && game.oa.ka[0].x });
+        drawn.push({ a: a });
       },
     };
 
@@ -649,8 +682,6 @@ describe("coop native inject bridge", () => {
           { x: NaN, y: 3 },
           { x: 2, y: NaN },
         ],
-        Sc: "#F00",
-        Yc: "#C00",
       },
       good: {
         clientId: "good",
@@ -658,30 +689,25 @@ describe("coop native inject bridge", () => {
           { x: 8, y: 7 },
           { x: 7, y: 7 },
         ],
-        Sc: "#0F0",
-        Yc: "#0C0",
       },
     };
-    global.__mpCoopPlayerRenderer = renderer;
-    // Stale NaN lerp from a dead/paused frame — must not throw or paint bad body
-    global.__mpCoopRenderArgs = [NaN, true, {}];
-    global.__mpCoopPaintCompanions(game);
-    assert.equal(
-      calls.filter(function (c) {
-        return c.x === 8;
-      }).length,
-      1,
-      "only finite remote should paint"
-    );
+    global.__mpCoopRenderEnter(renderer, NaN, true, {});
+    assert.doesNotThrow(function () {
+      renderer.render(NaN, true, {});
+    });
     assert.ok(
-      calls.every(function (c) {
-        return Number.isFinite(c.a);
+      drawn.some(function (d) {
+        return d && d.a === 0;
       }),
-      "lerp arg must be finite"
+      "NaN lerp sanitized to 0"
     );
+    assert.ok(drawn.indexOf(8) >= 0, "finite remote painted");
+    assert.ok(drawn.indexOf(NaN) < 0 && !drawn.some(function (d) {
+      return typeof d === "number" && !Number.isFinite(d);
+    }), "NaN remote skipped");
   });
 
-  it("wrapped PlayerRenderer re-paints companions after local draw", () => {
+  it("skips native PlayerRenderer when spectator so empty/parked body cannot yi-NaN", () => {
     global.window = global;
     const modPath = require.resolve(path.join(root, "src/coop/native.js"));
     delete require.cache[modPath];
@@ -689,205 +715,88 @@ describe("coop native inject bridge", () => {
     delete global.__mpCoopOnTickInstalled;
     require(path.join(root, "src/coop/native.js"));
 
-    const order = [];
-    const game = {
-      oa: {
-        ka: [
-          { x: 1, y: 1 },
-          { x: 0, y: 1 },
-        ],
-        Sc: "#4E7CF6",
-        Yc: "#17439F",
+    let nativeCalls = 0;
+    const drawn = [];
+    global.MultiplayerGsm = {
+      drawWallSolverStyleSnake: function (ctx, body) {
+        drawn.push(body[0] && body[0].x);
       },
-      Tb: function () {},
+      snakeMotion: function () {
+        return null;
+      },
+    };
+    const game = {
+      oa: { ka: [{ x: -8, y: -8 }] },
+      ka: { ka: 20 },
     };
     const renderer = {
       wb: game,
-      render: function (a) {
-        order.push({
-          who: game.oa.ka[0].x === 1 ? "local" : "remote",
-          a: a,
-        });
+      ka: {
+        save: function () {},
+        restore: function () {},
+        globalAlpha: 1,
+      },
+      render: function () {
+        nativeCalls++;
+        throw new Error("yi `NaN`NaN`NaN`NaN`");
       },
     };
     global.__mpCoopInject = true;
     global.__mpCoopSession = true;
+    global.__mpCoopSpectator = true;
     global.__mpCoopMyId = "me";
-    global.__mpCoopLocalDead = false;
-    global.__mpCoopSpectator = false;
     global.__mpCoopRemotes = {
       other: {
         body: [
-          { x: 9, y: 9 },
-          { x: 8, y: 9 },
+          { x: 4, y: 4 },
+          { x: 3, y: 4 },
         ],
-        Sc: "#F00",
-        Yc: "#C00",
-        _visualBody: [
-          { x: 9, y: 9 },
-          { x: 8, y: 9 },
-        ],
-        _lerpAt: performance.now() - 45,
-        _lerpStepMs: 90,
       },
     };
-    global.__mpCoopRenderEnter(renderer, 0.88, true, {});
-    // Local frames must re-paint remotes so RAF does not wipe them
-    renderer.render(0.88, true, {});
-    assert.ok(
-      order.some(function (o) {
-        return o.who === "local";
-      }),
-      "local render runs"
-    );
-    assert.ok(
-      order.some(function (o) {
-        return o.who === "remote";
-      }),
-      "render wrap must paint companions after local"
-    );
-    assert.equal(game.oa.ka[0].x, 1, "local body restored");
-    const remoteCalls = order.filter(function (o) {
-      return o.who === "remote";
+    global.__mpCoopRenderEnter(renderer);
+    assert.equal(global.__mpCoopSkipNativeRender(renderer), true);
+    assert.doesNotThrow(function () {
+      renderer.render(NaN, true, {});
     });
-    assert.ok(remoteCalls.length >= 1);
-    assert.ok(
-      remoteCalls.every(function (o) {
-        return o.a !== 0.88;
-      }),
-      "companions must not reuse local lerp progress"
-    );
-    assert.ok(
-      remoteCalls.every(function (o) {
-        return Number.isFinite(o.a) && o.a > 0 && o.a < 1;
-      }),
-      "remote lerp t must be independent mid-step"
-    );
+    assert.equal(nativeCalls, 0, "native render skipped for spectator");
+    assert.ok(drawn.indexOf(4) >= 0, "remotes still painted");
+    global.__mpCoopSpectator = false;
   });
 
-  it("companion lerp resets on that remote head move and differs per remote", () => {
+  it("companion mosaic redraw survives settled motion", () => {
     global.window = global;
-    const gsmPath = require.resolve(path.join(root, "src/hooks/gsm.js"));
     const modPath = require.resolve(path.join(root, "src/coop/native.js"));
-    delete require.cache[gsmPath];
     delete require.cache[modPath];
     delete global.__mpCoopRenderInstalled;
     delete global.__mpCoopOnTickInstalled;
-    require(path.join(root, "src/shared/colors.js"));
-    require(path.join(root, "src/hooks/gsm.js"));
-    const { CoopNative } = require(path.join(root, "src/coop/native.js"));
+    require(path.join(root, "src/coop/native.js"));
 
-    const seen = [];
+    const drawn = [];
+    global.MultiplayerGsm = {
+      drawWallSolverStyleSnake: function (ctx, body) {
+        drawn.push(body[0] && body[0].x);
+      },
+      snakeMotion: function () {
+        return null;
+      },
+    };
     const game = {
       oa: {
         ka: [
           { x: 0, y: 0 },
           { x: 0, y: 1 },
         ],
-        Sc: "#111",
-        Yc: "#222",
       },
+      ka: { ka: 20 },
     };
     const renderer = {
       wb: game,
-      render: function (a) {
-        seen.push({
-          x: game.oa.ka[0] && game.oa.ka[0].x,
-          a: a,
-        });
+      ka: {
+        save: function () {},
+        restore: function () {},
+        globalAlpha: 1,
       },
-    };
-    global.__mpCoopInject = true;
-    global.__mpCoopSession = true;
-    global.__mpCoopMyId = "me";
-    global.__mpCoopPlayerRenderer = renderer;
-
-    const cn = new CoopNative();
-    cn.sessionActive = true;
-    cn.myClientId = "me";
-    cn.applySnakeDelta({
-      clientId: "a",
-      body: [
-        { x: 2, y: 2 },
-        { x: 1, y: 2 },
-      ],
-      dir: "RIGHT",
-      Sc: "#A00",
-      Yc: "#800",
-    });
-    cn.applySnakeDelta({
-      clientId: "b",
-      body: [
-        { x: 5, y: 5 },
-        { x: 4, y: 5 },
-      ],
-      dir: "UP",
-      Sc: "#0A0",
-      Yc: "#080",
-    });
-    // Stagger remote A as if it moved earlier than B (same clock as paintCompanionsOnce)
-    cn.remotes.a._lerpAt = performance.now() - 80;
-    cn.remotes.a._lerpStepMs = 100;
-    cn.remotes.b._lerpAt = performance.now() - 10;
-    cn.remotes.b._lerpStepMs = 100;
-    cn.syncBridge();
-
-    global.__mpCoopPaintCompanions(game);
-    const paintA = seen.find(function (s) {
-      return s.x === 2;
-    });
-    const paintB = seen.find(function (s) {
-      return s.x === 5;
-    });
-    assert.ok(paintA && paintB, "both remotes painted");
-    assert.ok(paintA.a > paintB.a, "older head move should be further in crawl");
-
-    seen.length = 0;
-    cn.applySnakeDelta({
-      clientId: "b",
-      body: [
-        { x: 5, y: 4 },
-        { x: 5, y: 5 },
-      ],
-      dir: "UP",
-    });
-    assert.ok(cn.remotes.b._lerpAt > cn.remotes.a._lerpAt);
-    global.__mpCoopPaintCompanions(game);
-    const paintB2 = seen.find(function (s) {
-      return s.x === 5;
-    });
-    assert.ok(paintB2);
-    assert.ok(paintB2.a < 0.3, "fresh head move resets remote lerp near 0");
-  });
-
-  it("settled companions still redraw so local RAF cannot wipe them", () => {
-    global.window = global;
-    const gsmPath = require.resolve(path.join(root, "src/hooks/gsm.js"));
-    const modPath = require.resolve(path.join(root, "src/coop/native.js"));
-    delete require.cache[gsmPath];
-    delete require.cache[modPath];
-    delete global.__mpCoopRenderInstalled;
-    delete global.__mpCoopOnTickInstalled;
-    require(path.join(root, "src/shared/colors.js"));
-    require(path.join(root, "src/hooks/gsm.js"));
-    require(path.join(root, "src/coop/native.js"));
-
-    const calls = [];
-    const game = {
-      oa: {
-        ka: [
-          { x: 0, y: 0, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } },
-          { x: 0, y: 1, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } },
-        ],
-        Sc: "#111",
-        Yc: "#222",
-      },
-    };
-    const renderer = {
-      wb: game,
-      render: function () {
-        calls.push(game.oa.ka[0] && game.oa.ka[0].x);
-      },
+      render: function () {},
     };
     global.__mpCoopInject = true;
     global.__mpCoopSession = true;
@@ -912,12 +821,11 @@ describe("coop native inject bridge", () => {
       },
     };
     global.__mpCoopPaintCompanions(game);
-    assert.equal(calls.length, 1, "settled remote paints");
-    assert.equal(global.__mpCoopRemotes.other._paintDirty, false);
+    assert.equal(drawn.length, 1, "settled remote paints");
     global.__mpCoopPaintCompanions(game);
     global.__mpCoopPaintCompanions(game);
-    assert.equal(calls.length, 3, "settled remotes must keep redrawing");
-    assert.equal(game.oa.ka[0].x, 0, "local body restored");
+    assert.equal(drawn.length, 3, "settled remotes must keep redrawing");
+    assert.equal(game.oa.ka[0].x, 0, "local body untouched");
   });
 
   it("skips friendly collision when peaceful / cat / cheese light tiles", () => {

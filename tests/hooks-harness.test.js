@@ -1081,14 +1081,16 @@ describe("GSM hook harness", () => {
     shell.remove();
   });
 
-  it("emptyLocalSnakeBody clears ka for coop spectator", () => {
+  it("emptyLocalSnakeBody parks off-board (never clears ka)", () => {
     win.__remixGame.oa.ka = [
       { x: 1, y: 1 },
       { x: 0, y: 1 },
     ];
     const ok = Gsm.emptyLocalSnakeBody();
     assert.equal(ok, true);
-    assert.equal(win.__remixGame.oa.ka.length, 0);
+    assert.ok(win.__remixGame.oa.ka.length >= 1, "ka must stay non-empty");
+    assert.equal(win.__remixGame.oa.ka[0].x, -8);
+    assert.equal(win.__mpCoopLocalDead, true);
   });
 
   it("parkLocalSnakeOffBoard moves local head off grid", () => {
@@ -1112,6 +1114,8 @@ describe("GSM hook harness", () => {
       "render(a,b,c){var d=a;J5E(this,f,d,!1,!1);}"
     );
     assert.ok(out.includes("__mpCoopRenderEnter"));
+    assert.ok(out.includes("isFinite(a)"));
+    assert.ok(out.includes("__mpCoopSkipNativeRender"));
     assert.ok(out.includes("__mpCoopAfterSnakeRender"));
   });
 

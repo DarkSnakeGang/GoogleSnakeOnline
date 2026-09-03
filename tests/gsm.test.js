@@ -53,6 +53,8 @@ describe("gsm hooks", () => {
       "render(a,b,c){var d=a;J5E(this,f,d,!1,!1);}"
     );
     assert.ok(out.indexOf("__mpCoopRenderEnter") >= 0);
+    assert.ok(out.indexOf("__mpCoopSkipNativeRender") >= 0);
+    assert.ok(out.indexOf("isFinite(a)") >= 0);
     assert.ok(out.indexOf("__mpCoopAfterSnakeRender") >= 0);
     assert.ok(out.indexOf("__mpCoopFreePos") >= 0);
   });

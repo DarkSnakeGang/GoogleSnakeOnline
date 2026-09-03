@@ -1842,9 +1842,9 @@
 
   MultiplayerApp.prototype.applyCoopSpawnOrPark = function (spectator) {
     if (spectator) {
-      // Empty body so native local draw is a no-op; companions show all players
-      if (Gsm.emptyLocalSnakeBody) Gsm.emptyLocalSnakeBody();
-      else if (Gsm.parkLocalSnakeOffBoard) Gsm.parkLocalSnakeOffBoard();
+      // Park off-board — clearing ka makes PlayerRenderer throw yi NaN×4
+      if (Gsm.parkLocalSnakeOffBoard) Gsm.parkLocalSnakeOffBoard();
+      else if (Gsm.emptyLocalSnakeBody) Gsm.emptyLocalSnakeBody();
       if (typeof window !== "undefined") {
         window.__mpCoopSpectator = true;
         window.__mpCoopLocalDead = true;

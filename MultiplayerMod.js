@@ -1,6 +1,6 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-03T18:22:09.287Z */
+/* Built: 2026-09-03T18:26:45.569Z */
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -32511,6 +32511,50 @@ window.RemixMod.runCodeAfter = function () {
   }
 
   /**
+   * PlayerRenderer.render(a,b,c) — `a` is usually lerp progress. NaN progress
+   * throws Closure `Error: yi NaN×4` and kills the native render loop.
+   */
+  function sanitizeRenderArgs(a, b, c) {
+    let prog = a;
+    if (typeof prog === "number" && !Number.isFinite(prog)) prog = 0;
+    if (prog == null) prog = 0;
+    return [prog, b === undefined ? true : b, c == null ? {} : c];
+  }
+
+  /**
+   * True when native PlayerRenderer must not run: spectator (companions only)
+   * or a local body that would produce yi-NaN (empty / non-finite coords).
+   */
+  function shouldSkipNativeSnakeRender(renderer) {
+    if (root.__mpCoopSpectator) return true;
+    const game =
+      (renderer && renderer.wb) || root.__mpGame || root.__remixGame;
+    const body = game && game.oa && game.oa.ka;
+    return !bodyIsRenderable(body);
+  }
+
+  function parkSpectatorBody(game) {
+    if (!game || !game.oa) return;
+    const snake = game.oa;
+    if (!Array.isArray(snake.ka)) snake.ka = [];
+    const Gsm = root.MultiplayerGsm;
+    if (Gsm && typeof Gsm.writeNativeBody === "function") {
+      try {
+        Gsm.writeNativeBody(snake, [{ x: -8, y: -8 }]);
+        return;
+      } catch (e) { /* fall through */ }
+    }
+    const seg = { x: -8, y: -8 };
+    seg.clone = function () {
+      const c = { x: this.x, y: this.y };
+      c.clone = this.clone;
+      return c;
+    };
+    snake.ka.length = 1;
+    snake.ka[0] = seg;
+  }
+
+  /**
    * Hook native `render(a,b,c)`. Remotes are painted right after the local
    * snake so companions stay visible on the shared board.
    */
@@ -32524,17 +32568,20 @@ window.RemixMod.runCodeAfter = function () {
       renderer.__mpCoopPaintWrapped = true;
       const origRender = renderer.render;
       renderer.render = function (a, b, c) {
-        // Idle tip / Focus puppet frames pass NaN lerp — Closure then throws
-        // `Error: yi NaN NaN NaN` and kills the whole native render loop.
-        let prog = a;
-        if (typeof prog === "number" && !Number.isFinite(prog)) prog = 0;
-        if (prog == null) prog = 0;
+        const safe = sanitizeRenderArgs(a, b, c);
+        root.__mpCoopRenderArgs = safe;
+        if (shouldSkipNativeSnakeRender(this)) {
+          try {
+            drawCoopRemotes(this);
+          } catch (eSkip) { /* ignore */ }
+          return undefined;
+        }
         let out;
         try {
-          out = origRender.call(this, prog, b === undefined ? true : b, c);
+          out = origRender.call(this, safe[0], safe[1], safe[2]);
         } catch (e) {
           try {
-            out = origRender.call(this, 0, true, c);
+            out = origRender.call(this, 0, true, safe[2]);
           } catch (e2) {
             const now = Date.now();
             if (now - _drawWarnAt > 2000) {
@@ -32556,6 +32603,17 @@ window.RemixMod.runCodeAfter = function () {
       root.__mpCoopPlayerRenderer = renderer;
       wrapRenderer(renderer);
     };
+    root.__mpCoopSkipNativeRender = shouldSkipNativeSnakeRender;
+    // Alias used by older tests / callers
+    root.__mpCoopPaintCompanions = function (gameOrRenderer) {
+      const renderer =
+        gameOrRenderer && gameOrRenderer.ka && gameOrRenderer.wb
+          ? gameOrRenderer
+          : root.__mpCoopPlayerRenderer;
+      if (!renderer) return 0;
+      return drawCoopRemotes(renderer);
+    };
+    root.__mpCoopAfterSnakeRender = root.__mpCoopPaintCompanions;
   }
 
   /* --------------------------------------------------------- spawn occupancy */
@@ -32695,9 +32753,9 @@ window.RemixMod.runCodeAfter = function () {
         wrapGameReset(game);
         invalidateLightMask();
 
+        // Spectator: park off-board (never clear ka — empty body → yi NaN×4)
         if (root.__mpCoopSpectator && game && game.oa) {
-          if (!Array.isArray(game.oa.ka)) game.oa.ka = [];
-          game.oa.ka.length = 0;
+          parkSpectatorBody(game);
           root.__mpCoopLocalDead = true;
         }
 
@@ -37200,18 +37258,13 @@ window.RemixMod.runCodeAfter = function () {
     });
   }
 
-  /** Empty local snake body (co-op spectator — companions only). */
+  /**
+   * Hide the local snake for co-op spectators. Must NOT clear `ka` — an empty
+   * body makes PlayerRenderer throw Closure `yi NaN×4` and kills the render loop.
+   * Park off-board instead (same as parkLocalSnakeOffBoard).
+   */
   function emptyLocalSnakeBody() {
-    const g = gameInstance();
-    if (!g || !g.oa) return false;
-    try {
-      if (!Array.isArray(g.oa.ka)) g.oa.ka = [];
-      g.oa.ka.length = 0;
-      return true;
-    } catch (e) {
-      console.warn("emptyLocalSnakeBody", e);
-      return false;
-    }
+    return parkLocalSnakeOffBoard();
   }
 
   /** Co-op / versus Focus spectate — never persist TimeKeeper PBs or attempts. */
@@ -37325,12 +37378,13 @@ window.RemixMod.runCodeAfter = function () {
       );
     }
 
-    // Capture PlayerRenderer ref for tick-synced companion paints
+    // Sanitize NaN lerp *before* native body runs (wrap alone misses the first
+    // call). Skip native snake draw when local body is empty/parked spectator.
     if (out.indexOf("__mpCoopRenderEnter") === -1) {
       if (/render\(a,b,c\)\{/.test(out)) {
         out = out.replace(
           /render\(a,b,c\)\{/g,
-          "render(a,b,c){try{window.__mpCoopRenderEnter&&window.__mpCoopRenderEnter(this,a,b,c);}catch(_mpRE){}"
+          "render(a,b,c){try{if(typeof a===\"number\"&&!isFinite(a))a=0;if(a==null)a=0;}catch(_mpSA){}try{window.__mpCoopRenderEnter&&window.__mpCoopRenderEnter(this,a,b,c);}catch(_mpRE){}try{if(window.__mpCoopSkipNativeRender&&window.__mpCoopSkipNativeRender(this)){try{window.__mpCoopDrawRemotes&&window.__mpCoopDrawRemotes(this);}catch(_mpDR){}return;}}catch(_mpSK){}"
         );
       }
     }
@@ -43034,9 +43088,9 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 
   MultiplayerApp.prototype.applyCoopSpawnOrPark = function (spectator) {
     if (spectator) {
-      // Empty body so native local draw is a no-op; companions show all players
-      if (Gsm.emptyLocalSnakeBody) Gsm.emptyLocalSnakeBody();
-      else if (Gsm.parkLocalSnakeOffBoard) Gsm.parkLocalSnakeOffBoard();
+      // Park off-board — clearing ka makes PlayerRenderer throw yi NaN×4
+      if (Gsm.parkLocalSnakeOffBoard) Gsm.parkLocalSnakeOffBoard();
+      else if (Gsm.emptyLocalSnakeBody) Gsm.emptyLocalSnakeBody();
       if (typeof window !== "undefined") {
         window.__mpCoopSpectator = true;
         window.__mpCoopLocalDead = true;

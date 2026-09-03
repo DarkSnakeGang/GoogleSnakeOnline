@@ -793,6 +793,50 @@
   }
 
   /**
+   * PlayerRenderer.render(a,b,c) — `a` is usually lerp progress. NaN progress
+   * throws Closure `Error: yi NaN×4` and kills the native render loop.
+   */
+  function sanitizeRenderArgs(a, b, c) {
+    let prog = a;
+    if (typeof prog === "number" && !Number.isFinite(prog)) prog = 0;
+    if (prog == null) prog = 0;
+    return [prog, b === undefined ? true : b, c == null ? {} : c];
+  }
+
+  /**
+   * True when native PlayerRenderer must not run: spectator (companions only)
+   * or a local body that would produce yi-NaN (empty / non-finite coords).
+   */
+  function shouldSkipNativeSnakeRender(renderer) {
+    if (root.__mpCoopSpectator) return true;
+    const game =
+      (renderer && renderer.wb) || root.__mpGame || root.__remixGame;
+    const body = game && game.oa && game.oa.ka;
+    return !bodyIsRenderable(body);
+  }
+
+  function parkSpectatorBody(game) {
+    if (!game || !game.oa) return;
+    const snake = game.oa;
+    if (!Array.isArray(snake.ka)) snake.ka = [];
+    const Gsm = root.MultiplayerGsm;
+    if (Gsm && typeof Gsm.writeNativeBody === "function") {
+      try {
+        Gsm.writeNativeBody(snake, [{ x: -8, y: -8 }]);
+        return;
+      } catch (e) { /* fall through */ }
+    }
+    const seg = { x: -8, y: -8 };
+    seg.clone = function () {
+      const c = { x: this.x, y: this.y };
+      c.clone = this.clone;
+      return c;
+    };
+    snake.ka.length = 1;
+    snake.ka[0] = seg;
+  }
+
+  /**
    * Hook native `render(a,b,c)`. Remotes are painted right after the local
    * snake so companions stay visible on the shared board.
    */
@@ -806,17 +850,20 @@
       renderer.__mpCoopPaintWrapped = true;
       const origRender = renderer.render;
       renderer.render = function (a, b, c) {
-        // Idle tip / Focus puppet frames pass NaN lerp — Closure then throws
-        // `Error: yi NaN NaN NaN` and kills the whole native render loop.
-        let prog = a;
-        if (typeof prog === "number" && !Number.isFinite(prog)) prog = 0;
-        if (prog == null) prog = 0;
+        const safe = sanitizeRenderArgs(a, b, c);
+        root.__mpCoopRenderArgs = safe;
+        if (shouldSkipNativeSnakeRender(this)) {
+          try {
+            drawCoopRemotes(this);
+          } catch (eSkip) { /* ignore */ }
+          return undefined;
+        }
         let out;
         try {
-          out = origRender.call(this, prog, b === undefined ? true : b, c);
+          out = origRender.call(this, safe[0], safe[1], safe[2]);
         } catch (e) {
           try {
-            out = origRender.call(this, 0, true, c);
+            out = origRender.call(this, 0, true, safe[2]);
           } catch (e2) {
             const now = Date.now();
             if (now - _drawWarnAt > 2000) {
@@ -838,6 +885,17 @@
       root.__mpCoopPlayerRenderer = renderer;
       wrapRenderer(renderer);
     };
+    root.__mpCoopSkipNativeRender = shouldSkipNativeSnakeRender;
+    // Alias used by older tests / callers
+    root.__mpCoopPaintCompanions = function (gameOrRenderer) {
+      const renderer =
+        gameOrRenderer && gameOrRenderer.ka && gameOrRenderer.wb
+          ? gameOrRenderer
+          : root.__mpCoopPlayerRenderer;
+      if (!renderer) return 0;
+      return drawCoopRemotes(renderer);
+    };
+    root.__mpCoopAfterSnakeRender = root.__mpCoopPaintCompanions;
   }
 
   /* --------------------------------------------------------- spawn occupancy */
@@ -977,9 +1035,9 @@
         wrapGameReset(game);
         invalidateLightMask();
 
+        // Spectator: park off-board (never clear ka — empty body → yi NaN×4)
         if (root.__mpCoopSpectator && game && game.oa) {
-          if (!Array.isArray(game.oa.ka)) game.oa.ka = [];
-          game.oa.ka.length = 0;
+          parkSpectatorBody(game);
           root.__mpCoopLocalDead = true;
         }
 
