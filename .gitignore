@@ -1,0 +1,21 @@
+# Logs
+logs/
+server/logs/
+*.log
+
+# Rust
+server/target/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local Remix vendor copy (optional)
+vendor/RemixMod.js
+
+# IDE
+.idea/
+.vscode/

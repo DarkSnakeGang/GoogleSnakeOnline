@@ -1,0 +1,11 @@
+# Optional compose for homelab
+services:
+  multiplayer:
+    build: .
+    ports:
+      - "7777:7777"
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      MULTIPLAYER_BIND: 0.0.0.0:7777
+      RUST_LOG: info

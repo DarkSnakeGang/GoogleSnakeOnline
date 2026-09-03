@@ -1,0 +1,20 @@
+{
+  "name": "google-snake-lan",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MultiplayerMod — Google Snake LAN multiplayer on Remix + Rust room server",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "test": "node --test tests/client.test.js tests/gsm.test.js tests/hooks-harness.test.js tests/integration.test.js",
+    "test:server": "cargo test --manifest-path server/Cargo.toml",
+    "test:all": "npm test && npm run test:server",
+    "server": "cargo run --manifest-path server/Cargo.toml -- --bind 0.0.0.0:7777",
+    "server:release": "cargo build --release --manifest-path server/Cargo.toml"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
