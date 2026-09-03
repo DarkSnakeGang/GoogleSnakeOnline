@@ -163,9 +163,8 @@
         me.role === "spectator" &&
         (mode === "versus" || mode === "coop");
       const sessionOn = !!(this.client.roster && this.client.roster.sessionActive);
-      // Co-op spectators are mosaic-only (no native Focus seat)
-      const mosaicOn =
-        mode === "coop" || this.versus.spectateMode === "mosaic";
+      // Versus mosaic only — co-op spectators use the shared native board
+      const mosaicOn = this.versus.spectateMode === "mosaic" && mode === "versus";
       if (!isSpec || !mosaicOn || !sessionOn) {
         el.style.display = "none";
         if (typeof this._stopMosaicLabelTick === "function") {
@@ -173,9 +172,6 @@
         }
         this._stopMosaicAnim();
         return;
-      }
-      if (mode === "coop" && this.versus.spectateMode !== "mosaic") {
-        this.versus.setSpectateMode("mosaic");
       }
       if (typeof this._ensureMosaicLabelTick === "function") {
         this._ensureMosaicLabelTick();

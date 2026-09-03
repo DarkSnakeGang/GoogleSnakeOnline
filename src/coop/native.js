@@ -745,6 +745,19 @@
         let body = r._visualBody;
         if (!bodyIsRenderable(body)) body = r.body;
         if (!bodyIsRenderable(body)) continue;
+        // Drop seats built for a larger board — OOB paint looks like border walls
+        if (size.width > 0 && size.height > 0) {
+          const inBounds = body.every(function (p) {
+            return (
+              p &&
+              (p.x | 0) >= 0 &&
+              (p.y | 0) >= 0 &&
+              (p.x | 0) < size.width &&
+              (p.y | 0) < size.height
+            );
+          });
+          if (!inBounds) continue;
+        }
         // Deltas land one remote tick at a time but this runs every native
         // frame, so slide the snake between cells instead of hopping it. The
         // record survives merges by Object.assign, and so does the state.
@@ -804,11 +817,12 @@
   }
 
   /**
-   * True when native PlayerRenderer must not run: spectator (companions only)
-   * or a local body that would produce yi-NaN (empty / non-finite coords).
+   * True when native PlayerRenderer must not run — empty / non-finite local body
+   * would throw Closure `yi NaN×4`. Spectators park off-board (finite) so they
+   * still get the shared board (apples, walls, obstacles) from native render;
+   * remotes are overpainted via drawCoopRemotes.
    */
   function shouldSkipNativeSnakeRender(renderer) {
-    if (root.__mpCoopSpectator) return true;
     const game =
       (renderer && renderer.wb) || root.__mpGame || root.__remixGame;
     const body = game && game.oa && game.oa.ka;

@@ -1182,9 +1182,9 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       const isVersus = rosterData.mode === "versus";
       const isCoop = rosterData.mode === "coop";
       spectateBar.style.display = amSpectator && (isVersus || isCoop) ? "" : "none";
+      // Co-op spectators watch the shared native board — mosaic is versus-only
       if (amSpectator && isCoop && self.app.versus) {
-        // Co-op is mosaic-only — no Focus toggle
-        self.app.versus.spectateMode = "mosaic";
+        self.app.versus.spectateMode = "focus";
         mosaicBtn.style.display = "none";
       } else if (amSpectator && self.app.versus) {
         mosaicBtn.style.display = "";

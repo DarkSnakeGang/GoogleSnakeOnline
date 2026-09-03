@@ -86,7 +86,10 @@ describe("versus PLAY_SYNC start gate", () => {
       const isCoop = roster.mode === "coop";
       if (me.role === "player") {
         if (!me.ready && !roster.sessionActive) return null;
-      } else if (!(isCoop && me.role === "spectator")) {
+      } else if (me.role === "spectator") {
+        if (isCoop) return { coop: true, spectator: true };
+        return null;
+      } else {
         return null;
       }
       if (isCoop) return { coop: true, spectator: me.role === "spectator" };
@@ -109,6 +112,13 @@ describe("versus PLAY_SYNC start gate", () => {
         { mode: "versus", sessionActive: false }
       ),
       null
+    );
+    assert.deepEqual(
+      shouldStartLocalPlay(
+        { role: "spectator" },
+        { mode: "coop", sessionActive: true }
+      ),
+      { coop: true, spectator: true }
     );
   });
 });
@@ -707,7 +717,7 @@ describe("coop native inject bridge", () => {
     }), "NaN remote skipped");
   });
 
-  it("skips native PlayerRenderer when spectator so empty/parked body cannot yi-NaN", () => {
+  it("skips native PlayerRenderer only when local body is empty/NaN", () => {
     global.window = global;
     const modPath = require.resolve(path.join(root, "src/coop/native.js"));
     delete require.cache[modPath];
@@ -726,7 +736,7 @@ describe("coop native inject bridge", () => {
       },
     };
     const game = {
-      oa: { ka: [{ x: -8, y: -8 }] },
+      oa: { ka: [] },
       ka: { ka: 20 },
     };
     const renderer = {
@@ -758,8 +768,12 @@ describe("coop native inject bridge", () => {
     assert.doesNotThrow(function () {
       renderer.render(NaN, true, {});
     });
-    assert.equal(nativeCalls, 0, "native render skipped for spectator");
+    assert.equal(nativeCalls, 0, "native render skipped for empty body");
     assert.ok(drawn.indexOf(4) >= 0, "remotes still painted");
+
+    // Parked spectator body is finite — native shared board must still render
+    game.oa.ka = [{ x: -8, y: -8 }];
+    assert.equal(global.__mpCoopSkipNativeRender(renderer), false);
     global.__mpCoopSpectator = false;
   });
 

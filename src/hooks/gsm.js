@@ -4632,12 +4632,48 @@
     return true;
   }
 
+  /**
+   * Keep center+oy seats on the live board. Server oy (±4) is sized for classic
+   * 17×15 — on small boards that lands off-grid and paints onto the border
+   * chrome (looks like impossible walls before anyone moves).
+   */
+  function clampCoopSpawnOy(oy, height) {
+    const h = height | 0;
+    if (h < 1) return 0;
+    const cy0 = Math.floor(h / 2);
+    let o = Number(oy) || 0;
+    if (!Number.isFinite(o)) o = 0;
+    let cy = cy0 + o;
+    if (cy < 0) o = -cy0;
+    else if (cy >= h) o = h - 1 - cy0;
+    return o | 0;
+  }
+
+  /** Seat pose from live board size (never trust a pose built for another size). */
+  function coopSpawnPoseForSlot(slotIndex, oy, width, height, yinYang) {
+    const w = width || 17;
+    const h = height || 15;
+    if (yinYang || coopIsYinYang()) {
+      return coopYinYangCorner(slotIndex, w, h);
+    }
+    const clampedOy = clampCoopSpawnOy(oy, h);
+    let x = Math.floor(w / 2);
+    // Length-3 RIGHT body is x, x-1, x-2 — keep head at least 2 from left edge
+    if (w >= 3) x = Math.max(2, Math.min(x, w - 1));
+    else x = Math.max(0, Math.min(x, w - 1));
+    return {
+      x: x,
+      y: Math.floor(h / 2) + clampedOy,
+      dir: "RIGHT",
+    };
+  }
+
   function coopYinYangCorner(slot, width, height) {
     const w = width || 17;
     const h = height || 15;
-    const leftX = 2;
+    const leftX = Math.min(2, Math.max(0, w - 1));
     const rightX = Math.max(leftX, w - 3);
-    const topY = 1;
+    const topY = Math.min(1, Math.max(0, h - 1));
     const botY = Math.max(topY, h - 2);
     const corners = [
       { x: leftX, y: topY, dir: "RIGHT" },
@@ -4672,18 +4708,14 @@
       {};
     const w = firstNumber(meta.width, meta.W, 17) || 17;
     const h = firstNumber(meta.height, meta.H, 15) || 15;
-    let pose = opts.pose;
-    if (!pose && (opts.yinYang || coopIsYinYang()) && opts.slot != null) {
-      pose = coopYinYangCorner(opts.slot, w, h);
-    }
-    if (!pose) {
-      pose = {
-        x: Math.floor(w / 2),
-        y: Math.floor(h / 2) + (Number(oy) || 0),
-        dir: "RIGHT",
-      };
-    }
-    // Exact seat (center+oy, or Yin Yang corner) — never slide for walls/remotes
+    // Always recompute from live w/h — opts.pose may be classic 17×15 while size is small
+    const pose = coopSpawnPoseForSlot(
+      opts.slot != null ? opts.slot : 0,
+      oy,
+      w,
+      h,
+      opts.yinYang
+    );
     root.__mpLastCoopSpawnPose = pose;
     const body = coopSpawnBodyFromPose(pose);
     try {
@@ -5673,8 +5705,11 @@
     applyBoardEntities: applyBoardEntities,
     applyCoopSpawnOffset: applyCoopSpawnOffset,
     applyCoopStartMoving: applyCoopStartMoving,
+    clampCoopSpawnOy: clampCoopSpawnOy,
+    coopSpawnPoseForSlot: coopSpawnPoseForSlot,
     coopYinYangCorner: coopYinYangCorner,
     coopSpawnBodyFromPose: coopSpawnBodyFromPose,
+    coopSpawnBodyInBounds: coopSpawnBodyInBounds,
     findClearCoopSpawnPose: function (pose) {
       return pose || null;
     },

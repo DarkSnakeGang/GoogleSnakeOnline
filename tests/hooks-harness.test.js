@@ -1209,6 +1209,34 @@ describe("GSM hook harness", () => {
     assert.equal(head.y, cy, "exact center y");
   });
 
+  it("applyCoopSpawnOffset clamps oy onto small boards", () => {
+    // Small size (~7×7): server oy ±4 would paint off the grid
+    const w = 7;
+    const h = 7;
+    win.__remixGame.oa.oa = { width: w, height: h };
+    if (win.__remixGame.wa && win.__remixGame.wa.oa) {
+      win.__remixGame.wa.oa.oa = { width: w, height: h };
+    }
+    win.__remixGame.oa.ka = [{ x: 0, y: 0 }];
+    win.__remixGame.oa.direction = null;
+    assert.equal(Gsm.clampCoopSpawnOy(4, h), 3);
+    assert.equal(Gsm.clampCoopSpawnOy(-4, h), -3);
+    const ok = Gsm.applyCoopSpawnOffset(4, { slot: 0 });
+    assert.equal(ok, true);
+    const head = win.__remixGame.oa.ka[0];
+    assert.ok(head.x >= 0 && head.x < w, "x in bounds got " + head.x);
+    assert.ok(head.y >= 0 && head.y < h, "y in bounds got " + head.y);
+    assert.equal(head.y, Math.floor(h / 2) + 3);
+    win.__remixGame.oa.ka.forEach(function (p) {
+      assert.ok(p.x >= 0 && p.x < w && p.y >= 0 && p.y < h, "body in bounds");
+    });
+    // Restore classic size for later harness tests
+    win.__remixGame.oa.oa = { width: 17, height: 15 };
+    if (win.__remixGame.wa && win.__remixGame.wa.oa) {
+      win.__remixGame.wa.oa.oa = { width: 17, height: 15 };
+    }
+  });
+
   it("locks match menus while Ready (title + play stay gated)", () => {
     Gsm.setNativeMenusLocked(true);
     const trophy = win.document.getElementById("trophy");

@@ -584,14 +584,17 @@
         if (!me.ready && !roster.sessionActive) return;
       } else if (me.role === "spectator") {
         if (isCoop) {
-          // Co-op spectate is mosaic-only — no native Play / phantom inject
-          if (self.versus) self.versus.setSpectateMode("mosaic");
+          // Shared native board (all snakes + obstacles) — same Play path as
+          // players, with the local snake parked off-board.
           if (typeof window !== "undefined") {
             window.__mpStartingMatch = true;
             window.__mpCoopSpectator = true;
           }
-          self.ensureAutoFocus();
-          self.renderSpectateViews();
+          self.hideNativeBoard(false);
+          if (self._mosaicEl) self._mosaicEl.style.display = "none";
+          if (self._focusCanvas) self._focusCanvas.style.display = "none";
+          if (self.versus) self.versus.setSpectateMode("focus");
+          self.startMatchLocalPlay({ coop: true, spectator: true });
           return;
         }
         // Versus Focus: every spectator (admin + non-admin) seats native Play
@@ -891,9 +894,11 @@
     this.versus.setFocus(clientId);
     this.client.spectateFocus(clientId);
     if (!opts.keepMode) {
-      // Co-op spectate stays mosaic-only (no native Focus seat)
+      // Co-op shared board has no mosaic/Focus split — stay on native canvas
       if (mode === "coop") {
-        this.versus.setSpectateMode("mosaic");
+        if (this.versus) this.versus.setSpectateMode("focus");
+        this.hideNativeBoard(false);
+        if (this._mosaicEl) this._mosaicEl.style.display = "none";
       } else {
         this.versus.setSpectateMode("focus");
         const btn = document.getElementById("mp-mosaic-toggle");
@@ -1645,14 +1650,21 @@
   MultiplayerApp.prototype._coopSpawnPoseFor = function (slotIndex, oy, width, height) {
     const w = width || 17;
     const h = height || 15;
+    if (Gsm.coopSpawnPoseForSlot) {
+      return Gsm.coopSpawnPoseForSlot(slotIndex, oy, w, h);
+    }
     if (Gsm.coopIsYinYang && Gsm.coopIsYinYang()) {
       return Gsm.coopYinYangCorner
         ? Gsm.coopYinYangCorner(slotIndex, w, h)
         : { x: 2, y: 1, dir: "RIGHT" };
     }
+    const clamped =
+      Gsm.clampCoopSpawnOy != null
+        ? Gsm.clampCoopSpawnOy(oy, h)
+        : Number(oy) || 0;
     return {
       x: Math.floor(w / 2),
-      y: Math.floor(h / 2) + (Number(oy) || 0),
+      y: Math.floor(h / 2) + clamped,
       dir: "RIGHT",
     };
   };
@@ -1660,10 +1672,10 @@
   MultiplayerApp.prototype._applyMyCoopSpawn = function () {
     const oy = this._myCoopSpawnOy();
     const slot = this._myCoopSlotIndex();
-    const pose = this._coopSpawnPoseFor(slot, oy);
-    this._coopSpawnPose = pose;
+    // Let applyCoopSpawnOffset read live engine size — do not pass a pose
+    // built against classic 17×15 defaults (small boards OOB → fake walls).
     if (Gsm.applyCoopSpawnOffset) {
-      const ok = Gsm.applyCoopSpawnOffset(oy, { slot: slot, pose: pose });
+      const ok = Gsm.applyCoopSpawnOffset(oy, { slot: slot });
       if (
         typeof window !== "undefined" &&
         window.__mpLastCoopSpawnPose
@@ -1672,6 +1684,8 @@
       }
       return ok;
     }
+    const pose = this._coopSpawnPoseFor(slot, oy);
+    this._coopSpawnPose = pose;
     return false;
   };
 
@@ -2290,13 +2304,14 @@
         // restart. The endscreen is left exactly as the game left it; hiding it
         // here is what used to fight the run and reset it in a loop.
         if (self._isVersusSpectator && self._isVersusSpectator()) return;
-        // Co-op spectator: mosaic-only — never treat as a real player death
+        // Co-op spectator: shared board — never treat as a real player death
         if (
           typeof window !== "undefined" &&
           window.__mpCoopSpectator
         ) {
           if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
-          if (Gsm.emptyLocalSnakeBody) Gsm.emptyLocalSnakeBody();
+          if (Gsm.parkLocalSnakeOffBoard) Gsm.parkLocalSnakeOffBoard();
+          else if (Gsm.emptyLocalSnakeBody) Gsm.emptyLocalSnakeBody();
           return;
         }
         self._pulseScore(score, timeMs, false);
@@ -2861,7 +2876,7 @@
     }
   };
 
-  /** Spectators cannot steer the local game while watching Versus. */
+  /** Spectators cannot steer the local game while watching Versus/Co-op. */
   MultiplayerApp.prototype.hookSpectatorInputBlock = function () {
     const self = this;
     if (this._specInputHooked) return;
@@ -2869,8 +2884,12 @@
     window.addEventListener(
       "keydown",
       function (ev) {
-        if (!self._isVersusSpectator || !self._isVersusSpectator()) return;
-        // Focus spectate paints the native canvas — swallow game controls
+        const versusSpec =
+          self._isVersusSpectator && self._isVersusSpectator();
+        const coopSpec =
+          typeof window !== "undefined" && !!window.__mpCoopSpectator;
+        if (!versusSpec && !coopSpec) return;
+        // Shared native / Focus canvas — swallow game controls
         const k = ev.key;
         if (
           k === "ArrowUp" ||
