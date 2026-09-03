@@ -995,8 +995,7 @@
       (g && g.settings && (g.settings.height || g.settings.boardHeight)) ||
       (g && g.height) ||
       null;
-    // Co-op used to stamp remotes into Ca.wa. Clear leftovers so we never
-    // publish snake bodies as real walls (which then land in Ca.Aa).
+    // Co-op: scrape real walls only (snakes are never walls)
     let clearedPhantoms = false;
     if (
       root.__mpCoopSession &&
@@ -1080,37 +1079,8 @@
       });
       // Drop corner sentinels from wa-only cells; keep temp/lock/hotdog
       result = filterMosaicWalls(merged, bw, bh);
-      // Never treat live snake cells as walls (legacy phantom leaks)
-      if (root.__mpCoopSession) {
-        const snakeCells = Object.create(null);
-        try {
-          const body = g && g.oa && g.oa.ka;
-          (body || []).forEach(function (p) {
-            if (p && p.x != null && p.y != null) {
-              snakeCells[(p.x | 0) + "," + (p.y | 0)] = 1;
-            }
-          });
-        } catch (eBody) { /* ignore */ }
-        try {
-          const remotes = root.__mpCoopRemotes || {};
-          Object.keys(remotes).forEach(function (id) {
-            const b = remotes[id] && remotes[id].body;
-            (b || []).forEach(function (p) {
-              if (p && p.x != null && p.y != null) {
-                snakeCells[(p.x | 0) + "," + (p.y | 0)] = 1;
-              }
-            });
-          });
-        } catch (eR) { /* ignore */ }
-        result = result.filter(function (p) {
-          if (!p) return false;
-          if (p.lock || p.lockType != null || p.temp || p.hotdog) return true;
-          return !snakeCells[(p.x | 0) + "," + (p.y | 0)];
-        });
-      }
       return result;
     } finally {
-      // stampPhantomWalls is clear-only now (no restamp into Ca.wa)
       if (
         clearedPhantoms &&
         typeof root.__mpCoopStampPhantomWalls === "function"
@@ -4632,7 +4602,7 @@
    *
    * Yin Yang uses corners instead: left side faces right, right side faces left
    * so the body trails off the edge. Direction is still left unset until the
-   * shared start signal.
+   * shared start signal. Wall mode starts empty — seats are never slid.
    */
   function coopSpawnBodyFromPose(pose) {
     const dir = pose && pose.dir === "LEFT" ? "LEFT" : "RIGHT";
@@ -4664,75 +4634,6 @@
       if (x < 0 || y < 0 || x >= w || y >= h) return false;
     }
     return true;
-  }
-
-  /** True when a length-3 spawn body hits a wall or another co-op snake. */
-  function coopSpawnBodyBlocked(body, game) {
-    if (!body || !body.length) return true;
-    const occ =
-      typeof root.__mpCoopReadOccupancy === "function"
-        ? root.__mpCoopReadOccupancy()
-        : {};
-    const wallFn = root.__mpCoopIsSolidWall;
-    for (let i = 0; i < body.length; i++) {
-      const p = body[i];
-      if (!p) return true;
-      const x = p.x | 0;
-      const y = p.y | 0;
-      if (occ[x + "," + y]) return true;
-      if (typeof wallFn === "function" && wallFn(game, x, y)) return true;
-      // Fallback if bridge helpers are not installed yet
-      if (typeof wallFn !== "function") {
-        try {
-          const wa = game && game.Ca && game.Ca.wa;
-          const row = wa && wa[y];
-          if (row) {
-            const v = row[x] | 0;
-            if (v !== 0 && v !== 3) return true;
-          }
-        } catch (e) { /* ignore */ }
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Prefer the requested seat; if Wall mode (or remotes) blocks that footprint,
-   * spiral search for the nearest clear length-3 pose so every player starts
-   * off solid walls the same way native spawn avoids them.
-   */
-  function findClearCoopSpawnPose(pose, width, height, game) {
-    const preferred = pose || {
-      x: Math.floor(width / 2),
-      y: Math.floor(height / 2),
-      dir: "RIGHT",
-    };
-    function tryPose(p) {
-      if (!p) return null;
-      const body = coopSpawnBodyFromPose(p);
-      if (!coopSpawnBodyInBounds(body, width, height)) return null;
-      if (coopSpawnBodyBlocked(body, game)) return null;
-      return p;
-    }
-    const first = tryPose(preferred);
-    if (first) return first;
-    const maxR = Math.max(width, height);
-    for (let r = 0; r <= maxR; r++) {
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          if (r > 0 && Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
-          const x = (preferred.x | 0) + dx;
-          const y = (preferred.y | 0) + dy;
-          const dirs =
-            preferred.dir === "LEFT" ? ["LEFT", "RIGHT"] : ["RIGHT", "LEFT"];
-          for (let di = 0; di < dirs.length; di++) {
-            const hit = tryPose({ x: x, y: y, dir: dirs[di] });
-            if (hit) return hit;
-          }
-        }
-      }
-    }
-    return preferred;
   }
 
   function coopYinYangCorner(slot, width, height) {
@@ -4786,8 +4687,7 @@
         dir: "RIGHT",
       };
     }
-    // Wall mode / remotes: slide off solid cells so the seat is legal
-    pose = findClearCoopSpawnPose(pose, w, h, g);
+    // Exact seat (center+oy, or Yin Yang corner) — never slide for walls/remotes
     root.__mpLastCoopSpawnPose = pose;
     const body = coopSpawnBodyFromPose(pose);
     try {
@@ -5779,7 +5679,9 @@
     applyCoopStartMoving: applyCoopStartMoving,
     coopYinYangCorner: coopYinYangCorner,
     coopSpawnBodyFromPose: coopSpawnBodyFromPose,
-    findClearCoopSpawnPose: findClearCoopSpawnPose,
+    findClearCoopSpawnPose: function (pose) {
+      return pose || null;
+    },
     coopIsYinYang: coopIsYinYang,
     parkLocalSnakeOffBoard: parkLocalSnakeOffBoard,
     emptyLocalSnakeBody: emptyLocalSnakeBody,

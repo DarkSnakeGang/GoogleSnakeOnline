@@ -1182,12 +1182,12 @@ describe("GSM hook harness", () => {
     assert.equal(win.__remixGame.oa.direction, "UP");
   });
 
-  it("applyCoopSpawnOffset slides off solid wall cells", () => {
+  it("applyCoopSpawnOffset keeps center+oy even if wall cells exist", () => {
     const w = 17;
     const h = 15;
     const cx = Math.floor(w / 2);
     const cy = Math.floor(h / 2);
-    // Paint the preferred length-3 seat as walls
+    // Wall mode starts empty; even if mid-run walls appear, seats stay fixed
     win.__remixGame.Ca = { wa: [] };
     for (let y = 0; y < h; y++) {
       win.__remixGame.Ca.wa[y] = [];
@@ -1198,22 +1198,11 @@ describe("GSM hook harness", () => {
     win.__remixGame.Ca.wa[cy][cx - 2] = 1;
     win.__remixGame.oa.ka = [{ x: 0, y: 0 }];
     win.__remixGame.oa.direction = null;
-    win.__mpCoopIsSolidWall = function (game, x, y) {
-      const row = game.Ca.wa[y];
-      return !!(row && (row[x] | 0) !== 0 && (row[x] | 0) !== 3);
-    };
-    win.__mpCoopReadOccupancy = function () {
-      return {};
-    };
     const ok = Gsm.applyCoopSpawnOffset(0);
     assert.equal(ok, true);
     const head = win.__remixGame.oa.ka[0];
-    assert.ok(head, "spawned");
-    assert.notEqual(head.x + "," + head.y, cx + "," + cy, "left the walled seat");
-    // Entire body must be off walls
-    win.__remixGame.oa.ka.forEach(function (p) {
-      assert.equal(win.__remixGame.Ca.wa[p.y][p.x], 0, "body not on wall");
-    });
+    assert.equal(head.x, cx, "exact center x");
+    assert.equal(head.y, cy, "exact center y");
   });
 
   it("locks match menus while Ready (title + play stay gated)", () => {
@@ -2631,11 +2620,26 @@ describe("Multiplayer settings tab layout", () => {
     assert.notEqual(endBtn.style.display, "none");
     assert.equal(startBtn.style.display, "none", "no Start while a match runs");
 
-    // Attempt ran out: Start comes back so the next match can be set up
+    // Attempt ran out with finish-ongoing grace: session stays live → Start stays hidden
     ui.renderRoster({
       mode: "versus",
       roomCode: "ABCD",
       sessionActive: true,
+      attemptExpired: true,
+      clients: [{ clientId: "admin", role: "player", ready: true }],
+      allowNewRuns: false,
+    });
+    assert.equal(
+      startBtn.style.display,
+      "none",
+      "Start stays hidden while finish-ongoing grace keeps sessionActive"
+    );
+
+    // After the session fully ends, Start comes back for the next match
+    ui.renderRoster({
+      mode: "versus",
+      roomCode: "ABCD",
+      sessionActive: false,
       attemptExpired: true,
       clients: [{ clientId: "admin", role: "player", ready: true }],
       allowNewRuns: false,
@@ -3058,6 +3062,67 @@ describe("spectator / admin menu access", () => {
       win.document.getElementById("trophy").title,
       "Unready to change settings"
     );
+    me.ready = false;
+    app.applyControlLocks();
+    assert.equal(win.document.getElementById("trophy").style.pointerEvents, "");
+  });
+
+  it("admin player Unready keeps match menus unlocked in lobby", () => {
+    const win = menuDom();
+    const MultiplayerApp = loadApp(win);
+    const Gsm = win.MultiplayerGsm;
+    let deathFull = 0;
+    const prevShow = Gsm.showDeathScreen;
+    Gsm.showDeathScreen = function (opts) {
+      if (!opts || !opts.skipEscapeDispatch) deathFull++;
+      if (prevShow) return prevShow.apply(this, arguments);
+    };
+    const me = { clientId: "admin", role: "player", ready: false };
+    const app = new MultiplayerApp();
+    let aborted = 0;
+    app.client = {
+      connected: true,
+      clientId: "admin",
+      isAdmin: function () {
+        return true;
+      },
+      me: function () {
+        return me;
+      },
+      roster: {
+        mode: "versus",
+        sessionActive: false,
+        adminId: "admin",
+        clients: [me],
+      },
+      sessionEnd: function () {
+        aborted++;
+      },
+    };
+    app.ui = { updateHud: function () {}, renderRoster: function () {} };
+    app.applyControlLocks();
+    assert.equal(win.document.getElementById("trophy").style.pointerEvents, "");
+    assert.equal(win.document.getElementById("trophy").title, "");
+
+    // Promote-to-player / lobby path must quit the engine so rows click
+    app.clearSpectatorSeat();
+    assert.ok(deathFull >= 1, "engine quit so trophy rows accept clicks");
+
+    app.hookEscapeForAdmin();
+    win.document.dispatchEvent(
+      new win.KeyboardEvent("keydown", {
+        key: "Escape",
+        code: "Escape",
+        keyCode: 27,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+    assert.equal(aborted, 0, "lobby Escape must not abort the room");
+
+    me.ready = true;
+    app.applyControlLocks();
+    assert.equal(win.document.getElementById("trophy").style.pointerEvents, "none");
     me.ready = false;
     app.applyControlLocks();
     assert.equal(win.document.getElementById("trophy").style.pointerEvents, "");

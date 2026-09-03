@@ -245,7 +245,18 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
   border-radius:6px !important;
 }
 #mp-settings-host .mp-admin-only.hidden,
-#mp-settings-host .mp-player-only.hidden { display:none !important; }
+#mp-settings-host .mp-player-only.hidden,
+#mp-settings-host .mp-versus-only.hidden { display:none !important; }
+#mp-settings-host .mp-mode-btn.mp-mode-on {
+  background:#1b5e20 !important;
+  border-color:#2e7d32 !important;
+  color:#fff !important;
+}
+#mp-settings-host .mp-mode-btn.mp-mode-off {
+  background:#b71c1c !important;
+  border-color:#c62828 !important;
+  color:#fff !important;
+}
 #mp-settings-host .pudding-settings-section-title {
   display:block; color:rgba(255,255,255,0.85); font-family:Roboto,Arial,sans-serif;
   font-size:12px; font-weight:600; margin:6px 0 4px;
@@ -379,6 +390,10 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     host.style.setProperty("--mp-btn", btn);
     host.style.setProperty("--ultra-btn", btn);
     host.querySelectorAll(".pudding-settings-btn, button.btn").forEach(function (b) {
+      if (b.classList.contains("mp-mode-btn")) {
+        // Versus / Co-op selection colors are owned by paintModeButtons
+        return;
+      }
       if (b.classList.contains("mp-danger")) {
         b.style.setProperty("background", "#c5221f", "important");
         b.style.setProperty("background-color", "#c5221f", "important");
@@ -622,11 +637,38 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     adminBox.appendChild(el("span", "pudding-settings-section-title", "Admin"));
 
     const modeRow = el("div", "pudding-settings-btn-row");
-    const versusBtn = themedBtn("Versus");
-    const coopBtn = themedBtn("Co-op");
+    const versusBtn = themedBtn("Versus", "mp-mode-btn");
+    versusBtn.id = "mp-mode-versus";
+    const coopBtn = themedBtn("Co-op", "mp-mode-btn");
+    coopBtn.id = "mp-mode-coop";
     modeRow.appendChild(versusBtn);
     modeRow.appendChild(coopBtn);
     adminBox.appendChild(modeRow);
+
+    function paintModeButtons(mode) {
+      const versusOn = mode === "versus";
+      const coopOn = mode === "coop";
+      versusBtn.classList.toggle("mp-mode-on", versusOn);
+      versusBtn.classList.toggle("mp-mode-off", !versusOn);
+      coopBtn.classList.toggle("mp-mode-on", coopOn);
+      coopBtn.classList.toggle("mp-mode-off", !coopOn);
+      versusBtn.setAttribute("aria-pressed", versusOn ? "true" : "false");
+      coopBtn.setAttribute("aria-pressed", coopOn ? "true" : "false");
+      // Inline !important so theme repaint cannot wash them out
+      [
+        [versusBtn, versusOn],
+        [coopBtn, coopOn],
+      ].forEach(function (pair) {
+        const b = pair[0];
+        const on = pair[1];
+        const bg = on ? "#1b5e20" : "#b71c1c";
+        b.style.setProperty("background", bg, "important");
+        b.style.setProperty("background-color", bg, "important");
+        b.style.setProperty("color", "#fff", "important");
+        b.style.setProperty("border", "none", "important");
+      });
+    }
+    paintModeButtons("versus");
 
     const dur = el("input");
     dur.type = "number";
@@ -665,7 +707,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 
     const finishOngoingWrap = el(
       "div",
-      "form-check form-check-inline mp-finish-ongoing-wrap"
+      "form-check form-check-inline mp-finish-ongoing-wrap mp-versus-only"
     );
     finishOngoingWrap.id = "mp-finish-ongoing-wrap";
     const finishOngoingCb = el("input", "form-check-input");
@@ -824,9 +866,15 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       }
     };
     versusBtn.onclick = function () {
+      paintModeButtons("versus");
+      finishOngoingWrap.classList.remove("hidden");
+      finishOngoingWrap.style.display = "";
       self.app.client && self.app.client.setMode("versus");
     };
     coopBtn.onclick = function () {
+      paintModeButtons("coop");
+      finishOngoingWrap.classList.add("hidden");
+      finishOngoingWrap.style.display = "none";
       self.app.client && self.app.client.setMode("coop");
     };
     dur.onchange = function () {
@@ -921,6 +969,13 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       if (self.app.client.roster) self.renderRoster(self.app.client.roster);
       self.app.client.setReady(next);
       if (self.app.applyControlLocks) self.app.applyControlLocks();
+      if (
+        !next &&
+        self.app.ensureLobbyMatchMenusInteractive
+      ) {
+        self.app._lobbyMenuPulseAt = 0;
+        self.app.ensureLobbyMatchMenusInteractive();
+      }
     };
 
     // Stable delegation — survives roster DOM rebuilds mid-click (SCORE_PULSE etc.)
@@ -1136,18 +1191,20 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         mosaicBtn.textContent =
           self.app.versus.spectateMode === "mosaic" ? "Focus view" : "Mosaic";
       }
-      // Versus attempt length is versus-only; hide in co-op
-      durField.classList.toggle("hidden", !!isCoop);
-      durField.style.display = isCoop ? "none" : "";
+      // Versus attempt length / goal / finish-ongoing are versus-only
+      paintModeButtons(rosterData.mode || "versus");
+      const showVersusOpts = !!isVersus;
+      durField.classList.toggle("hidden", !showVersusOpts);
+      durField.style.display = showVersusOpts ? "" : "none";
       const goalFieldEl = document.getElementById("mp-versus-goal-field");
       if (goalFieldEl) {
-        goalFieldEl.classList.toggle("hidden", !!isCoop);
-        goalFieldEl.style.display = isCoop ? "none" : "";
+        goalFieldEl.classList.toggle("hidden", !showVersusOpts);
+        goalFieldEl.style.display = showVersusOpts ? "" : "none";
       }
-      finishOngoingWrap.classList.toggle("hidden", !!isCoop);
-      finishOngoingWrap.style.display = isCoop ? "none" : "";
+      finishOngoingWrap.classList.toggle("hidden", !showVersusOpts);
+      finishOngoingWrap.style.display = showVersusOpts ? "" : "none";
       if (
-        !isCoop &&
+        showVersusOpts &&
         rosterData.finishOngoingRuns != null &&
         document.activeElement !== finishOngoingCb
       ) {

@@ -1612,7 +1612,7 @@ describe("MultiplayerRuntime bridge", () => {
   });
 });
 
-describe("coop phantom walls", () => {
+describe("coop body collision", () => {
   function loadNative() {
     global.window = global;
     const modPath = require.resolve(path.join(root, "src/coop/native.js"));
@@ -1645,12 +1645,9 @@ describe("coop phantom walls", () => {
       oa: { ka: [{ x: 0, y: 0 }], direction: null },
       Tb: function () {},
     };
-    // Pre-seed a legacy phantom stamp that must be cleared
-    game.Ca.wa[0][1] = 1;
     global.__mpCoopOnTick(game);
-    assert.equal(game.Ca.wa[0][1], 0, "no phantom stamp on remote body");
-    assert.equal(game.Ca.wa[0][2], 0, "no phantom stamp on remote body");
-    assert.equal(game.Ca.wa[0][0], 0);
+    assert.equal(game.Ca.wa[0][1], 0, "no stamp on remote body");
+    assert.equal(game.Ca.wa[0][2], 0, "no stamp on remote body");
   });
 
   it("kills local snake when stepping onto a remote body", () => {
@@ -1687,7 +1684,7 @@ describe("coop phantom walls", () => {
     assert.equal(global.__mpCoopLocalDead, true);
   });
 
-  it("yin yang does not stamp remote snakes as walls", () => {
+  it("yin yang skips friendly body collision", () => {
     loadNative();
     const { CoopNative } = require(path.join(root, "src/coop/native.js"));
     const cn = new CoopNative();
@@ -1707,17 +1704,26 @@ describe("coop phantom walls", () => {
     };
     global.__mpCoopSession = true;
     global.__mpCoopInject = true;
+    global.__mpCoopLocalDead = false;
+    let died = false;
     const game = {
       Ca: { wa: [[0, 0, 0]] },
-      oa: { ka: [{ x: 0, y: 0 }] },
+      oa: {
+        ka: [{ x: 0, y: 0 }],
+        direction: "RIGHT",
+      },
+      die: function () {
+        died = true;
+      },
       Tb: function () {},
     };
     global.__mpCoopOnTick(game);
+    assert.equal(died, false, "yin yang: no friendly kill");
     assert.equal(game.Ca.wa[0][1], 0);
     delete global.ModeRegistry;
   });
 
-  it("a peaceful badge on the other snake skips wall stamps", () => {
+  it("peaceful skips friendly body collision", () => {
     loadNative();
     const { CoopNative } = require(path.join(root, "src/coop/native.js"));
     const cn = new CoopNative();
@@ -1732,13 +1738,21 @@ describe("coop phantom walls", () => {
     });
     global.__mpCoopSession = true;
     global.__mpCoopInject = true;
+    global.__mpCoopLocalDead = false;
+    let died = false;
     const game = {
       Ca: { wa: [[0, 0, 0]] },
-      oa: { ka: [{ x: 0, y: 0 }] },
+      oa: {
+        ka: [{ x: 0, y: 0 }],
+        direction: "RIGHT",
+      },
+      die: function () {
+        died = true;
+      },
       Tb: function () {},
     };
     global.__mpCoopOnTick(game);
-    assert.equal(game.Ca.wa[0][1], 0);
+    assert.equal(died, false);
   });
 
   it("findFreeSpawnCell skips solid wall cells", () => {

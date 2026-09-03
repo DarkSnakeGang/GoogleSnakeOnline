@@ -150,12 +150,12 @@
     }
     const isAdmin = this.client.isAdmin();
     const me = this.client.me && this.client.me();
+    const roster = this.client.roster || {};
     // Match menus lock only while this seat is Ready — unlock on Unready / death.
     const readyLocked = !!(me && me.role === "player" && me.ready);
     if (typeof window !== "undefined") {
       // Focus inject must not overwrite admin trophy/count/speed/size
       window.__mpSpectateSkipMatchMenus = !!isAdmin;
-      const roster = this.client.roster || {};
       window.__mpAttemptExpired = !!(
         roster.attemptExpired ||
         roster.allowNewRuns === false ||
@@ -200,6 +200,11 @@
     if (expired || !sessionOn) {
       if (Gsm.showDeathScreen) {
         Gsm.showDeathScreen({ skipEscapeDispatch: true });
+      }
+      // Admin (or any player) needs a real engine quit so match rows click
+      if (this.ensureLobbyMatchMenusInteractive) {
+        this._lobbyMenuPulseAt = 0;
+        this.ensureLobbyMatchMenusInteractive({ force: true });
       }
     }
     this.applyControlLocks();
@@ -1281,6 +1286,11 @@
     if (this.client.setReady) this.client.setReady(next);
     this._paintShuffleAsReady();
     this.applyControlLocks();
+    // Unready in lobby: quit the engine so trophy/count/speed/size accept clicks
+    if (!next && this.ensureLobbyMatchMenusInteractive) {
+      this._lobbyMenuPulseAt = 0;
+      this.ensureLobbyMatchMenusInteractive();
+    }
     // If anything still nudged the color row, put it back
     const colorAfter =
       Gsm.readSettingIndex && Gsm.readSettingIndex("color");
@@ -1654,7 +1664,6 @@
     this._coopSpawnPose = pose;
     if (Gsm.applyCoopSpawnOffset) {
       const ok = Gsm.applyCoopSpawnOffset(oy, { slot: slot, pose: pose });
-      // Wall-aware seating may slide the pose — keep the published seat in sync
       if (
         typeof window !== "undefined" &&
         window.__mpLastCoopSpawnPose
@@ -1810,12 +1819,8 @@
         }
       }
       const preferred = this._coopSpawnPoseFor(i, slot.oy, w, h);
-      const pose =
-        Gsm.findClearCoopSpawnPose && g
-          ? Gsm.findClearCoopSpawnPose(preferred, w, h, g)
-          : preferred;
       const body = Gsm.coopSpawnBodyFromPose
-        ? Gsm.coopSpawnBodyFromPose(pose)
+        ? Gsm.coopSpawnBodyFromPose(preferred)
         : this._coopSpawnBody(slot.oy, w, h, i);
       this.coopNative.applySnakeDelta({
         clientId: slot.clientId,
@@ -2620,6 +2625,16 @@
           return;
         }
 
+        // Admin in lobby / between matches: do NOT abort — Escape must open
+        // native menus so trophy/count/speed/size work while Unready.
+        const roster = self.client.roster || {};
+        if (!roster.sessionActive) {
+          if (self.ensureLobbyMatchMenusInteractive) {
+            self.ensureLobbyMatchMenusInteractive({ force: true });
+          }
+          return;
+        }
+
         ev.preventDefault();
         ev.stopImmediatePropagation();
         self.abortMatchAsAdmin("escape");
@@ -2657,6 +2672,41 @@
   };
 
   /**
+   * Lobby / between matches: hand the engine a quit so trophy/count/speed/size
+   * accept clicks. Visible death chrome alone is not enough — Remix ignores
+   * those rows until Escape-style quit runs.
+   */
+  MultiplayerApp.prototype.ensureLobbyMatchMenusInteractive = function (opts) {
+    opts = opts || {};
+    if (!Gsm.showDeathScreen) return;
+    const c = this.client;
+    if (!c || !c.connected) return;
+    const me = c.me && c.me();
+    if (!me || me.role !== "player") return;
+    if (c.roster && c.roster.sessionActive) return;
+    // Ready seats stay locked on purpose (unless forced, e.g. post-match)
+    if (me.ready && !opts.force) return;
+    if (root.__mpEscHandling) return;
+    if (
+      !opts.force &&
+      this._lobbyMenuPulseAt &&
+      Date.now() - this._lobbyMenuPulseAt < 400
+    ) {
+      return;
+    }
+    this._lobbyMenuPulseAt = Date.now();
+    if (Gsm.clearDeathOverlayOverrides) Gsm.clearDeathOverlayOverrides();
+    if (Gsm.restoreDeathScreen) Gsm.restoreDeathScreen();
+    // Full Escape dispatch so Remix opens its own menu path
+    Gsm.showDeathScreen({});
+    if (Gsm.setNativeMenusLocked) {
+      Gsm.setNativeMenusLocked(!!me.ready);
+    }
+    if (Gsm.setPlayButtonLocked) Gsm.setPlayButtonLocked(true);
+    if (Gsm.unlockPersonalMenus) Gsm.unlockPersonalMenus();
+  };
+
+  /**
    * Match over: hand the engine back to Google's own menu so the admin can set
    * the next one up. Forcing the endscreen visible is only chrome — until the
    * engine gets the quit signal Remix's reset uses, its menu never opens and
@@ -2685,7 +2735,11 @@
       // A new match may have started in the meantime
       if (!needsRelease()) return;
       if (root.__mpEscHandling) return;
-      Gsm.showDeathScreen({});
+      if (self.ensureLobbyMatchMenusInteractive) {
+        self.ensureLobbyMatchMenusInteractive({ force: true });
+      } else {
+        Gsm.showDeathScreen({});
+      }
     }, 0);
   };
 
