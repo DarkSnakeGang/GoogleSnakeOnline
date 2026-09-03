@@ -102,6 +102,37 @@ describe("GSM hook harness", () => {
     assert.ok(selects.some((s) => s.id === "speed" && s.index === 0));
   });
 
+  it("trophy apply updates CurrentModeNum for Remix mode predicates", () => {
+    // Remix only assigns CurrentModeNum from its native `case "trophy":` handler,
+    // which puddingMenuSelect bypasses. Stale value = Burger reads as inactive at
+    // apple reset, so native Poison half-poisons the board on the first run.
+    win.CurrentModeNum = 0;
+    Gsm.applySettings({ trophy: 2 });
+    assert.equal(win.CurrentModeNum, 2, "mode number follows the trophy row");
+
+    // Non-trophy applies must not touch it
+    Gsm.applySettings({ speed: 0 });
+    assert.equal(win.CurrentModeNum, 2);
+  });
+
+  it("prepareNativePlay reconciles CurrentModeNum from the live trophy row", () => {
+    // Settings restored from storage (or already matching a SETTINGS_SYNC) never
+    // pass through selectMenu, so Start match must reconcile before Play.
+    win.CurrentModeNum = 0;
+    selects = [];
+    Gsm.applySettings({ trophy: 1 }); // already selected in the DOM → no select
+    assert.equal(selects.length, 0, "no menu write when the row already matches");
+    Gsm.prepareNativePlay();
+    assert.equal(win.CurrentModeNum, 1);
+  });
+
+  it("CurrentModeNum is not invented when Remix is absent", () => {
+    delete win.CurrentModeNum;
+    Gsm.applySettings({ trophy: 2 });
+    Gsm.prepareNativePlay();
+    assert.equal(typeof win.CurrentModeNum, "undefined");
+  });
+
   it("scrapes board from __remixGame Chess-shaped fields", () => {
     const board = Gsm.scrapeBoard();
     assert.ok(board);
@@ -111,6 +142,81 @@ describe("GSM hook harness", () => {
     assert.equal(board.score, 7);
     assert.equal(board.alive, true);
     assert.equal(board.width, 17);
+  });
+
+  it("scrapes cat lives + grace only for cat mode", () => {
+    win.cat_lives = 3;
+    win.CAT_MAX_LIVES = 9;
+    win.cat_peaceful_ticks = 4;
+
+    win.timeKeeper.mode = "classic";
+    const plain = Gsm.scrapeBoard();
+    assert.equal(plain.catLives, undefined, "no cat fields off cat mode");
+
+    win.timeKeeper.mode = "cat";
+    const board = Gsm.scrapeBoard();
+    assert.equal(board.catLives, 3);
+    assert.equal(board.catLivesMax, 9);
+    assert.equal(board.catGrace, 4);
+
+    // Grace is only carried while it is counting down
+    win.cat_peaceful_ticks = 0;
+    win.cat_lives = 0;
+    const spent = Gsm.scrapeBoard();
+    assert.equal(spent.catLives, 0);
+    assert.equal(spent.catGrace, undefined);
+
+    // Blended keys keep cat detection
+    win.timeKeeper.mode = "burger+cat";
+    win.cat_lives = 2;
+    assert.equal(Gsm.scrapeBoard().catLives, 2);
+  });
+
+  it("scrapes slot badges only for ordinary fruit", () => {
+    win.__remixGame.wa.ka = [
+      { pos: { x: 1, y: 1 }, type: 0, slotMode: 26 },
+      { pos: { x: 2, y: 2 }, type: 0, slotMode: 0 }, // mode 0 is a real badge
+      { pos: { x: 3, y: 3 }, type: 0 },
+      { pos: { x: 4, y: 4 }, type: 0, slotMode: 5, Oka: true }, // poison hazard
+      { pos: { x: 5, y: 5 }, type: 9, slotMode: 5, isPiece: true }, // chess piece
+    ];
+    const apples = Gsm.scrapeBoard().apples;
+    assert.equal(apples[0].slotMode, 26);
+    assert.equal(apples[1].slotMode, 0, "mode 0 must survive the null check");
+    assert.equal(apples[2].slotMode, undefined);
+    assert.equal(apples[3].slotMode, undefined, "poison carries no badge");
+    assert.equal(apples[4].slotMode, undefined, "chess pieces carry no badge");
+  });
+
+  it("scrapes bomb fruit zones from the cell zone list", () => {
+    win.BOMB_FRUIT_ARM_TICKS = 4;
+    // Native keeps zones per cell, so an eaten fruit leaves its zone behind
+    win.__bombFruitZones = [
+      { x: 3, y: 4, bombX1a: -1 },
+      { x: 8, y: 9, bombX1a: 2 },
+    ];
+
+    win.timeKeeper.mode = "classic";
+    assert.equal(Gsm.scrapeBoard().bombZones, undefined, "no zones off bomb mode");
+
+    win.timeKeeper.mode = "bomb_fruit";
+    const board = Gsm.scrapeBoard();
+    assert.deepEqual(board.bombZones, [
+      { x: 3, y: 4, arm: -1 },
+      { x: 8, y: 9, arm: 2 },
+    ]);
+    assert.equal(board.bombArmTicks, 4);
+
+    // Prefer the accessor when Remix exposes it
+    win.bombFruit_zones = function () {
+      return [{ x: 1, y: 1, bombX1a: 0 }];
+    };
+    assert.deepEqual(Gsm.scrapeBoard().bombZones, [{ x: 1, y: 1, arm: 0 }]);
+    delete win.bombFruit_zones;
+
+    // Missing zone state must not throw or emit an empty field
+    win.__bombFruitZones = [];
+    assert.equal(Gsm.scrapeBoard().bombZones, undefined);
   });
 
   it("scrapeBoard includes themeColors and colorId", () => {
@@ -504,7 +610,7 @@ describe("GSM hook harness", () => {
     Gsm.applySpectateState(null, win.__mpVersusFocusBoard);
     assert.equal(win.__remixGame.nj, true, "remote death must mark dead");
     win.__remixGame.die();
-    assert.equal(realDie, 1, "real remote death may call through");
+    assert.equal(realDie, 0, "Focus must never call native die (endscreen)");
   });
 
   it("Focus revive clears stuck death when remote alive after false", () => {
@@ -1523,6 +1629,7 @@ describe("mosaic / focus versus state", () => {
       [
         "shared/colors.js",
         "shared/protocol.js",
+        "runtime/bridge.js",
         "session/ready.js",
         "versus/scoreboard.js",
         "coop/state.js",
@@ -1530,6 +1637,8 @@ describe("mosaic / focus versus state", () => {
         "hooks/gsm.js",
         "net/client.js",
         "ui/settingsTab.js",
+        "versus/focus.js",
+        "versus/mosaic.js",
         "mod.js",
       ].forEach(function (rel) {
         const p = require.resolve(path.join(ROOT, "src", rel));
@@ -1574,9 +1683,241 @@ describe("mosaic / focus versus state", () => {
     assert.equal(v.focusClientId, "p2");
     assert.equal(v.spectateMode, "focus");
   });
+
+  it("renderMosaic labels show run timer, best, and lead star", () => {
+    const { window: win } = makeDom();
+    win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
+    const MultiplayerApp = (function loadAppLocal() {
+      global.window = win;
+      global.document = win.document;
+      [
+        "shared/colors.js",
+        "shared/protocol.js",
+        "runtime/bridge.js",
+        "session/ready.js",
+        "versus/scoreboard.js",
+        "coop/state.js",
+        "coop/native.js",
+        "hooks/gsm.js",
+        "net/client.js",
+        "ui/settingsTab.js",
+        "versus/focus.js",
+        "versus/mosaic.js",
+        "mod.js",
+      ].forEach(function (rel) {
+        const p = require.resolve(path.join(ROOT, "src", rel));
+        delete require.cache[p];
+        require(path.join(ROOT, "src", rel));
+      });
+      return win.MultiplayerApp || require(path.join(ROOT, "src/mod.js")).MultiplayerApp;
+    })();
+    const VersusState = win.VersusState;
+    const app = new MultiplayerApp();
+    app.versus.setSpectateMode("mosaic");
+    app.versus.versusGoal = "score";
+    app.versus.leaderClientId = "p1";
+    const started = Date.now() - 12300;
+    app.versus.scores = {
+      p1: { score: 3, timeMs: 99999, alive: true, bestScore: 15, bestTimeMs: 40000 },
+      p2: { score: 1, timeMs: 5000, alive: false, bestScore: 8, bestTimeMs: 20000 },
+    };
+    app.versus.runClocks = {
+      p1: { startedAtMs: started, frozenMs: null },
+      p2: { startedAtMs: started - 100000, frozenMs: 5000 },
+    };
+    app.versus.boards = {
+      p1: { width: 17, height: 15, body: [], apples: [], timeMs: 10000 },
+      p2: { width: 17, height: 15, body: [], apples: [], timeMs: 5000 },
+    };
+    app.client = {
+      me: function () {
+        return { role: "spectator", clientId: "spec" };
+      },
+      roster: {
+        mode: "versus",
+        sessionActive: true,
+        versusGoal: "score",
+        clients: [
+          { clientId: "p1", role: "player", displayName: "Blue" },
+          { clientId: "p2", role: "player", displayName: "Red" },
+          { clientId: "spec", role: "spectator" },
+        ],
+      },
+    };
+    app._leaveVersusFocusSpectate = function () {};
+    app._colorForClient = function () {
+      return { primary: "#00f", secondary: "#00a" };
+    };
+    const Gsm = win.MultiplayerGsm;
+    const prevDraw = Gsm.drawBoardOnCanvas;
+    Gsm.drawBoardOnCanvas = function () {};
+    try {
+      app.renderMosaic();
+      const label1 = app._mosaicCells.p1.querySelector(".mp-mosaic-label");
+      const label2 = app._mosaicCells.p2.querySelector(".mp-mosaic-label");
+      assert.ok(label1);
+      // Live clock from startedAtMs (~12.3s), not score.timeMs 99999
+      assert.match(label1.textContent, /^★ Blue · 12\.[0-9]s · best 15$/);
+      assert.ok(app._mosaicCells.p1.classList.contains("mp-mosaic-lead"));
+      assert.match(label2.textContent, /^Red · 5\.0s · best 8$/);
+      assert.equal(app._mosaicCells.p2.classList.contains("mp-mosaic-lead"), false);
+      // Apple-style timeMs pulse must not jump the mosaic clock
+      app.versus.onScorePulse({
+        clientId: "p1",
+        score: 4,
+        timeMs: 45600,
+        alive: true,
+        bestScore: 15,
+        runStartedAtMs: started,
+      });
+      app.versus.leaderClientId = "p2";
+      app.renderMosaic({ labelsOnly: true });
+      assert.match(label1.textContent, /^Blue · 12\.[0-9]s · best 15$/);
+      assert.match(label2.textContent, /^★ Red · 5\.0s · best 8$/);
+      assert.equal(VersusState.formatRunClock(12300), "12.3s");
+      assert.equal(
+        VersusState.resolveRunClockMs({ startedAtMs: 1000, frozenMs: null }, 3500),
+        2500
+      );
+      assert.equal(
+        VersusState.resolveRunClockMs({ startedAtMs: 1000, frozenMs: 900 }, 9999),
+        900
+      );
+    } finally {
+      Gsm.drawBoardOnCanvas = prevDraw;
+      if (app._stopMosaicLabelTick) app._stopMosaicLabelTick();
+      if (app._mosaicEl && app._mosaicEl.remove) app._mosaicEl.remove();
+    }
+  });
+
+  it("renderMosaic shows cat lives pips and grace", () => {
+    const { window: win } = makeDom();
+    win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
+    const MultiplayerApp = (function loadAppLocal() {
+      global.window = win;
+      global.document = win.document;
+      [
+        "shared/colors.js",
+        "shared/protocol.js",
+        "runtime/bridge.js",
+        "session/ready.js",
+        "versus/scoreboard.js",
+        "coop/state.js",
+        "coop/native.js",
+        "hooks/gsm.js",
+        "net/client.js",
+        "ui/settingsTab.js",
+        "versus/focus.js",
+        "versus/mosaic.js",
+        "mod.js",
+      ].forEach(function (rel) {
+        const p = require.resolve(path.join(ROOT, "src", rel));
+        delete require.cache[p];
+        require(path.join(ROOT, "src", rel));
+      });
+      return win.MultiplayerApp || require(path.join(ROOT, "src/mod.js")).MultiplayerApp;
+    })();
+    const app = new MultiplayerApp();
+    app.versus.setSpectateMode("mosaic");
+    app.versus.scores = {};
+    app.versus.runClocks = {};
+    app.versus.boards = {
+      // Cat player: 3 of 9 lives left, grace ticking
+      p1: {
+        width: 17, height: 15, body: [], apples: [],
+        catLives: 3, catLivesMax: 9, catGrace: 4,
+      },
+      // Non-cat player: no lives strip at all
+      p2: { width: 17, height: 15, body: [], apples: [] },
+    };
+    app.client = {
+      me: function () {
+        return { role: "spectator", clientId: "spec" };
+      },
+      roster: {
+        mode: "versus",
+        sessionActive: true,
+        clients: [
+          { clientId: "p1", role: "player", displayName: "Blue" },
+          { clientId: "p2", role: "player", displayName: "Red" },
+          { clientId: "spec", role: "spectator" },
+        ],
+      },
+    };
+    app._leaveVersusFocusSpectate = function () {};
+    app._colorForClient = function () {
+      return { primary: "#00f", secondary: "#00a" };
+    };
+    const Gsm = win.MultiplayerGsm;
+    const prevDraw = Gsm.drawBoardOnCanvas;
+    const prevActive = Gsm.snakeMotionActive;
+    Gsm.drawBoardOnCanvas = function () {};
+    try {
+      app.renderMosaic();
+      const cat1 = app._mosaicCells.p1.querySelector(".mp-mosaic-cat");
+      const cat2 = app._mosaicCells.p2.querySelector(".mp-mosaic-cat");
+      assert.ok(cat1);
+      assert.equal(cat1.style.display, "flex");
+      assert.equal(
+        cat1.querySelectorAll(".mp-mosaic-cat-pip").length,
+        9,
+        "one pip per max life"
+      );
+      assert.equal(
+        cat1.querySelectorAll(".mp-mosaic-cat-pip.on").length,
+        3,
+        "lit pips match remaining lives"
+      );
+      assert.equal(cat1.querySelector(".mp-mosaic-cat-n").textContent, "3");
+      assert.equal(cat1.querySelector(".mp-mosaic-cat-grace").textContent, "4");
+      assert.match(cat1.title, /Cat lives 3\/9 · grace 4/);
+
+      // No cat data → strip stays hidden and empty
+      assert.equal(cat2.style.display, "none");
+      assert.equal(cat2.querySelectorAll(".mp-mosaic-cat-pip").length, 0);
+
+      // Spending a life repaints; grace ending drops the countdown
+      app.versus.boards.p1 = {
+        width: 17, height: 15, body: [], apples: [],
+        catLives: 2, catLivesMax: 9,
+      };
+      app.renderMosaic({ labelsOnly: true });
+      assert.equal(cat1.querySelectorAll(".mp-mosaic-cat-pip.on").length, 2);
+      assert.equal(cat1.querySelector(".mp-mosaic-cat-n").textContent, "2");
+      assert.equal(cat1.querySelector(".mp-mosaic-cat-grace"), null);
+
+      // Cat mode ending hides the strip again
+      delete app.versus.boards.p1.catLives;
+      app.renderMosaic({ labelsOnly: true });
+      assert.equal(cat1.style.display, "none");
+
+      // Between deltas, only the cells whose snake is mid-step get repainted,
+      // and no label or DOM work runs with them.
+      const painted = [];
+      Gsm.drawBoardOnCanvas = function (canvas, board, colorInfo, theme, key) {
+        painted.push(key);
+      };
+      Gsm.snakeMotionActive = function (canvas) {
+        return canvas === app._mosaicCells.p1.querySelector("canvas");
+      };
+      app._animateMosaicBoards();
+      assert.deepEqual(painted, ["p1"]);
+      Gsm.snakeMotionActive = function () {
+        return false;
+      };
+      app._animateMosaicBoards();
+      assert.deepEqual(painted, ["p1"], "settled boards are left alone");
+    } finally {
+      Gsm.drawBoardOnCanvas = prevDraw;
+      Gsm.snakeMotionActive = prevActive;
+      if (app._stopMosaicLabelTick) app._stopMosaicLabelTick();
+      if (app._stopMosaicAnim) app._stopMosaicAnim();
+      if (app._mosaicEl && app._mosaicEl.remove) app._mosaicEl.remove();
+    }
+  });
 });
 
-describe("versus Focus spectate (console / native inject)", () => {
+describe("versus Focus spectate (mosaic view)", () => {
   function loadApp(win) {
     global.window = win;
     global.document = win.document;
@@ -1595,6 +1936,7 @@ describe("versus Focus spectate (console / native inject)", () => {
     [
       "shared/colors.js",
       "shared/protocol.js",
+      "runtime/bridge.js",
       "session/ready.js",
       "versus/scoreboard.js",
       "coop/state.js",
@@ -1602,6 +1944,8 @@ describe("versus Focus spectate (console / native inject)", () => {
       "hooks/gsm.js",
       "net/client.js",
       "ui/settingsTab.js",
+      "versus/focus.js",
+      "versus/mosaic.js",
       "mod.js",
     ].forEach(function (rel) {
       const p = require.resolve(path.join(ROOT, "src", rel));
@@ -1611,532 +1955,8 @@ describe("versus Focus spectate (console / native inject)", () => {
     return win.MultiplayerApp || require(path.join(ROOT, "src/mod.js")).MultiplayerApp;
   }
 
-  /** Mimic L3E / PlayerRenderer clone usage that crashes spectators in console. */
-  function simulateNativeRender(game) {
-    const errors = [];
-    try {
-      (game.oa.ka || []).forEach(function (seg) {
-        if (!seg || typeof seg.clone !== "function") {
-          throw new TypeError("seg.clone is not a function");
-        }
-        seg.clone(); // PlayerRenderer clones each segment once
-      });
-      (game.wa.ka || []).forEach(function (b) {
-        if (!b || !b.pos || typeof b.pos.clone !== "function") {
-          throw new TypeError("b.pos.clone is not a function");
-        }
-        const c = b.pos.clone(); // L3E.render: c.push(e.pos.clone())
-        if (c == null || c.x == null || c.y == null) {
-          throw new Error("pos.clone returned invalid point");
-        }
-      });
-    } catch (e) {
-      errors.push(e);
-    }
-    return errors;
-  }
-
-  it("Focus tick inject keeps cloneable body + apple.pos (no console TypeError)", () => {
-    const win = makeDom();
-    const MultiplayerApp = loadApp(win);
-    const Gsm = win.MultiplayerGsm;
-    const consoleErrors = [];
-    const origErr = console.error;
-    const origWarn = console.warn;
-    console.error = function () {
-      consoleErrors.push(Array.prototype.slice.call(arguments).join(" "));
-    };
-    console.warn = function () {
-      consoleErrors.push(Array.prototype.slice.call(arguments).join(" "));
-    };
-    try {
-      win.__remixGame = {
-        oa: { ka: [], direction: null },
-        wa: { ka: [] },
-        settings: {},
-      };
-      win.__mpGame = win.__remixGame;
-      const app = new MultiplayerApp();
-      app.client = {
-        connected: true,
-        clientId: "spec",
-        isAdmin: function () {
-          return false;
-        },
-        me: function () {
-          return { clientId: "spec", role: "spectator" };
-        },
-        roster: {
-          mode: "versus",
-          sessionActive: true,
-          clients: [
-            { clientId: "admin", role: "player", colorId: 0 },
-            { clientId: "spec", role: "spectator" },
-          ],
-        },
-        spectateFocus: function () {},
-      };
-      app.versus.spectateMode = "focus";
-      app.versus.focusClientId = "admin";
-      app.versus.onBoardDelta({
-        clientId: "admin",
-        board: {
-          score: 2,
-          body: [
-            { x: 5, y: 5 },
-            { x: 4, y: 5 },
-            { x: 3, y: 5 },
-          ],
-          apples: [
-            { x: 10, y: 8 },
-            { x: 11, y: 9 },
-          ],
-          dir: "RIGHT",
-          colorId: 0,
-          sizeIndex: 0,
-          countIndex: 1,
-        },
-      });
-      app._installVersusFocusTick();
-      win.__mpVersusFocusSpectate = true;
-      win.__mpVersusFocusBoard = app.versus.boards.admin;
-
-      assert.equal(app._paintVersusFocus(app.versus.boards.admin), true);
-      let errs = simulateNativeRender(win.__remixGame);
-      assert.equal(errs.length, 0, errs[0] && errs[0].message);
-      assert.equal(win.__remixGame.oa.ka[0].x, 5);
-
-      // Menu sync once — second paint must not re-select menus (log spam)
-      let menuCalls = 0;
-      win.puddingMenuSelect = function () {
-        menuCalls++;
-        return true;
-      };
-      win.__mpSpectateMenuFp = null;
-      app._paintVersusFocus(app.versus.boards.admin);
-      const firstMenus = menuCalls;
-      app._paintVersusFocus(app.versus.boards.admin);
-      assert.equal(menuCalls, firstMenus, "menus must not re-sync every frame");
-
-      const firstBoardRef = win.__mpVersusFocusBoard;
-      app.versus.onBoardDelta({
-        clientId: "admin",
-        board: {
-          score: 4,
-          body: [
-            { x: 6, y: 5 },
-            { x: 5, y: 5 },
-            { x: 4, y: 5 },
-            { x: 3, y: 5 },
-          ],
-          apples: [
-            { x: 1, y: 1 },
-            { x: 2, y: 2 },
-            { x: 3, y: 3 },
-            { x: 4, y: 4 },
-            { x: 5, y: 1 },
-          ],
-          dir: "RIGHT",
-          sizeIndex: 0,
-          countIndex: 1,
-        },
-      });
-      assert.notEqual(app.versus.boards.admin, firstBoardRef);
-      win.__mpVersusFocusBoard = firstBoardRef;
-      win.__mpFocusSeated = true;
-      win.__mpVersusFocusOnTick();
-      errs = simulateNativeRender(win.__remixGame);
-      assert.equal(errs.length, 0, errs[0] && errs[0].message);
-      assert.equal(win.__remixGame.wa.ka.length, 5);
-      assert.equal(win.__remixGame.oa.ka[0].x, 6);
-
-      const cloneNoise = consoleErrors.filter(function (m) {
-        return /clone is not a function/i.test(m);
-      });
-      assert.deepEqual(cloneNoise, []);
-    } finally {
-      console.error = origErr;
-      console.warn = origWarn;
-    }
-  });
-
-  it("repeated Focus inject after plain-pos corruption recovers without throw", () => {
-    const win = makeDom();
-    loadApp(win);
-    const Gsm = win.MultiplayerGsm;
-    win.__remixGame = {
-      oa: { ka: [{ x: 0, y: 0, clone: function () { return { x: this.x, y: this.y }; } }] },
-      wa: {
-        ka: [
-          { pos: { x: 9, y: 9 }, type: 0 }, // corrupted spectate leftover
-        ],
-      },
-    };
-    win.__mpGame = win.__remixGame;
-    Gsm.applySpectateState(null, {
-      body: [{ x: 2, y: 2 }, { x: 1, y: 2 }],
-      apples: [{ x: 7, y: 7 }, { x: 8, y: 8 }],
-      dir: "LEFT",
-    });
-    const errs = simulateNativeRender(win.__remixGame);
-    assert.equal(errs.length, 0, errs[0] && errs[0].message);
-  });
-
-  it("Focus enter uses startNativeRun (not a single Play click)", async () => {
-    const win = makeDom();
-    const MultiplayerApp = loadApp(win);
-    const Gsm = win.MultiplayerGsm;
-    let nativeStarts = 0;
-    const prev = Gsm.startNativeRun;
-    Gsm.startNativeRun = function (opts) {
-      nativeStarts++;
-      if (opts && opts.onDone) setTimeout(function () {
-        opts.onDone(true);
-      }, 0);
-    };
-    win.__remixGame = {
-      oa: { ka: [{ x: 1, y: 1 }], direction: null },
-      wa: { ka: [] },
-      nj: false,
-    };
-    win.__mpGame = win.__remixGame;
-    try {
-      const app = new MultiplayerApp();
-      app.client = {
-        connected: true,
-        clientId: "spec",
-        me: function () {
-          return { clientId: "spec", role: "spectator" };
-        },
-        spectateFocus: function () {},
-        roster: {
-          mode: "versus",
-          sessionActive: true,
-          clients: [
-            { clientId: "p1", role: "player", colorId: 0 },
-            { clientId: "spec", role: "spectator" },
-          ],
-        },
-      };
-      app.versus.spectateMode = "focus";
-      app.versus.focusClientId = "p1";
-      app.versus.boards.p1 = {
-        body: [
-          { x: 4, y: 4 },
-          { x: 3, y: 4 },
-        ],
-        apples: [{ x: 8, y: 8 }],
-        dir: "RIGHT",
-      };
-      app.startVersusFocusLoop = function () {};
-      app.renderFocusBoard();
-      assert.ok(nativeStarts >= 1, "versus Focus must startNativeRun");
-      assert.equal(win.__mpVersusFocusSpectate, true);
-      app.stopVersusFocusLoop();
-      app._leaveVersusFocusSpectate();
-      await new Promise(function (r) {
-        setTimeout(r, 20);
-      });
-    } finally {
-      Gsm.startNativeRun = prev;
-    }
-  });
-
-  it("Focus enter does not ArrowRight-dismiss tip (wrong start seat)", async () => {
-    const win = makeDom();
-    const MultiplayerApp = loadApp(win);
-    const Gsm = win.MultiplayerGsm;
-    let arrowRight = 0;
-    const prevDispatch = win.document.dispatchEvent.bind(win.document);
-    win.document.dispatchEvent = function (ev) {
-      if (ev && (ev.key === "ArrowRight" || ev.code === "ArrowRight")) {
-        arrowRight++;
-      }
-      return prevDispatch(ev);
-    };
-    const prev = Gsm.startNativeRun;
-    Gsm.startNativeRun = function (opts) {
-      if (opts && opts.onDone) setTimeout(function () {
-        opts.onDone(true);
-      }, 0);
-    };
-    win.__remixGame = {
-      oa: { ka: [{ x: 1, y: 1 }], direction: null },
-      wa: { ka: [] },
-      nj: false,
-    };
-    win.__mpGame = win.__remixGame;
-    try {
-      const app = new MultiplayerApp();
-      app.client = {
-        connected: true,
-        clientId: "spec",
-        me: function () {
-          return { clientId: "spec", role: "spectator" };
-        },
-        spectateFocus: function () {},
-        roster: {
-          mode: "versus",
-          sessionActive: true,
-          clients: [
-            { clientId: "p1", role: "player", colorId: 0 },
-            { clientId: "spec", role: "spectator" },
-          ],
-        },
-      };
-      app.versus.spectateMode = "focus";
-      app.versus.focusClientId = "p1";
-      app.versus.boards.p1 = {
-        alive: true,
-        body: [
-          { x: 4, y: 4 },
-          { x: 3, y: 4 },
-        ],
-        apples: [{ x: 8, y: 8 }],
-        dir: "RIGHT",
-      };
-      app.startVersusFocusLoop = function () {};
-      app.renderFocusBoard();
-      await new Promise(function (r) {
-        setTimeout(r, 40);
-      });
-      assert.equal(arrowRight, 0, "ArrowRight tip dismiss moves local snake");
-      assert.equal(win.__remixGame.oa.ka[0].x, 4);
-      app.stopVersusFocusLoop();
-      app._leaveVersusFocusSpectate();
-    } finally {
-      Gsm.startNativeRun = prev;
-      win.document.dispatchEvent = prevDispatch;
-    }
-  });
-
-  it("Focus revive after remote death re-runs startNativeRun", async () => {
-    const win = makeDom();
-    const MultiplayerApp = loadApp(win);
-    const Gsm = win.MultiplayerGsm;
-    let nativeStarts = 0;
-    Gsm.startNativeRun = function (opts) {
-      nativeStarts++;
-      if (opts && opts.onDone) setTimeout(function () {
-        opts.onDone(true);
-      }, 0);
-    };
-    win.__remixGame = {
-      oa: { ka: [{ x: 1, y: 1 }], direction: "RIGHT" },
-      wa: { ka: [] },
-      nj: false,
-      die: function () {
-        this.nj = true;
-      },
-    };
-    win.__mpGame = win.__remixGame;
-    const app = new MultiplayerApp();
-    app.client = {
-      connected: true,
-      clientId: "spec",
-      me: function () {
-        return { clientId: "spec", role: "spectator" };
-      },
-      spectateFocus: function () {},
-      roster: {
-        mode: "versus",
-        sessionActive: true,
-        clients: [
-          { clientId: "p1", role: "player", colorId: 0 },
-          { clientId: "spec", role: "spectator" },
-        ],
-      },
-    };
-    app.versus.spectateMode = "focus";
-    app.versus.focusClientId = "p1";
-    app.versus.boards.p1 = {
-      alive: true,
-      body: [
-        { x: 4, y: 4 },
-        { x: 3, y: 4 },
-      ],
-      dir: "RIGHT",
-    };
-    app.startVersusFocusLoop = function () {};
-    app._versusFocusSpectate = true;
-    win.__mpVersusFocusSpectate = true;
-    win.__mpVersusFocusRemoteAlive = true;
-    app._paintVersusFocus(app.versus.boards.p1);
-    const afterEnter = nativeStarts;
-    app.versus.boards.p1 = {
-      alive: false,
-      body: [{ x: 4, y: 4 }],
-      dir: "RIGHT",
-    };
-    app._paintVersusFocus(app.versus.boards.p1);
-    assert.equal(win.__remixGame.nj, true);
-    // Death must clear first-run seat leftovers (not wait for revive edge only)
-    assert.equal(win.__mpFocusSeated, false);
-    assert.equal(win.__mpFocusForceFullBody, true);
-    assert.equal(win.__mpFocusNativeOk, false);
-    assert.equal(win.__mpFocusRequirePlay, true);
-    // Corrupt local body mid-death so second life must full-seat, not head-only
-    win.__remixGame.oa.ka = [
-      { x: 99, y: 99, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } },
-      { x: 98, y: 99, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } },
-      { x: 97, y: 99, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } },
-    ];
-    win.__mpFocusSeated = true;
-    app.versus.boards.p1 = {
-      alive: true,
-      body: [
-        { x: 6, y: 2 },
-        { x: 5, y: 2 },
-      ],
-      dir: "UP",
-    };
-    app._paintVersusFocus(app.versus.boards.p1);
-    assert.equal(win.__mpFocusForceFullBody, false, "full seat consumes force flag");
-    assert.equal(win.__remixGame.oa.ka.length, 2, "second life must full-seat new body");
-    assert.equal(win.__remixGame.oa.ka[0].x, 6);
-    assert.equal(win.__remixGame.oa.ka[1].x, 5);
-    await new Promise(function (r) {
-      setTimeout(r, 40);
-    });
-    assert.ok(
-      nativeStarts > afterEnter,
-      "player reset must re-seat Focus with startNativeRun"
-    );
-    assert.equal(win.__remixGame.nj, false);
-    app._leaveVersusFocusSpectate();
-  });
-
-  it("Focus second PLAY_SYNC while mounted reseats like first enter", async () => {
-    const win = makeDom();
-    const MultiplayerApp = loadApp(win);
-    const Gsm = win.MultiplayerGsm;
-    const starts = [];
-    Gsm.startNativeRun = function (opts) {
-      starts.push({
-        requirePlayClick: !!(opts && opts.requirePlayClick),
-        deferTimer: !!(opts && opts.deferTimer),
-      });
-      if (opts && opts.onDone) {
-        setTimeout(function () {
-          opts.onDone(true);
-        }, 0);
-      }
-    };
-    win.__remixGame = {
-      oa: {
-        ka: [
-          { x: 1, y: 1, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } },
-          { x: 0, y: 1, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } },
-        ],
-        direction: "RIGHT",
-      },
-      wa: { ka: [] },
-      nj: false,
-    };
-    win.__mpGame = win.__remixGame;
-    const app = new MultiplayerApp();
-    app.client = {
-      connected: true,
-      clientId: "spec",
-      me: function () {
-        return { clientId: "spec", role: "spectator" };
-      },
-      spectateFocus: function () {},
-      roster: {
-        mode: "versus",
-        sessionActive: true,
-        clients: [
-          { clientId: "p1", role: "player", colorId: 0 },
-          { clientId: "spec", role: "spectator" },
-        ],
-      },
-    };
-    app.versus.spectateMode = "focus";
-    app.versus.focusClientId = "p1";
-    app.versus.boards.p1 = {
-      alive: true,
-      body: [
-        { x: 4, y: 4 },
-        { x: 3, y: 4 },
-      ],
-      dir: "RIGHT",
-      apples: [{ x: 8, y: 8 }],
-    };
-    app.startVersusFocusLoop = function () {};
-    app.renderFocusBoard();
-    await new Promise(function (r) {
-      setTimeout(r, 20);
-    });
-    assert.ok(starts.length >= 1, "first Focus enter seats");
-    assert.equal(starts[0].requirePlayClick, true);
-    assert.equal(starts[0].deferTimer, true);
-    const afterFirst = starts.length;
-
-    // Leftovers as if run 1 finished while Focus stayed mounted (no SESSION_END leave)
-    win.__mpFocusSeated = true;
-    win.__mpFocusForceFullBody = false;
-    win.__mpFocusRemoteStarted = true;
-    win.__mpFocusRequirePlay = false;
-    win.__mpFocusNativeOk = true;
-    win.__mpVersusFocusRemoteAlive = true;
-    win.__remixGame.oa.ka = [
-      { x: 99, y: 99, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } },
-      { x: 98, y: 99, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } },
-      { x: 97, y: 99, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } },
-    ];
-    app.versus.boards.p1 = {
-      alive: true,
-      body: [
-        { x: 2, y: 7 },
-        { x: 1, y: 7 },
-      ],
-      dir: "LEFT",
-      apples: [{ x: 5, y: 5 }],
-    };
-
-    // Second Start match while still in Focus — must reseat like first enter
-    assert.equal(app._versusFocusSpectate, true);
-    app._reseatVersusFocusForNewRun("play_sync");
-    await new Promise(function (r) {
-      setTimeout(r, 20);
-    });
-    assert.ok(starts.length > afterFirst, "second run must call startNativeRun again");
-    const last = starts[starts.length - 1];
-    assert.equal(last.requirePlayClick, true);
-    assert.equal(last.deferTimer, true);
-    assert.equal(win.__mpFocusRemoteStarted, false);
-    // onDone may have already painted once — either way next inject must full-seat
-    win.__mpFocusForceFullBody = true;
-    win.__mpFocusSeated = false;
-    app._paintVersusFocus(app.versus.boards.p1);
-    assert.equal(win.__remixGame.oa.ka.length, 2);
-    assert.equal(win.__remixGame.oa.ka[0].x, 2);
-    assert.equal(win.__remixGame.oa.ka[1].x, 1);
-    app._leaveVersusFocusSpectate();
-  });
-
-  it("Focus failed seat keeps requirePlay so retries still click Play", async () => {
-    const win = makeDom();
-    const MultiplayerApp = loadApp(win);
-    const Gsm = win.MultiplayerGsm;
-    let nativeStarts = 0;
-    let requirePlayOpts = [];
-    Gsm.startNativeRun = function (opts) {
-      nativeStarts++;
-      requirePlayOpts.push(!!(opts && opts.requirePlayClick));
-      if (opts && opts.onDone) {
-        setTimeout(function () {
-          // First attempt fails — old bug cleared requirePlay and stalled forever
-          opts.onDone(nativeStarts === 1 ? false : true);
-        }, 0);
-      }
-    };
-    win.__remixGame = {
-      oa: { ka: [{ x: 1, y: 1 }], direction: null },
-      wa: { ka: [] },
-      nj: false,
-    };
-    win.__mpGame = win.__remixGame;
+  /** Spectator watching "admin", session live, Focus (not mosaic) view. */
+  function makeSpectatorApp(win, MultiplayerApp, board) {
     const app = new MultiplayerApp();
     app.client = {
       connected: true,
@@ -2147,241 +1967,374 @@ describe("versus Focus spectate (console / native inject)", () => {
       me: function () {
         return { clientId: "spec", role: "spectator" };
       },
-      spectateFocus: function () {},
       roster: {
         mode: "versus",
         sessionActive: true,
+        versusGoal: "score",
         clients: [
-          { clientId: "p1", role: "player", colorId: 0 },
+          { clientId: "admin", role: "player", colorId: 4, resolvedName: "Ada" },
           { clientId: "spec", role: "spectator" },
         ],
       },
+      spectateFocus: function () {},
+      resync: function () {},
+    };
+    app.applyControlLocks = function () {};
+    app._colorForClient = function () {
+      return { primary: "#4e7cf6", secondary: "#3b5fd0" };
     };
     app.versus.spectateMode = "focus";
-    app.versus.focusClientId = "p1";
-    app.versus.boards.p1 = {
-      alive: true,
-      body: [
-        { x: 4, y: 4 },
-        { x: 3, y: 4 },
-      ],
-      dir: "RIGHT",
-    };
-    app.startVersusFocusLoop = function () {};
-    app.renderFocusBoard();
-    await new Promise(function (r) {
-      setTimeout(r, 20);
-    });
-    assert.equal(win.__mpFocusRequirePlay, true, "failed seat must keep Play gate");
-    assert.equal(win.__mpFocusNativeOk, false);
-    await new Promise(function (r) {
-      setTimeout(r, 300);
-    });
-    assert.ok(nativeStarts >= 2, "must retry native seat after failure");
-    assert.ok(requirePlayOpts.every(Boolean), "every seat attempt requires Play");
-    assert.equal(win.__mpFocusNativeOk, true);
-    assert.equal(win.__mpFocusRequirePlay, false);
-    app._leaveVersusFocusSpectate();
-  });
+    app.versus.focusClientId = "admin";
+    if (board) app.versus.boards.admin = board;
+    return app;
+  }
 
-  it("Focus admin and non-admin both seat via _seatVersusFocusNative", async () => {
-    async function seatAs(isAdmin) {
-      const win = makeDom();
-      const MultiplayerApp = loadApp(win);
-      const Gsm = win.MultiplayerGsm;
-      let optsSeen = null;
-      Gsm.startNativeRun = function (opts) {
-        optsSeen = opts;
-        if (opts && opts.onDone) setTimeout(function () {
-          opts.onDone(true);
-        }, 0);
-      };
-      win.__remixGame = {
-        oa: { ka: [{ x: 0, y: 0 }], direction: null },
-        wa: { ka: [] },
-        nj: false,
-      };
-      win.__mpGame = win.__remixGame;
-      const app = new MultiplayerApp();
-      app.client = {
-        connected: true,
-        clientId: isAdmin ? "admin" : "spec",
-        isAdmin: function () {
-          return isAdmin;
-        },
-        me: function () {
-          return {
-            clientId: isAdmin ? "admin" : "spec",
-            role: "spectator",
-          };
-        },
-        spectateFocus: function () {},
-        roster: {
-          mode: "versus",
-          sessionActive: true,
-          adminId: "admin",
-          clients: [
-            { clientId: "p1", role: "player", colorId: 0 },
-            { clientId: "admin", role: "spectator" },
-            { clientId: "spec", role: "spectator" },
-          ],
-        },
-      };
-      app.versus.spectateMode = "focus";
-      app.versus.focusClientId = "p1";
-      app.versus.boards.p1 = {
+  function liveBoard(extra) {
+    return Object.assign(
+      {
+        width: 17,
+        height: 15,
         alive: true,
+        score: 6,
         body: [
-          { x: 2, y: 2 },
-          { x: 1, y: 2 },
-        ],
-        dir: "RIGHT",
-      };
-      app.startVersusFocusLoop = function () {};
-      app.renderFocusBoard();
-      await new Promise(function (r) {
-        setTimeout(r, 20);
-      });
-      return { win: win, optsSeen: optsSeen, app: app };
-    }
-    const admin = await seatAs(true);
-    const spec = await seatAs(false);
-    assert.equal(!!admin.optsSeen.requirePlayClick, true);
-    assert.equal(!!admin.optsSeen.deferTimer, true);
-    assert.equal(!!spec.optsSeen.requirePlayClick, true);
-    assert.equal(!!spec.optsSeen.deferTimer, true);
-    assert.equal(admin.win.__mpFocusNativeOk, true);
-    assert.equal(spec.win.__mpFocusNativeOk, true);
-    admin.app._leaveVersusFocusSpectate();
-    spec.app._leaveVersusFocusSpectate();
-  });
-
-  it("Focus death gate: false local die ignored; remote death sticks", () => {
-    const win = makeDom();
-    loadApp(win);
-    const Gsm = win.MultiplayerGsm;
-    let realDie = 0;
-    win.__remixGame = {
-      oa: {
-        ka: [
           { x: 3, y: 3 },
           { x: 2, y: 3 },
         ],
-        direction: "RIGHT",
+        apples: [{ x: 9, y: 9 }],
+        dir: "UP",
+        themeColors: { light: "#aad751", dark: "#a2d149", border: "#578a34" },
       },
-      wa: { ka: [] },
-      nj: false,
-      die: function () {
-        realDie++;
-        this.nj = true;
-      },
-    };
-    win.__mpGame = win.__remixGame;
-    win.timeKeeper = { _dead: false, playing: false };
-    win.__mpVersusFocusSpectate = true;
-    win.__mpFocusSeated = false;
-    win.__mpVersusFocusBoard = {
-      alive: true,
-      body: [
-        { x: 3, y: 3 },
-        { x: 2, y: 3 },
-      ],
-      dir: "RIGHT",
-    };
-    Gsm.applySpectateState(null, win.__mpVersusFocusBoard);
-    win.__remixGame.die();
-    assert.equal(realDie, 0);
-    assert.equal(win.__remixGame.nj, false);
-    win.__mpVersusFocusBoard = {
-      alive: false,
-      body: [{ x: 3, y: 3 }],
-      dir: "RIGHT",
-    };
-    Gsm.applySpectateState(null, win.__mpVersusFocusBoard);
-    assert.equal(win.__remixGame.nj, true);
-    win.__remixGame.die();
-    assert.equal(realDie, 1);
-  });
+      extra || {}
+    );
+  }
 
-  it("Focus non-admin uses native inject (no canvas paint fallback)", () => {
-    const win = makeDom();
-    const MultiplayerApp = loadApp(win);
-    const Gsm = win.MultiplayerGsm;
-    let fillCalls = 0;
+  /** What Focus hands the mosaic renderer (the renderer itself is tested in gsm). */
+  function recordPaints(win) {
+    const draws = [];
+    win.MultiplayerGsm.drawBoardOnCanvas = function (canvas, board, colorInfo) {
+      draws.push({ canvas: canvas, board: board, colorInfo: colorInfo });
+    };
+    return draws;
+  }
+
+  function stubGameCanvasBox(win, box) {
     const canvas = win.document.querySelector("canvas.nEoGkc");
-    canvas.getContext = function () {
-      return {
-        fillStyle: "",
-        fillRect: function () {
-          fillCalls++;
-        },
-        beginPath: function () {},
-        arc: function () {},
-        fill: function () {},
-      };
+    canvas.getBoundingClientRect = function () {
+      return box;
     };
-    win.__remixGame = {
-      oa: {
-        ka: [
-          {
-            x: 0,
-            y: 0,
-            clone: function () {
-              return { x: this.x, y: this.y, clone: this.clone };
-            },
-          },
-        ],
-        direction: null,
-      },
-      wa: { ka: [] },
-      nj: false,
-    };
-    win.__mpGame = win.__remixGame;
-    const app = new MultiplayerApp();
-    app.client = {
-      connected: true,
-      clientId: "spec",
-      isAdmin: function () {
-        return false;
-      },
-      me: function () {
-        return { clientId: "spec", role: "spectator" };
-      },
-      roster: {
-        mode: "versus",
-        sessionActive: true,
-        clients: [
-          { clientId: "admin", role: "player", colorId: 4 },
-          { clientId: "spec", role: "spectator" },
-        ],
-      },
-      spectateFocus: function () {},
-    };
-    app.versus.focusClientId = "admin";
-    app.versus.boards.admin = {
-      alive: true,
-      body: [
-        { x: 3, y: 3 },
-        { x: 2, y: 3 },
-      ],
-      apples: [{ x: 9, y: 9 }],
-      dir: "UP",
-      width: 17,
-      height: 15,
-    };
-    win.__mpVersusFocusSpectate = true;
-    // Stale flag from older builds must not force square paint
-    win.__mpVersusFocusPaintFallback = true;
-    Gsm.gameCanvas = function () {
+    win.MultiplayerGsm.gameCanvas = function () {
       return canvas;
     };
-    assert.equal(app._paintVersusFocus(app.versus.boards.admin), true);
-    assert.equal(fillCalls, 0, "non-admin Focus must stay native");
-    assert.equal(win.__remixGame.oa.ka[0].x, 3);
+    return canvas;
+  }
+
+  it("Focus paints the watched board over the game canvas, seating nothing", () => {
+    const win = makeDom();
+    const MultiplayerApp = loadApp(win);
+    const draws = recordPaints(win);
+    stubGameCanvasBox(win, { left: 40, top: 60, width: 612, height: 540 });
+    const death = win.document.createElement("div");
+    death.className = "wjOYOd";
+    death.style.visibility = "visible";
+    win.document.body.appendChild(death);
+    let playClicks = 0;
+    let nativeRuns = 0;
+    win.document
+      .querySelector('[jsname="NSjDf"]')
+      .addEventListener("click", function () {
+        playClicks++;
+      });
+    win.MultiplayerGsm.startNativeRun = function () {
+      nativeRuns++;
+    };
+    win.MultiplayerGsm.triggerPlay = function () {
+      playClicks++;
+    };
+    win.__remixGame = {
+      oa: { ka: [{ x: 1, y: 1 }], direction: "LEFT" },
+      wa: { ka: [] },
+    };
+    win.__mpGame = win.__remixGame;
+    const app = makeSpectatorApp(win, MultiplayerApp, liveBoard());
+    try {
+      app.renderFocusBoard();
+      const view = win.document.getElementById("mp-focus-view");
+      assert.ok(view, "focus view must mount");
+      assert.equal(view.style.display, "block");
+      assert.equal(draws.length, 1);
+      assert.equal(draws[0].canvas.className, "mp-focus-canvas");
+      assert.equal(draws[0].board, app.versus.boards.admin);
+      // Sits exactly on the game canvas, with a border frame around the board
+      assert.equal(view.style.left, "40px");
+      assert.equal(view.style.top, "60px");
+      assert.equal(view.style.width, "612px");
+      assert.equal(view.style.height, "540px");
+      const pad = parseInt(view.style.padding, 10);
+      assert.ok(pad >= 8 && pad <= 40, "one-cell border frame, got " + pad);
+      assert.match(view.style.background, /578a34|87, ?138, ?52/);
+      // The seat loop used to click Play every 45 frames and re-hide the
+      // endscreen every frame, which is what reset it over and over.
+      for (let i = 0; i < 30; i++) app.renderFocusBoard();
+      assert.equal(nativeRuns, 0, "focus must not seat a native run");
+      assert.equal(playClicks, 0, "focus must not click Play");
+      assert.equal(death.style.visibility, "visible", "endscreen untouched");
+      assert.equal(win.__mpVersusFocusWatch, true);
+      assert.equal(win.__mpVersusFocusSpectate, false, "engine inject stays off");
+      assert.deepEqual(win.__remixGame.oa.ka, [{ x: 1, y: 1 }]);
+      assert.equal(win.__remixGame.oa.direction, "LEFT");
+    } finally {
+      app._leaveVersusFocusSpectate();
+    }
+  });
+
+  it("Focus label tracks the watched player, clock, best and death", () => {
+    const win = makeDom();
+    const MultiplayerApp = loadApp(win);
+    recordPaints(win);
+    stubGameCanvasBox(win, { left: 0, top: 0, width: 612, height: 540 });
+    const app = makeSpectatorApp(win, MultiplayerApp, liveBoard());
+    const started = Date.now() - 4200;
+    app.versus.scores = {
+      admin: { score: 6, bestScore: 12, timeMs: 4200, alive: true },
+    };
+    app.versus.runClocks = { admin: { startedAtMs: started, frozenMs: null } };
+    try {
+      app.renderFocusBoard();
+      const label = win.document.querySelector("#mp-focus-view .mp-focus-label");
+      assert.match(label.textContent, /^Ada · 6 · 4\.[0-9]s · best 12$/);
+      assert.equal(label.classList.contains("mp-focus-dead"), false);
+      app.versus.boards.admin = liveBoard({ alive: false, score: 9 });
+      app.versus.runClocks.admin = { startedAtMs: started, frozenMs: 4300 };
+      app.renderFocusBoard();
+      assert.match(label.textContent, /^Ada · 9 · 4\.3s · best 12 · dead$/);
+      assert.ok(label.classList.contains("mp-focus-dead"));
+    } finally {
+      app._leaveVersusFocusSpectate();
+    }
+  });
+
+  it("Escape peek steps the Focus view aside, then it comes back", () => {
+    const win = makeDom();
+    const MultiplayerApp = loadApp(win);
+    recordPaints(win);
+    stubGameCanvasBox(win, { left: 0, top: 0, width: 612, height: 540 });
+    const app = makeSpectatorApp(win, MultiplayerApp, liveBoard());
+    try {
+      app.renderFocusBoard();
+      const view = win.document.getElementById("mp-focus-view");
+      assert.equal(view.style.display, "block");
+      win.__mpSpectateAllowMenus = true;
+      app.renderFocusBoard();
+      assert.equal(view.style.display, "none", "peek must expose the native UI");
+      assert.equal(app._versusFocusSpectate, true, "still watching");
+      win.__mpSpectateAllowMenus = false;
+      app.renderFocusBoard();
+      assert.equal(view.style.display, "block");
+    } finally {
+      app._leaveVersusFocusSpectate();
+    }
+  });
+
+  it("Focus repaints between deltas while the snake is mid-step", () => {
+    const win = makeDom();
+    const MultiplayerApp = loadApp(win);
+    const draws = recordPaints(win);
+    stubGameCanvasBox(win, { left: 0, top: 0, width: 612, height: 540 });
+    const app = makeSpectatorApp(win, MultiplayerApp, liveBoard());
+    let active = true;
+    win.MultiplayerGsm.snakeMotionActive = function () {
+      return active;
+    };
+    try {
+      app.renderFocusBoard();
+      assert.equal(draws.length, 1);
+      assert.ok(app._focusAnimRaf, "animation loop runs while watching");
+      // Each frame repaints the canvas for the player being watched
+      assert.equal(app._animateVersusFocus(), true);
+      assert.equal(draws.length, 2);
+      assert.equal(draws[1].canvas.className, "mp-focus-canvas");
+      // Landed on the cell: nothing left to animate
+      active = false;
+      assert.equal(app._animateVersusFocus(), false);
+      assert.equal(draws.length, 2);
+      // Peeking at the menus: the view is hidden, so do not paint it
+      active = true;
+      win.__mpSpectateAllowMenus = true;
+      assert.equal(app._animateVersusFocus(), false);
+      assert.equal(draws.length, 2);
+      win.__mpSpectateAllowMenus = false;
+    } finally {
+      app._leaveVersusFocusSpectate();
+      assert.ok(!app._focusAnimRaf, "loop stops with the view");
+    }
+  });
+
+  it("mosaic / session end drops the view and hands back the death screen", () => {
+    const win = makeDom();
+    const MultiplayerApp = loadApp(win);
+    recordPaints(win);
+    stubGameCanvasBox(win, { left: 0, top: 0, width: 612, height: 540 });
+    const app = makeSpectatorApp(win, MultiplayerApp, liveBoard());
+    let restored = 0;
+    win.MultiplayerGsm.restoreDeathScreen = function () {
+      restored++;
+    };
+    try {
+      app.renderFocusBoard();
+      const view = win.document.getElementById("mp-focus-view");
+      assert.ok(app._versusFocusTimer, "label tick runs while watching");
+      app.versus.spectateMode = "mosaic";
+      app.renderFocusBoard();
+      assert.equal(view.style.display, "none");
+      assert.equal(app._versusFocusSpectate, false);
+      assert.ok(!app._versusFocusTimer, "label tick stopped");
+      assert.equal(win.__mpVersusFocusWatch, false);
+      assert.ok(restored >= 1, "death screen handed back");
+    } finally {
+      app._leaveVersusFocusSpectate();
+    }
   });
 });
 
 describe("Multiplayer settings tab layout", () => {
+  it("escapes display names in versus HUD innerHTML", () => {
+    const { JSDOM } = require("jsdom");
+    const dom = new JSDOM(`<!DOCTYPE html><html><body>
+      <div id="settings-popup-pudding">
+        <span>Pudding Mod Settings</span>
+        <div id="ultra-settings-pager">
+          <button type="button" id="ultra-settings-tab-play" class="ultra-settings-tab">Play</button>
+        </div>
+        <div id="ultra-settings-page-play" class="ultra-settings-page ultra-page-on"></div>
+      </div>
+      <div class="FL0c2d"><div class="sXu3u"></div></div>
+    </body></html>`);
+    const win = dom.window;
+    global.window = win;
+    global.document = win.document;
+    win.button_color = "#1155CC";
+    win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
+    win.MultiplayerSession = require(path.join(ROOT, "src/session/ready.js"));
+    win.VersusState = require(path.join(ROOT, "src/versus/scoreboard.js"));
+    const uiPath = require.resolve(path.join(ROOT, "src/ui/settingsTab.js"));
+    delete require.cache[uiPath];
+    require(path.join(ROOT, "src/ui/settingsTab.js"));
+    const UI = win.MultiplayerUI;
+    assert.ok(UI, "MultiplayerUI should load");
+    const app = {
+      client: {
+        connected: true,
+        roster: {
+          mode: "versus",
+          sessionActive: true,
+          clients: [
+            {
+              clientId: "evil",
+              role: "player",
+              displayName: '<img src=x onerror="window.__xss=1">',
+              resolvedName: '<img src=x onerror="window.__xss=1">',
+            },
+          ],
+        },
+        me: function () {
+          return { clientId: "spec", role: "spectator" };
+        },
+      },
+      versus: {
+        spectateMode: "focus",
+        scores: { evil: { score: 3, bestScore: 3 } },
+        winnerClientId: "evil",
+        expired: true,
+      },
+    };
+    const ui = new UI(app);
+    assert.equal(typeof ui.mountHud, "function");
+    ui.mountHud();
+    if (!ui.hud) {
+      ui.hud = win.document.createElement("div");
+      ui.hud.id = "mp-hud";
+      win.document.body.appendChild(ui.hud);
+    }
+    ui.updateHud(app);
+    assert.equal(win.__xss, undefined);
+    assert.ok(ui.hud.innerHTML.indexOf("<img") < 0);
+    assert.ok(ui.hud.innerHTML.indexOf("&lt;img") >= 0);
+    assert.ok(ui.hud.innerHTML.indexOf("mp-hud-winner") >= 0, "winner banner");
+    assert.ok(ui.hud.innerHTML.indexOf("Winner:") >= 0);
+    assert.ok(ui.hud.innerHTML.indexOf("Score 3") >= 0, "goal detail");
+    assert.ok(ui.hud.innerHTML.indexOf("Last match results") >= 0);
+  });
+
+  it("versus HUD announces ranked last-match results to all players", () => {
+    const { JSDOM } = require("jsdom");
+    const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>");
+    const win = dom.window;
+    global.window = win;
+    global.document = win.document;
+    win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
+    win.MultiplayerSession = require(path.join(ROOT, "src/session/ready.js"));
+    win.VersusState = require(path.join(ROOT, "src/versus/scoreboard.js"));
+    const uiPath = require.resolve(path.join(ROOT, "src/ui/settingsTab.js"));
+    delete require.cache[uiPath];
+    require(path.join(ROOT, "src/ui/settingsTab.js"));
+    const UI = win.MultiplayerUI;
+    const app = {
+      client: {
+        connected: true,
+        roster: {
+          mode: "versus",
+          sessionActive: false,
+          attemptExpired: true,
+          allowNewRuns: false,
+          versusGoal: "score",
+          clients: [
+            {
+              clientId: "p1",
+              role: "player",
+              displayName: "Alice",
+              resolvedName: "Alice",
+            },
+            {
+              clientId: "p2",
+              role: "player",
+              displayName: "Bob",
+              resolvedName: "Bob",
+            },
+          ],
+        },
+        me: function () {
+          return { clientId: "p2", role: "player" };
+        },
+      },
+      versus: {
+        spectateMode: "focus",
+        versusGoal: "score",
+        expired: true,
+        winnerClientId: "p1",
+        leaderClientId: "p1",
+        scores: {
+          p1: { score: 12, bestScore: 40, bestTimeMs: 1000 },
+          p2: { score: 5, bestScore: 18, bestTimeMs: 500 },
+        },
+      },
+    };
+    const ui = new UI(app);
+    ui.mountHud();
+    if (!ui.hud) {
+      ui.hud = win.document.createElement("div");
+      ui.hud.id = "mp-hud";
+      win.document.body.appendChild(ui.hud);
+    }
+    ui.updateHud(app);
+    const html = ui.hud.innerHTML;
+    assert.ok(html.indexOf("mp-hud-winner") >= 0);
+    assert.ok(html.indexOf("Winner: Alice") >= 0);
+    assert.ok(html.indexOf("Score 40") >= 0);
+    assert.ok(html.indexOf("1. Alice") >= 0);
+    assert.ok(html.indexOf("2. Bob") >= 0);
+    assert.ok(html.indexOf("mp-hud-lead") >= 0);
+  });
+
   it("mounts as own top tab with Connect/Match/Roster sub-tabs", () => {
     const { JSDOM } = require("jsdom");
     const dom = new JSDOM(`<!DOCTYPE html><html><body>
@@ -2567,7 +2520,7 @@ describe("Multiplayer settings tab layout", () => {
     assertSpectateUi(false);
   });
 
-  it("hides versus duration in coop and gates End match on sessionActive", () => {
+  it("hides versus duration in coop and swaps Start/End on sessionActive", () => {
     const { JSDOM } = require("jsdom");
     const dom = new JSDOM(`<!DOCTYPE html><html><body>
       <div id="settings-popup-pudding">
@@ -2614,9 +2567,11 @@ describe("Multiplayer settings tab layout", () => {
     const durField = win.document.getElementById("mp-duration-field");
     const goalField = win.document.getElementById("mp-versus-goal-field");
     const endBtn = win.document.getElementById("mp-end");
+    const startBtn = win.document.getElementById("mp-start");
     assert.ok(durField);
     assert.ok(goalField);
     assert.ok(endBtn);
+    assert.ok(startBtn);
 
     ui.renderRoster({
       mode: "versus",
@@ -2629,6 +2584,7 @@ describe("Multiplayer settings tab layout", () => {
     assert.notEqual(durField.style.display, "none");
     assert.notEqual(goalField.style.display, "none");
     assert.equal(endBtn.style.display, "none");
+    assert.notEqual(startBtn.style.display, "none");
     assert.equal(win.document.getElementById("mp-versus-goal").value, "best50");
 
     ui.renderRoster({
@@ -2639,6 +2595,18 @@ describe("Multiplayer settings tab layout", () => {
       allowNewRuns: true,
     });
     assert.notEqual(endBtn.style.display, "none");
+    assert.equal(startBtn.style.display, "none", "no Start while a match runs");
+
+    // Attempt ran out: Start comes back so the next match can be set up
+    ui.renderRoster({
+      mode: "versus",
+      roomCode: "ABCD",
+      sessionActive: true,
+      attemptExpired: true,
+      clients: [{ clientId: "admin", role: "player", ready: true }],
+      allowNewRuns: false,
+    });
+    assert.notEqual(startBtn.style.display, "none");
 
     ui.renderRoster({
       mode: "coop",
@@ -2650,6 +2618,7 @@ describe("Multiplayer settings tab layout", () => {
     assert.equal(durField.style.display, "none");
     assert.equal(goalField.style.display, "none");
     assert.notEqual(endBtn.style.display, "none");
+    assert.equal(startBtn.style.display, "none");
 
     ui.renderRoster({
       mode: "coop",
@@ -2660,6 +2629,19 @@ describe("Multiplayer settings tab layout", () => {
     });
     assert.equal(durField.style.display, "none");
     assert.equal(endBtn.style.display, "none");
+    assert.notEqual(startBtn.style.display, "none");
+
+    // Stuck co-op: server session flag dropped or a peer never died, but this
+    // client is still injected — End match stays so the admin can quit out.
+    app._coopSessionActive = true;
+    ui.renderRoster({
+      mode: "coop",
+      roomCode: "ABCD",
+      sessionActive: false,
+      clients: [{ clientId: "admin", role: "player", ready: true }],
+      allowNewRuns: true,
+    });
+    assert.notEqual(endBtn.style.display, "none", "End match while local co-op still live");
   });
 
   it("shows Pass admin on roster rows and hides Match dropdown", () => {
@@ -2923,6 +2905,7 @@ describe("spectator / admin menu access", () => {
     [
       "shared/colors.js",
       "shared/protocol.js",
+      "runtime/bridge.js",
       "session/ready.js",
       "versus/scoreboard.js",
       "coop/state.js",
@@ -2930,6 +2913,8 @@ describe("spectator / admin menu access", () => {
       "hooks/gsm.js",
       "net/client.js",
       "ui/settingsTab.js",
+      "versus/focus.js",
+      "versus/mosaic.js",
       "mod.js",
     ].forEach(function (rel) {
       const p = require.resolve(path.join(ROOT, "src", rel));
@@ -3042,7 +3027,137 @@ describe("spectator / admin menu access", () => {
     assertPersonalClickable(win.document);
   });
 
-  it("versus focus during match: Escape peeks menus and stops re-hiding death", async () => {
+  /** Roster as the server leaves it once the attempt is spent. */
+  function overRoster(role) {
+    return {
+      mode: "versus",
+      sessionActive: false,
+      attemptExpired: true,
+      allowNewRuns: false,
+      adminId: "admin",
+      clients: [{ clientId: "admin", role: role }],
+    };
+  }
+
+  function seatedApp(win, MultiplayerApp, opts) {
+    const app = new MultiplayerApp();
+    app.client = {
+      connected: true,
+      clientId: "admin",
+      isAdmin: function () {
+        return opts.admin;
+      },
+      me: function () {
+        return { clientId: "admin", role: opts.role };
+      },
+      roster: opts.roster,
+    };
+    app.ui = { updateHud: function () {}, renderRoster: function () {} };
+    return app;
+  }
+
+  function countEscapes(win) {
+    const seen = { n: 0 };
+    win.document.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape") seen.n++;
+    });
+    return seen;
+  }
+
+  const nextTick = function () {
+    return new Promise(function (r) {
+      setTimeout(r, 5);
+    });
+  };
+
+  it("match over: the admin who played gets the engine quit so settings answer", async () => {
+    const win = menuDom();
+    const MultiplayerApp = loadApp(win);
+    const app = seatedApp(win, MultiplayerApp, {
+      admin: true,
+      role: "player",
+      roster: overRoster("player"),
+    });
+    const esc = countEscapes(win);
+
+    app.returnToMenus({ fromExpired: true });
+    // Revealing the endscreen is chrome only; the quit signal waits a tick so
+    // it never fires inside the handler that is still unwinding.
+    assert.equal(esc.n, 0);
+    await nextTick();
+    assert.equal(esc.n, 1, "engine must be quit out of the spent run");
+    assert.equal(win.document.getElementById("trophy").style.pointerEvents, "");
+    assertPersonalClickable(win.document);
+
+    // One release per match, however many end messages arrive
+    app.returnToMenus({ fromRemote: true });
+    await nextTick();
+    assert.equal(esc.n, 1);
+  });
+
+  it("a live match, a spectating admin and plain players keep the engine alone", async () => {
+    const win = menuDom();
+    const MultiplayerApp = loadApp(win);
+    const esc = countEscapes(win);
+
+    const live = seatedApp(win, MultiplayerApp, {
+      admin: true,
+      role: "player",
+      roster: { mode: "versus", sessionActive: true, adminId: "admin", clients: [] },
+    });
+    live.returnToMenus({});
+    await nextTick();
+    assert.equal(esc.n, 0, "a running match must not be quit from under us");
+
+    const watching = seatedApp(win, MultiplayerApp, {
+      admin: true,
+      role: "spectator",
+      roster: overRoster("spectator"),
+    });
+    watching.returnToMenus({ fromExpired: true });
+    await nextTick();
+    assert.equal(esc.n, 0, "a spectating admin had no run to quit");
+
+    const guest = seatedApp(win, MultiplayerApp, {
+      admin: false,
+      role: "player",
+      roster: overRoster("player"),
+    });
+    guest.returnToMenus({ fromRemote: true });
+    await nextTick();
+    assert.equal(esc.n, 0, "non-admins still leave on their own Escape");
+  });
+
+  it("End match quits the engine even if Escape was already latched", async () => {
+    const win = menuDom();
+    const MultiplayerApp = loadApp(win);
+    const app = seatedApp(win, MultiplayerApp, {
+      admin: true,
+      role: "player",
+      roster: {
+        mode: "coop",
+        sessionActive: true,
+        adminId: "admin",
+        clients: [{ clientId: "admin", role: "player" }],
+      },
+    });
+    app._coopSessionActive = true;
+    let ended = 0;
+    app.client.sessionEnd = function () {
+      ended++;
+    };
+    const esc = countEscapes(win);
+    win.__mpEscHandling = true;
+    app.abortMatchAsAdmin("ui");
+    assert.equal(ended, 1);
+    await nextTick();
+    assert.equal(esc.n, 1, "End match must still send the engine quit");
+    assert.equal(!!win.__mpEscHandling, false);
+    assert.equal(app.client.roster.sessionActive, false);
+    assert.equal(win.document.getElementById("trophy").style.pointerEvents, "");
+  });
+
+  it("versus focus during match: endscreen left alone, Escape peeks menus", async () => {
     const win = menuDom();
     const MultiplayerApp = loadApp(win);
     const Gsm = win.MultiplayerGsm;
@@ -3072,21 +3187,20 @@ describe("spectator / admin menu access", () => {
     app.versus.focusClientId = "admin";
     app.versus.boards.admin = { width: 2, height: 2, body: [], apples: [] };
 
+    let nativeRuns = 0;
     Gsm.triggerPlay = function () {};
-    Gsm.startNativeRun = function (opts) {
-      if (opts && opts.onDone) setTimeout(function () {
-        opts.onDone(true);
-      }, 0);
+    Gsm.startNativeRun = function () {
+      nativeRuns++;
     };
-    app.startVersusFocusLoop = function () {};
+    Gsm.drawBoardOnCanvas = function () {};
     app.renderFocusBoard();
     assert.equal(app._versusFocusSpectate, true);
-    // startNativeRun is async — wait for Focus Play seat to clear requirePlay
-    await new Promise(function (r) {
-      setTimeout(r, 20);
-    });
     const death = win.document.getElementsByClassName("wjOYOd")[0];
-    assert.equal(death.style.visibility, "hidden");
+    const view = win.document.getElementById("mp-focus-view");
+    assert.equal(view.style.display, "block");
+    // Watching draws the board: no seat, and the endscreen is left as-is
+    assert.equal(nativeRuns, 0);
+    assert.notEqual(death.style.visibility, "hidden");
 
     // Wire Escape hook and peek
     app.hookEscapeForAdmin();
@@ -3103,11 +3217,14 @@ describe("spectator / admin menu access", () => {
     assert.notEqual(death.style.visibility, "hidden");
     assertPersonalClickable(win.document);
 
-    // Focus loop must not re-hide while peek is on
+    // The label tick is the only thing still running — it must step aside for
+    // the peek instead of bouncing the endscreen back and forth.
     await new Promise(function (r) {
-      setTimeout(r, 30);
+      setTimeout(r, 260);
     });
     assert.notEqual(death.style.visibility, "hidden");
+    assert.equal(view.style.display, "none");
+    assert.equal(nativeRuns, 0);
     app._leaveVersusFocusSpectate();
   });
 
@@ -3169,5 +3286,118 @@ describe("spectator / admin menu access", () => {
     Gsm.hideControlHelper();
     assert.notEqual(wrap.dataset.mpHelperHidden, "1");
     assertPersonalClickable(win.document);
+  });
+
+  /** A menu row holding Google's Shuffle button, plus a click spy. */
+  function shuffleDom(win) {
+    const row = win.document.createElement("div");
+    const shuffle = win.document.createElement("button");
+    shuffle.setAttribute("jsname", "qycu7d");
+    shuffle.textContent = "Shuffle";
+    row.appendChild(shuffle);
+    win.document.body.appendChild(row);
+    win.random_button = shuffle;
+    const spy = { shuffled: false };
+    shuffle.addEventListener("click", function () {
+      spy.shuffled = true;
+    });
+    return { row: row, shuffle: shuffle, spy: spy };
+  }
+
+  function readyApp(win, MultiplayerApp, opts) {
+    const app = new MultiplayerApp();
+    const me = { clientId: "p1", role: "player", ready: false };
+    app.__me = me;
+    app.__readySent = null;
+    app.client = {
+      connected: true,
+      joined: true,
+      clientId: "p1",
+      isAdmin: function () {
+        return !!(opts && opts.admin);
+      },
+      me: function () {
+        return me;
+      },
+      setReady: function (v) {
+        app.__readySent = v;
+      },
+      roster: {
+        mode: "versus",
+        clients: [{ clientId: "p1", role: "player", ready: false }],
+      },
+    };
+    app.ui = { updateHud: function () {}, renderRoster: function () {} };
+    return app;
+  }
+
+  it("players ready on Shuffle, admin and guest alike (no shuffle on click)", () => {
+    [false, true].forEach(function (admin) {
+      const win = menuDom();
+      const dom = shuffleDom(win);
+      const MultiplayerApp = loadApp(win);
+      const app = readyApp(win, MultiplayerApp, { admin: admin });
+      const who = admin ? "admin" : "guest";
+
+      app.hookInGameReadyButton();
+      assert.equal(dom.shuffle.textContent, "Ready", who);
+      assert.equal(dom.shuffle.style.backgroundColor, "rgb(183, 28, 28)", who);
+      assert.ok(dom.shuffle.classList.contains("mp-ready-btn"), who);
+      assert.ok(dom.shuffle.classList.contains("mp-ready-off"), who);
+
+      dom.shuffle.dispatchEvent(
+        new win.MouseEvent("click", { bubbles: true, cancelable: true })
+      );
+      assert.equal(dom.spy.shuffled, false, who + " must not randomize");
+      assert.equal(app.__readySent, true, who);
+      assert.equal(app.__me.ready, true, who);
+      assert.equal(dom.shuffle.textContent, "Unready", who);
+      assert.equal(dom.shuffle.style.backgroundColor, "rgb(27, 94, 32)", who);
+      assert.ok(dom.shuffle.classList.contains("mp-ready-on"), who);
+
+      // Spectators hand the real Shuffle back
+      app.__me.role = "spectator";
+      app._paintShuffleAsReady();
+      assert.equal(dom.shuffle.__mpReadyMode, false, who);
+    });
+  });
+
+  it("Ready keeps its colour when the theme repaints Shuffle", async () => {
+    const win = menuDom();
+    const dom = shuffleDom(win);
+    const MultiplayerApp = loadApp(win);
+    const app = readyApp(win, MultiplayerApp, { admin: true });
+    app.hookInGameReadyButton();
+    assert.equal(dom.shuffle.style.backgroundColor, "rgb(183, 28, 28)");
+
+    // A theme switch drops Google's own colours back on the button
+    dom.shuffle.classList.remove("mp-ready-btn", "mp-ready-off");
+    dom.shuffle.style.background = "#4a752c";
+    dom.shuffle.style.backgroundColor = "#4a752c";
+    dom.shuffle.style.color = "#000";
+    await nextTick();
+    assert.equal(dom.shuffle.style.backgroundColor, "rgb(183, 28, 28)", "bg back");
+    assert.equal(dom.shuffle.style.color, "rgb(255, 255, 255)", "text back");
+    assert.equal(dom.shuffle.textContent, "Ready");
+
+    // Remix restoring its saved label counts as a reset too
+    dom.shuffle.innerHTML = "<span>Shuffle</span>";
+    await nextTick();
+    assert.equal(dom.shuffle.textContent, "Ready", "label back");
+
+    // A menu rebuild hands us a different button: it gets painted and hooked
+    dom.shuffle.remove();
+    const fresh = win.document.createElement("button");
+    fresh.setAttribute("jsname", "qycu7d");
+    fresh.textContent = "Shuffle";
+    dom.row.appendChild(fresh);
+    win.random_button = fresh;
+    await nextTick();
+    assert.equal(fresh.textContent, "Ready", "replacement painted");
+    fresh.dispatchEvent(
+      new win.MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    assert.equal(app.__readySent, true, "replacement toggles ready");
+    assert.equal(fresh.textContent, "Unready");
   });
 });

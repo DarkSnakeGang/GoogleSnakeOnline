@@ -52,6 +52,32 @@ struct AppState {
     membership: Mutex<HashMap<String, String>>,
 }
 
+const MAX_WS_TEXT_BYTES: usize = 256 * 1024;
+const MAX_DISPLAY_NAME_CHARS: usize = 32;
+const MAX_MSGS_PER_SEC: u32 = 60;
+
+fn sanitize_display_name(raw: Option<String>) -> Option<String> {
+    let s = raw?;
+    let cleaned: String = s
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_DISPLAY_NAME_CHARS)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+fn is_valid_room_code(code: &str) -> bool {
+    let bytes = code.as_bytes();
+    bytes.len() == 4
+        && bytes.iter().all(|b| matches!(b, b'A'..=b'H' | b'J'..=b'N' | b'P'..=b'Z' | b'2'..=b'9'))
+}
+
 impl AppState {
     fn new() -> Self {
         Self {
@@ -63,7 +89,7 @@ impl AppState {
 
     fn get_or_create_room(&self, code: &str) -> String {
         let mut rooms = self.rooms.lock();
-        if rooms.contains_key(code) {
+        if !code.is_empty() && rooms.contains_key(code) {
             return code.to_string();
         }
         let c = if code.is_empty() {
@@ -78,6 +104,51 @@ impl AppState {
         rooms.insert(c.clone(), Room::new(c.clone()));
         info!(roomId = %c, event = "room_create");
         c
+    }
+
+    /// Drop membership + writer for anyone no longer in the room (hard kick).
+    fn reap_orphans(&self, room_code: &str) {
+        let in_room: std::collections::HashSet<String> = {
+            let rooms = self.rooms.lock();
+            rooms
+                .get(room_code)
+                .map(|r| r.clients.keys().cloned().collect())
+                .unwrap_or_default()
+        };
+        let orphans: Vec<String> = {
+            let membership = self.membership.lock();
+            membership
+                .iter()
+                .filter(|(cid, rc)| *rc == room_code && !in_room.contains(*cid))
+                .map(|(cid, _)| cid.clone())
+                .collect()
+        };
+        if orphans.is_empty() {
+            return;
+        }
+        {
+            let mut membership = self.membership.lock();
+            for cid in &orphans {
+                membership.remove(cid);
+            }
+        }
+        {
+            let mut clients = self.clients.lock();
+            for cid in &orphans {
+                clients.remove(cid);
+                info!(clientId = %cid, roomId = %room_code, event = "orphan_reaped");
+            }
+        }
+    }
+
+    fn gc_empty_rooms(&self) {
+        let mut rooms = self.rooms.lock();
+        let before = rooms.len();
+        rooms.retain(|_, r| !r.clients.is_empty() || r.session_active);
+        let removed = before.saturating_sub(rooms.len());
+        if removed > 0 {
+            info!(removed, event = "room_gc");
+        }
     }
 
     fn flush_outbox(&self, room_code: &str) {
@@ -148,8 +219,10 @@ async fn main() {
     let tick_state = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(100));
+        let mut gc_ticks: u32 = 0;
         loop {
             interval.tick().await;
+            gc_ticks = gc_ticks.wrapping_add(1);
             let codes: Vec<String> = tick_state.rooms.lock().keys().cloned().collect();
             for code in codes {
                 {
@@ -161,6 +234,10 @@ async fn main() {
                     }
                 }
                 tick_state.flush_outbox(&code);
+                tick_state.reap_orphans(&code);
+            }
+            if gc_ticks % 50 == 0 {
+                tick_state.gc_empty_rooms();
             }
         }
     });
@@ -232,8 +309,30 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     });
 
     let mut room_code: Option<String> = None;
+    let mut msg_window_start = std::time::Instant::now();
+    let mut msg_window_count: u32 = 0;
 
-    while let Some(Ok(msg)) = stream.next().await {
+    loop {
+        // Exit promptly after kick (membership/writer reaped)
+        if let Some(ref code) = room_code {
+            let still = {
+                let rooms = state.rooms.lock();
+                rooms
+                    .get(code)
+                    .map(|r| r.clients.contains_key(&client_id))
+                    .unwrap_or(false)
+            };
+            if !still {
+                break;
+            }
+        }
+
+        let msg = match tokio::time::timeout(Duration::from_millis(250), stream.next()).await {
+            Ok(Some(Ok(m))) => m,
+            Ok(Some(Err(_))) | Ok(None) => break,
+            Err(_) => continue, // timeout — loop back for kick check
+        };
+
         let text = match msg {
             Message::Text(t) => t.to_string(),
             Message::Close(_) => break,
@@ -243,6 +342,34 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 continue;
             }
         };
+
+        if text.len() > MAX_WS_TEXT_BYTES {
+            warn!(
+                clientId = %client_id,
+                bytes = text.len(),
+                event = "ws_text_too_large"
+            );
+            let err = Envelope::new(
+                "ERROR",
+                json!({"code":"payload_too_large","message":"Message too large"}),
+            );
+            if let Ok(s) = serde_json::to_string(&err) {
+                if let Some(tx) = state.clients.lock().get(&client_id) {
+                    let _ = tx.send(s);
+                }
+            }
+            break;
+        }
+
+        if msg_window_start.elapsed() >= Duration::from_secs(1) {
+            msg_window_start = std::time::Instant::now();
+            msg_window_count = 0;
+        }
+        msg_window_count = msg_window_count.saturating_add(1);
+        if msg_window_count > MAX_MSGS_PER_SEC {
+            warn!(clientId = %client_id, event = "ws_rate_limited");
+            continue;
+        }
 
         let env = match parse_envelope(&text) {
             Ok(e) => e,
@@ -265,11 +392,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let display_name = env
-                .payload
-                .get("displayName")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            let display_name = sanitize_display_name(
+                env.payload
+                    .get("displayName")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+            );
             let create = env
                 .payload
                 .get("create")
@@ -279,10 +407,31 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             let code = if create || requested.is_empty() {
                 state.get_or_create_room("")
             } else {
-                let mut rooms = state.rooms.lock();
+                if !is_valid_room_code(&requested) {
+                    let err = Envelope::new(
+                        "ERROR",
+                        json!({"code":"bad_room","message":"Invalid room code"}),
+                    );
+                    if let Ok(s) = serde_json::to_string(&err) {
+                        if let Some(tx) = state.clients.lock().get(&client_id) {
+                            let _ = tx.send(s);
+                        }
+                    }
+                    continue;
+                }
+                let rooms = state.rooms.lock();
                 if !rooms.contains_key(&requested) {
-                    rooms.insert(requested.clone(), Room::new(requested.clone()));
-                    info!(roomId = %requested, event = "room_create");
+                    drop(rooms);
+                    let err = Envelope::new(
+                        "ERROR",
+                        json!({"code":"room_not_found","message":"Room does not exist"}),
+                    );
+                    if let Ok(s) = serde_json::to_string(&err) {
+                        if let Some(tx) = state.clients.lock().get(&client_id) {
+                            let _ = tx.send(s);
+                        }
+                    }
+                    continue;
                 }
                 if rooms.get(&requested).map(|r| r.clients.len()).unwrap_or(0) >= MAX_CONNECTIONS {
                     drop(rooms);
@@ -345,6 +494,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             }
         }
         state.flush_outbox(code);
+        state.reap_orphans(code);
 
         let in_room = {
             let rooms = state.rooms.lock();
@@ -367,7 +517,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             }
         }
         state.flush_outbox(&code);
+        state.reap_orphans(&code);
         state.membership.lock().remove(&client_id);
+        state.gc_empty_rooms();
     }
     state.clients.lock().remove(&client_id);
     writer.abort();

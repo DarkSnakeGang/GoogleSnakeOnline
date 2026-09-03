@@ -137,6 +137,8 @@ pub struct VersusScore {
     pub best_goal_time_ms: Option<u64>,
     pub goal_completed: bool,
     pub alive: bool,
+    /// Wall-clock ms when this player's run timer armed (mosaic local tick).
+    pub run_started_at_ms: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -361,8 +363,13 @@ impl Room {
                 info!(roomId = %self.code, clientId = %a, event = "admin_succession");
             }
         }
+        // Last alive player disconnect must end co-op (not wait for another death msg)
+        self.maybe_end_coop_all_dead();
         if !self.clients.is_empty() {
             self.broadcast_roster();
+        } else if self.session_active {
+            self.session_active = false;
+            self.coop = None;
         }
     }
 
@@ -847,15 +854,11 @@ impl Room {
             .unwrap_or(false)
             || payload.get("timerStartedAtMs").and_then(|v| v.as_u64()).is_some();
         if wants_timer && self.coop_timer_started_at_ms.is_none() {
-            let ms = payload
-                .get("timerStartedAtMs")
-                .and_then(|v| v.as_u64())
-                .unwrap_or_else(|| {
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0)
-                });
+            // Always stamp server wall-clock — ignore client Date.now() skew
+            let ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
             self.coop_timer_started_at_ms = Some(ms);
             self.push_broadcast(Envelope::new(
                 "COOP_TIMER_START",
@@ -878,7 +881,12 @@ impl Room {
         if client.role != Role::Player {
             return Err("not_player".into());
         }
-        // Any co-op player may publish after a native eat (shared fruit board).
+        // Any co-op player may publish after a native eat — clamp size against DoS
+        if let Some(apples) = payload.get("apples").and_then(|v| v.as_array()) {
+            if apples.len() > 64 {
+                return Err("collectables_too_large".into());
+            }
+        }
         let mut body = payload.clone();
         if let Some(obj) = body.as_object_mut() {
             obj.insert("clientId".into(), json!(from));
@@ -924,6 +932,10 @@ impl Room {
         if client.role != Role::Player {
             return Err("not_player".into());
         }
+        // Dead players cannot unilaterally claim ALL_APPLES win
+        if self.coop_alive.get(from) == Some(&false) {
+            return Err("not_alive".into());
+        }
         info!(roomId = %self.code, clientId = %from, event = "coop_goal");
         self.session_active = false;
         self.coop = None;
@@ -946,6 +958,14 @@ impl Room {
             .map(|c| c.client_id.clone())
             .collect();
         if players.is_empty() {
+            info!(roomId = %self.code, event = "coop_no_players");
+            self.session_active = false;
+            self.coop = None;
+            for c in self.clients.values_mut() {
+                c.ready = false;
+            }
+            self.push_broadcast(Envelope::new("SESSION_END", json!({"reason":"ALL_DEAD"})));
+            self.broadcast_roster();
             return;
         }
         let all_dead = players.iter().all(|id| {
@@ -969,13 +989,28 @@ impl Room {
         if client.role != Role::Player || self.mode != Mode::Versus {
             return Err("not_versus_player".into());
         }
-        let score = payload.get("score").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-        let time_ms = payload.get("timeMs").and_then(|v| v.as_u64()).unwrap_or(0);
+        if !self.session_active {
+            return Ok(());
+        }
+        let score = payload
+            .get("score")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+            .min(100_000) as u32;
+        let time_ms = payload
+            .get("timeMs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+            .min(24 * 60 * 60 * 1000);
         let alive = payload.get("alive").and_then(|v| v.as_bool()).unwrap_or(true);
-        let goal_all = payload
+        // Ignore forged Best-All claims after the attempt window ends
+        let mut goal_all = payload
             .get("goalAll")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        if self.attempt_expired {
+            goal_all = false;
+        }
         let goal = self.versus_goal;
         {
             let entry = self.versus_scores.entry(from.to_string()).or_insert(VersusScore {
@@ -986,10 +1021,24 @@ impl Room {
                 best_goal_time_ms: None,
                 goal_completed: false,
                 alive: true,
+                run_started_at_ms: None,
             });
             entry.score = score;
             entry.time_ms = time_ms;
             entry.alive = alive;
+            if let Some(started) = payload
+                .get("runStartedAtMs")
+                .and_then(|v| v.as_u64())
+                .filter(|t| *t > 0)
+            {
+                // New arm resets the mosaic clock; ignore stale repeats of the same start
+                if entry.run_started_at_ms != Some(started) {
+                    entry.run_started_at_ms = Some(started);
+                }
+            }
+            if !alive {
+                // Keep run_started_at_ms so late viewers can still show frozen duration via timeMs
+            }
             if score > entry.best_score {
                 entry.best_score = score;
             }
@@ -1011,23 +1060,27 @@ impl Room {
             best_goal_time_ms: None,
             goal_completed: false,
             alive,
+            run_started_at_ms: None,
         });
         let leader_id = self.versus_leader_id();
-        self.push_broadcast(Envelope::new(
-            "SCORE_PULSE",
-            json!({
-                "clientId": from,
-                "score": score,
-                "timeMs": time_ms,
-                "alive": alive,
-                "bestScore": sc.best_score,
-                "bestTimeMs": sc.best_time_ms,
-                "bestGoalTimeMs": sc.best_goal_time_ms,
-                "goalCompleted": sc.goal_completed,
-                "versusGoal": goal.as_str(),
-                "leaderClientId": leader_id,
-            }),
-        ));
+        let mut pulse = json!({
+            "clientId": from,
+            "score": score,
+            "timeMs": time_ms,
+            "alive": alive,
+            "bestScore": sc.best_score,
+            "bestTimeMs": sc.best_time_ms,
+            "bestGoalTimeMs": sc.best_goal_time_ms,
+            "goalCompleted": sc.goal_completed,
+            "versusGoal": goal.as_str(),
+            "leaderClientId": leader_id,
+        });
+        if let Some(started) = sc.run_started_at_ms {
+            if let Some(obj) = pulse.as_object_mut() {
+                obj.insert("runStartedAtMs".into(), json!(started));
+            }
+        }
+        self.push_broadcast(Envelope::new("SCORE_PULSE", pulse));
         Ok(())
     }
 
@@ -1107,7 +1160,7 @@ impl Room {
     }
 
     fn score_pulse_json(&self, pid: &str, sc: &VersusScore) -> Value {
-        json!({
+        let mut pulse = json!({
             "clientId": pid,
             "score": sc.score,
             "timeMs": sc.time_ms,
@@ -1118,7 +1171,13 @@ impl Room {
             "goalCompleted": sc.goal_completed,
             "versusGoal": self.versus_goal.as_str(),
             "leaderClientId": self.versus_leader_id(),
-        })
+        });
+        if let Some(started) = sc.run_started_at_ms {
+            if let Some(obj) = pulse.as_object_mut() {
+                obj.insert("runStartedAtMs".into(), json!(started));
+            }
+        }
+        pulse
     }
 
     fn cmd_admin_transfer(&mut self, from: &str, payload: &Value) -> Result<(), String> {
@@ -1192,6 +1251,14 @@ impl Room {
         let client = self.clients.get(from).ok_or("unknown_client")?;
         if client.role != Role::Player || self.mode != Mode::Versus {
             return Err("not_versus_player".into());
+        }
+        if !self.session_active {
+            return Ok(());
+        }
+        if let Some(body) = payload.get("body").and_then(|v| v.as_array()) {
+            if body.len() > 400 {
+                return Err("board_too_large".into());
+            }
         }
         self.versus_boards
             .insert(from.to_string(), payload.clone());
@@ -1268,6 +1335,10 @@ impl Room {
                 if Instant::now() >= deadline && !self.attempt_expired {
                     self.attempt_expired = true;
                     self.allow_new_runs = false;
+                    // Match is over — leave lobby so clients reopen death/settings
+                    // (Focus/mosaic gate on sessionActive).
+                    self.session_active = false;
+                    self.attempt_deadline = None;
                     info!(roomId = %self.code, event = "attempt_expired");
                     let winner = self.versus_leader_id();
                     self.push_broadcast(Envelope::new(
@@ -1556,10 +1627,12 @@ mod tests {
         .unwrap();
         assert_eq!(r.versus_scores.len(), 2);
 
-        // Timer expiry keeps scores
+        // Timer expiry keeps scores and ends the live session
         r.attempt_expired = true;
         r.allow_new_runs = false;
+        r.session_active = false;
         assert_eq!(r.versus_scores["a"].best_score, 9);
+        assert!(!r.session_active);
 
         // End match keeps scores for display; marks attempt_expired
         r.cmd_session_end("a", &json!({})).unwrap();
@@ -1575,6 +1648,28 @@ mod tests {
         assert!(r.versus_scores.is_empty());
         assert!(!r.attempt_expired);
         assert!(r.allow_new_runs);
+    }
+
+    #[test]
+    fn attempt_expire_clears_session_active() {
+        let mut r = room();
+        r.join("a".into(), None, None).unwrap();
+        r.cmd_set_role("a", &json!({"clientId": "a", "role": "player"}))
+            .unwrap();
+        r.cmd_ready("a", &json!({"ready": true})).unwrap();
+        r.cmd_set_duration("a", &json!({"minutes": 1})).unwrap();
+        r.cmd_session_start("a", &json!({})).unwrap();
+        assert!(r.session_active);
+        assert!(r.attempt_deadline.is_some());
+        // Force deadline into the past
+        r.attempt_deadline = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        r.tick();
+        assert!(r.attempt_expired);
+        assert!(!r.allow_new_runs);
+        assert!(!r.session_active);
+        assert!(r.attempt_deadline.is_none());
+        let out = r.take_outbox();
+        assert!(out.iter().any(|(_, e)| e.msg_type == "ATTEMPT_EXPIRED"));
     }
 
     #[test]

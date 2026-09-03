@@ -231,7 +231,7 @@ describe("ws integration", { timeout: 60000 }, () => {
     send(a.ws, "SESSION_START", { settings: {} });
     await waitMsg(a.inbox, "SESSION_START");
     await waitMsg(b.inbox, "SESSION_START");
-    const epoch = Date.now();
+    const epoch = 1; // client claims Unix epoch — server must ignore
     send(a.ws, "SNAKE_DELTA", {
       body: [{ x: 9, y: 7 }, { x: 8, y: 7 }, { x: 7, y: 7 }],
       alive: true,
@@ -240,10 +240,38 @@ describe("ws integration", { timeout: 60000 }, () => {
     });
     const timerA = await waitMsg(a.inbox, "COOP_TIMER_START");
     const timerB = await waitMsg(b.inbox, "COOP_TIMER_START");
-    assert.equal(timerA.payload.timerStartedAtMs, epoch);
-    assert.equal(timerB.payload.timerStartedAtMs, epoch);
+    // Server stamps its own wall-clock (ignore client timerStartedAtMs skew)
+    assert.ok(
+      Math.abs(Number(timerA.payload.timerStartedAtMs) - Date.now()) < 5000,
+      "server timer epoch should be near now"
+    );
+    assert.equal(timerA.payload.timerStartedAtMs, timerB.payload.timerStartedAtMs);
+    assert.notEqual(
+      Number(timerA.payload.timerStartedAtMs),
+      epoch,
+      "must ignore client-supplied timerStartedAtMs"
+    );
     a.ws.close();
     b.ws.close();
+  });
+
+  it("HELLO truncates long displayName and strips control chars", async () => {
+    const a = await wsClient();
+    const longEvil =
+      "A".repeat(80) + "\u0000<script>x</script>\u0007";
+    send(a.ws, "HELLO", {
+      create: true,
+      displayName: longEvil,
+    });
+    await waitMsg(a.inbox, "WELCOME");
+    const roster = await waitMsg(a.inbox, "ROSTER");
+    const me = roster.payload.clients.find(
+      (c) => c.clientId === roster.payload.adminId
+    );
+    assert.ok(me);
+    assert.ok(me.displayName.length <= 32);
+    assert.ok(!/[\u0000-\u001f]/.test(me.displayName));
+    a.ws.close();
   });
 
   it("coop auto-assigns distinct colors on promote and rejects taken claims", async () => {
@@ -354,7 +382,19 @@ describe("ws integration", { timeout: 60000 }, () => {
     await waitRosterWhere(b.inbox, (r) =>
       r.clients.some((c) => c.clientId === bId && c.role === "player")
     );
+    send(a.ws, "SET_ROLE", { clientId: adminId, role: "player" });
+    await waitRosterWhere(a.inbox, (r) =>
+      r.clients.some((c) => c.clientId === adminId && c.role === "player")
+    );
+    send(a.ws, "READY", { ready: true });
+    send(b.ws, "READY", { ready: true });
+    await waitRosterWhere(a.inbox, (r) => r.allPlayersReady === true);
+    send(a.ws, "SESSION_START", {});
+    await waitMsg(a.inbox, "SESSION_START");
+    await waitMsg(b.inbox, "SESSION_START");
 
+    a.inbox.length = 0;
+    spec.inbox.length = 0;
     send(b.ws, "SCORE_PULSE", { score: 11, timeMs: 2200, alive: true });
     const pulseA = await waitMsg(a.inbox, "SCORE_PULSE");
     const pulseSpec = await waitMsg(spec.inbox, "SCORE_PULSE");
@@ -362,7 +402,6 @@ describe("ws integration", { timeout: 60000 }, () => {
     assert.equal(pulseA.payload.score, 11);
     assert.equal(pulseSpec.payload.score, 11);
     assert.ok(pulseA.payload.bestScore >= 11);
-    void adminId;
     a.ws.close();
     b.ws.close();
     spec.ws.close();
@@ -391,6 +430,19 @@ describe("ws integration", { timeout: 60000 }, () => {
     );
     assert.equal(rosterGoal.versusGoalLabel, "Best 25");
 
+    send(a.ws, "SET_ROLE", { clientId: welcome.payload.clientId, role: "player" });
+    await waitRosterWhere(a.inbox, (r) =>
+      r.clients.some((c) => c.clientId === welcome.payload.clientId && c.role === "player")
+    );
+    send(a.ws, "READY", { ready: true });
+    send(b.ws, "READY", { ready: true });
+    await waitRosterWhere(a.inbox, (r) => r.allPlayersReady === true);
+    send(a.ws, "SESSION_START", {});
+    await waitMsg(a.inbox, "SESSION_START");
+    await waitMsg(b.inbox, "SESSION_START");
+
+    a.inbox.length = 0;
+    b.inbox.length = 0;
     send(b.ws, "SCORE_PULSE", { score: 25, timeMs: 4000, alive: true });
     const pulse = await waitMsg(a.inbox, "SCORE_PULSE");
     assert.equal(pulse.payload.versusGoal, "best25");
@@ -398,10 +450,6 @@ describe("ws integration", { timeout: 60000 }, () => {
     assert.equal(pulse.payload.bestGoalTimeMs, 4000);
     assert.equal(pulse.payload.leaderClientId, bId);
 
-    send(a.ws, "SET_ROLE", { clientId: welcome.payload.clientId, role: "player" });
-    await waitRosterWhere(a.inbox, (r) =>
-      r.clients.some((c) => c.clientId === welcome.payload.clientId && c.role === "player")
-    );
     // Clear b's inbox so we don't pick up b's earlier SCORE_PULSE echo
     b.inbox.length = 0;
     send(a.ws, "SCORE_PULSE", { score: 30, timeMs: 3500, alive: true });
@@ -440,6 +488,12 @@ describe("ws integration", { timeout: 60000 }, () => {
       a.inbox,
       (r) => r.clients.filter((c) => c.role === "player").length === 2
     );
+    send(player.ws, "READY", { ready: true });
+    send(otherPlayer.ws, "READY", { ready: true });
+    await waitRosterWhere(a.inbox, (r) => r.allPlayersReady === true);
+    send(a.ws, "SESSION_START", {});
+    await waitMsg(a.inbox, "SESSION_START");
+    await waitMsg(player.inbox, "SESSION_START");
 
     // clear inboxes
     player.inbox.length = 0;
@@ -693,6 +747,18 @@ describe("ws integration", { timeout: 60000 }, () => {
     spec.ws.close();
   });
 
+  it("rejects unknown room code without creating it", async () => {
+    const a = await wsClient();
+    send(a.ws, "HELLO", {
+      create: false,
+      roomCode: "ZZZZ",
+      displayName: "Lost",
+    });
+    const err = await waitMsg(a.inbox, "ERROR", 5000);
+    assert.equal(err.payload.code, "room_not_found");
+    a.ws.close();
+  });
+
   it("versus: non-admin spectator receives admin BOARD_DELTA", async () => {
     const admin = await wsClient();
     send(admin.ws, "HELLO", { create: true, displayName: "Admin" });
@@ -750,6 +816,98 @@ describe("ws integration", { timeout: 60000 }, () => {
     assert.equal(adminGot.length, 0);
 
     admin.ws.close();
+    spec.ws.close();
+  });
+
+  it("versus full session: start → score pulse → session end", async () => {
+    const a = await wsClient();
+    send(a.ws, "HELLO", { create: true, displayName: "Host" });
+    const welcome = await waitMsg(a.inbox, "WELCOME");
+    const room = welcome.payload.roomCode;
+    const aId = welcome.payload.clientId;
+    const b = await wsClient();
+    send(b.ws, "HELLO", { create: false, roomCode: room, displayName: "P2" });
+    const bId = (await waitMsg(b.inbox, "WELCOME")).payload.clientId;
+    send(a.ws, "MODE_CHANGE", { mode: "versus" });
+    await waitMsg(a.inbox, "MODE_CHANGE");
+    send(a.ws, "SET_ROLE", { clientId: aId, role: "player" });
+    send(a.ws, "SET_ROLE", { clientId: bId, role: "player" });
+    await waitRosterWhere(
+      a.inbox,
+      (r) => r.clients.filter((c) => c.role === "player").length === 2
+    );
+    send(a.ws, "READY", { ready: true });
+    send(b.ws, "READY", { ready: true });
+    await waitRosterWhere(a.inbox, (r) => r.allPlayersReady === true);
+    a.inbox.length = 0;
+    b.inbox.length = 0;
+    send(a.ws, "SESSION_START", {});
+    await waitMsg(a.inbox, "SESSION_START");
+    await waitMsg(b.inbox, "SESSION_START");
+    await waitMsg(b.inbox, "PLAY_SYNC");
+    b.inbox.length = 0;
+    send(a.ws, "SCORE_PULSE", { score: 12, timeMs: 4500, alive: true });
+    const pulse = await waitMsg(b.inbox, "SCORE_PULSE", 5000);
+    assert.equal(pulse.payload.clientId, aId);
+    assert.equal(pulse.payload.score, 12);
+    a.inbox.length = 0;
+    b.inbox.length = 0;
+    send(a.ws, "SESSION_END", { reason: "aborted" });
+    const endB = await waitMsg(b.inbox, "SESSION_END", 5000);
+    assert.equal(endB.payload.reason, "aborted");
+    const roster = await waitRosterWhere(a.inbox, (r) => r.sessionActive === false);
+    assert.equal(roster.sessionActive, false);
+    a.ws.close();
+    b.ws.close();
+  });
+
+  it("BOARD_DELTA rate: oversized body rejected; valid relay still works", async () => {
+    const a = await wsClient();
+    send(a.ws, "HELLO", { create: true, displayName: "Admin" });
+    const welcome = await waitMsg(a.inbox, "WELCOME");
+    const room = welcome.payload.roomCode;
+    const aId = welcome.payload.clientId;
+    const spec = await wsClient();
+    send(spec.ws, "HELLO", {
+      create: false,
+      roomCode: room,
+      displayName: "Spec",
+    });
+    await waitMsg(spec.inbox, "WELCOME");
+    send(a.ws, "MODE_CHANGE", { mode: "versus" });
+    await waitMsg(a.inbox, "MODE_CHANGE");
+    send(a.ws, "SET_ROLE", { clientId: aId, role: "player" });
+    await waitRosterWhere(
+      a.inbox,
+      (r) => r.clients.some((c) => c.clientId === aId && c.role === "player")
+    );
+    send(a.ws, "READY", { ready: true });
+    await waitRosterWhere(a.inbox, (r) => r.allPlayersReady === true);
+    send(a.ws, "SESSION_START", {});
+    await waitMsg(a.inbox, "SESSION_START");
+    await waitMsg(spec.inbox, "SESSION_START");
+
+    a.inbox.length = 0;
+    const huge = [];
+    for (let i = 0; i < 401; i++) huge.push({ x: i % 17, y: 0 });
+    send(a.ws, "BOARD_DELTA", { body: huge, apples: [], alive: true });
+    const err = await waitMsg(a.inbox, "ERROR", 5000);
+    assert.equal(err.payload.code, "board_too_large");
+
+    spec.inbox.length = 0;
+    send(a.ws, "BOARD_DELTA", {
+      body: [
+        { x: 1, y: 1 },
+        { x: 0, y: 1 },
+      ],
+      apples: [{ x: 3, y: 3 }],
+      alive: true,
+      score: 1,
+    });
+    const ok = await waitMsg(spec.inbox, "BOARD_DELTA", 5000);
+    assert.equal(ok.payload.clientId, aId);
+    assert.equal(ok.payload.board.body.length, 2);
+    a.ws.close();
     spec.ws.close();
   });
 });

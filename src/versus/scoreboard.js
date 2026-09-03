@@ -18,6 +18,8 @@
     this.versusGoal = "score";
     this.leaderClientId = null;
     this.winnerClientId = null;
+    /** Per-player mosaic run clocks: { startedAtMs, frozenMs }. */
+    this.runClocks = {};
   }
 
   VersusState.GOALS = GOALS;
@@ -121,6 +123,56 @@
     return "—";
   };
 
+  /**
+   * Rank clientIds by active goal (best first). Timed: completed by fastest
+   * bestGoalTimeMs; Score: highest bestScore (tie → longer bestTimeMs).
+   */
+  VersusState.rankPlayers = function (scores, goal) {
+    const map = scores || {};
+    const g = VersusState.normalizeGoal(goal);
+    const ids = Object.keys(map);
+    const timed = VersusState.isTimedGoal(g);
+    ids.sort(function (a, b) {
+      const sa = map[a] || {};
+      const sb = map[b] || {};
+      if (timed) {
+        const ca = !!sa.goalCompleted && sa.bestGoalTimeMs != null;
+        const cb = !!sb.goalCompleted && sb.bestGoalTimeMs != null;
+        if (ca !== cb) return ca ? -1 : 1;
+        if (ca && cb) {
+          return Number(sa.bestGoalTimeMs) - Number(sb.bestGoalTimeMs);
+        }
+        const aScore = sa.bestScore != null ? Number(sa.bestScore) : Number(sa.score) || 0;
+        const bScore = sb.bestScore != null ? Number(sb.bestScore) : Number(sb.score) || 0;
+        return bScore - aScore;
+      }
+      const aScore = sa.bestScore != null ? Number(sa.bestScore) : Number(sa.score) || 0;
+      const bScore = sb.bestScore != null ? Number(sb.bestScore) : Number(sb.score) || 0;
+      if (aScore !== bScore) return bScore - aScore;
+      const aTime =
+        sa.bestTimeMs != null
+          ? Number(sa.bestTimeMs)
+          : sa.timeMs != null
+            ? Number(sa.timeMs)
+            : 0;
+      const bTime =
+        sb.bestTimeMs != null
+          ? Number(sb.bestTimeMs)
+          : sb.timeMs != null
+            ? Number(sb.timeMs)
+            : 0;
+      return bTime - aTime;
+    });
+    return ids;
+  };
+
+  /** "Score 42" / "Best 25 12.34s" for winner / place lines. */
+  VersusState.formatGoalDetail = function (sc, goal) {
+    const label = VersusState.goalLabel(goal);
+    const best = VersusState.formatGoalBest(sc, goal);
+    return label + " " + best;
+  };
+
   function formatMs(ms) {
     if (ms == null || !Number.isFinite(Number(ms))) return "—";
     const t = Math.max(0, Math.floor(Number(ms) / 10) / 100);
@@ -146,6 +198,66 @@
     } else {
       this.leaderClientId = VersusState.pickLeader(this.scores, this.versusGoal);
     }
+    this._applyRunClockPulse(payload);
+  };
+
+  /**
+   * Mosaic timers arm once at run start (runStartedAtMs) and tick locally.
+   * Apple / periodic timeMs pulses must not jump the live clock.
+   */
+  VersusState.prototype._applyRunClockPulse = function (payload) {
+    if (!payload || !payload.clientId) return;
+    if (!this.runClocks) this.runClocks = {};
+    const id = payload.clientId;
+    const prev = this.runClocks[id] || {};
+    const next = {
+      startedAtMs: prev.startedAtMs != null ? prev.startedAtMs : null,
+      frozenMs: prev.frozenMs != null ? prev.frozenMs : null,
+    };
+    if (
+      payload.runStartedAtMs != null &&
+      Number.isFinite(Number(payload.runStartedAtMs))
+    ) {
+      const started = Number(payload.runStartedAtMs);
+      if (next.startedAtMs !== started) {
+        next.startedAtMs = started;
+        next.frozenMs = null;
+      }
+    }
+    if (payload.alive === false) {
+      if (
+        payload.timeMs != null &&
+        Number.isFinite(Number(payload.timeMs))
+      ) {
+        next.frozenMs = Number(payload.timeMs);
+      } else if (next.startedAtMs != null && next.frozenMs == null) {
+        next.frozenMs = Math.max(0, Date.now() - next.startedAtMs);
+      }
+    }
+    this.runClocks[id] = next;
+  };
+
+  /** Elapsed ms for mosaic labels: local tick from start, or frozen on death. */
+  VersusState.resolveRunClockMs = function (clock, nowMs, fallbackMs) {
+    if (clock) {
+      if (clock.frozenMs != null && Number.isFinite(Number(clock.frozenMs))) {
+        return Math.max(0, Number(clock.frozenMs));
+      }
+      if (
+        clock.startedAtMs != null &&
+        Number.isFinite(Number(clock.startedAtMs))
+      ) {
+        const now =
+          nowMs != null && Number.isFinite(Number(nowMs))
+            ? Number(nowMs)
+            : Date.now();
+        return Math.max(0, now - Number(clock.startedAtMs));
+      }
+    }
+    if (fallbackMs != null && Number.isFinite(Number(fallbackMs))) {
+      return Number(fallbackMs);
+    }
+    return null;
   };
 
   VersusState.prototype.onAttemptTick = function (payload) {
@@ -217,10 +329,26 @@
   VersusState.prototype.resetForNewMatch = function () {
     this.scores = {};
     this.boards = {};
+    this.runClocks = {};
     this.expired = false;
     this.attemptRemainingMs = null;
     this.leaderClientId = null;
     this.winnerClientId = null;
+  };
+
+  /** Format a player's run timer (SpeedInfo-style). */
+  VersusState.formatRunClock = function (ms) {
+    if (ms == null || !Number.isFinite(Number(ms))) return "—";
+    const total = Math.max(0, Math.floor(Number(ms)));
+    // Guard against wall-clock timestamps accidentally treated as durations
+    if (total > 24 * 60 * 60 * 1000) return "—";
+    const m = Math.floor(total / 60000);
+    const s = Math.floor((total % 60000) / 1000);
+    const tenths = Math.floor((total % 1000) / 100);
+    if (m > 0) {
+      return m + ":" + String(s).padStart(2, "0") + "." + tenths;
+    }
+    return s + "." + tenths + "s";
   };
 
   /** Format remaining attempt time as MM:SS. */

@@ -28,6 +28,7 @@ for (const c of remixCandidates) {
 const layerFiles = [
   "src/shared/colors.js",
   "src/shared/protocol.js",
+  "src/runtime/bridge.js",
   "src/net/client.js",
   "src/session/ready.js",
   "src/versus/scoreboard.js",
@@ -36,6 +37,8 @@ const layerFiles = [
   "src/hooks/gsm.js",
   "src/hooks/visibility.js",
   "src/ui/settingsTab.js",
+  "src/versus/focus.js",
+  "src/versus/mosaic.js",
   "src/mod.js",
 ];
 

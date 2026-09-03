@@ -222,6 +222,44 @@ describe("versus expired sync", () => {
     assert.equal(v.expired, false);
   });
 
+  it("mosaic run clock arms once and ignores mid-run timeMs jumps", () => {
+    const v = new VersusState();
+    const started = 1_700_000_000_000;
+    v.onScorePulse({
+      clientId: "p1",
+      score: 0,
+      timeMs: 0,
+      alive: true,
+      runStartedAtMs: started,
+    });
+    assert.equal(v.runClocks.p1.startedAtMs, started);
+    assert.equal(v.runClocks.p1.frozenMs, null);
+    v.onScorePulse({
+      clientId: "p1",
+      score: 5,
+      timeMs: 45000,
+      alive: true,
+      runStartedAtMs: started,
+    });
+    assert.equal(v.runClocks.p1.startedAtMs, started);
+    assert.equal(
+      VersusState.resolveRunClockMs(v.runClocks.p1, started + 3200, 45000),
+      3200
+    );
+    v.onScorePulse({
+      clientId: "p1",
+      score: 5,
+      timeMs: 5100,
+      alive: false,
+      runStartedAtMs: started,
+    });
+    assert.equal(v.runClocks.p1.frozenMs, 5100);
+    assert.equal(
+      VersusState.resolveRunClockMs(v.runClocks.p1, started + 99999, 5100),
+      5100
+    );
+  });
+
   it("keeps last-match scores until resetForNewMatch", () => {
     const v = new VersusState();
     v.onScorePulse({
@@ -263,6 +301,12 @@ describe("versus expired sync", () => {
     assert.equal(VersusState.formatAttemptClock(0, false), "00:00");
     assert.equal(VersusState.formatAttemptClock(null, false), null);
     assert.equal(VersusState.formatAttemptClock(9999, true), "00:00");
+  });
+
+  it("formats run clock for mosaic / roster", () => {
+    assert.equal(VersusState.formatRunClock(12300), "12.3s");
+    assert.equal(VersusState.formatRunClock(65000), "1:05.0");
+    assert.equal(VersusState.formatRunClock(null), "—");
   });
 
   it("clears attemptRemainingMs when session is inactive", () => {
@@ -313,6 +357,37 @@ describe("versus goal leader", () => {
     assert.equal(vs.winnerClientId, "b");
     assert.equal(vs.leaderClientId, "b");
   });
+
+  it("rankPlayers and formatGoalDetail order by active goal", () => {
+    const scores = {
+      a: { bestScore: 10, score: 10, bestTimeMs: 100 },
+      b: { bestScore: 30, score: 30, bestTimeMs: 50 },
+      c: { bestScore: 20, score: 20, bestTimeMs: 200 },
+    };
+    assert.deepEqual(VersusState.rankPlayers(scores, "score"), [
+      "b",
+      "c",
+      "a",
+    ]);
+    assert.equal(
+      VersusState.formatGoalDetail(scores.b, "score"),
+      "Score 30"
+    );
+    const timed = {
+      slow: { goalCompleted: true, bestGoalTimeMs: 9000, bestScore: 40 },
+      fast: { goalCompleted: true, bestGoalTimeMs: 4000, bestScore: 30 },
+      none: { goalCompleted: false, bestScore: 50 },
+    };
+    assert.deepEqual(VersusState.rankPlayers(timed, "best25"), [
+      "fast",
+      "slow",
+      "none",
+    ]);
+    assert.equal(
+      VersusState.formatGoalDetail(timed.fast, "best25"),
+      "Best 25 4.00s"
+    );
+  });
 });
 
 describe("versus PLAY_SYNC race", () => {
@@ -334,6 +409,86 @@ describe("versus PLAY_SYNC race", () => {
     c.roster.allowNewRuns = true;
     c.roster.attemptExpired = false;
     assert.equal(c.allowNewRuns(), true);
+  });
+});
+
+describe("HELLO handshake gate", () => {
+  function installMockWs(queue) {
+    const sockets = [];
+    global.WebSocket = function MockWs() {
+      const self = this;
+      this.readyState = 0;
+      this.sent = [];
+      this.onopen = null;
+      this.onmessage = null;
+      this.onerror = null;
+      this.onclose = null;
+      sockets.push(this);
+      queue.push(function open() {
+        self.readyState = 1;
+        if (self.onopen) self.onopen({});
+      });
+    };
+    global.WebSocket.prototype.send = function (data) {
+      this.sent.push(JSON.parse(data));
+    };
+    global.WebSocket.prototype.close = function () {
+      this.readyState = 3;
+      if (this.onclose) this.onclose({ code: 1000, reason: "" });
+    };
+    return sockets;
+  }
+
+  it("resolves only after WELCOME and does not PING before join", async () => {
+    require(path.join(root, "src/shared/protocol.js"));
+    const Client = require(path.join(root, "src/net/client.js"));
+    const ops = [];
+    const sockets = installMockWs(ops);
+    const c = new Client({ url: "ws://test/ws", create: true, displayName: "A" });
+    const p = c.connect();
+    ops[0](); // open
+    assert.equal(sockets[0].sent.length, 1);
+    assert.equal(sockets[0].sent[0].type, "HELLO");
+    assert.equal(c.joined, false);
+    sockets[0].onmessage({
+      data: JSON.stringify({
+        v: 1,
+        type: "WELCOME",
+        seq: 1,
+        payload: { clientId: "c1", roomCode: "ABCD", isAdmin: true },
+      }),
+    });
+    const welcome = await p;
+    assert.equal(welcome.roomCode, "ABCD");
+    assert.equal(c.joined, true);
+    assert.ok(sockets[0].sent.some((m) => m.type === "PING"));
+    c.disconnect();
+  });
+
+  it("rejects on room_not_found and never sends PING", async () => {
+    require(path.join(root, "src/shared/protocol.js"));
+    const Client = require(path.join(root, "src/net/client.js"));
+    const ops = [];
+    const sockets = installMockWs(ops);
+    const c = new Client({
+      url: "ws://test/ws",
+      create: false,
+      roomCode: "DEAD",
+      displayName: "B",
+    });
+    const p = c.connect();
+    ops[0]();
+    sockets[0].onmessage({
+      data: JSON.stringify({
+        v: 1,
+        type: "ERROR",
+        seq: 1,
+        payload: { code: "room_not_found", message: "Room does not exist" },
+      }),
+    });
+    await assert.rejects(p, (err) => err && err.code === "room_not_found");
+    assert.equal(c.joined, false);
+    assert.ok(!sockets[0].sent.some((m) => m.type === "PING"));
   });
 });
 
@@ -367,7 +522,7 @@ describe("coop native inject bridge", () => {
     assert.ok(global.__mpCoopRemotes.other);
     assert.equal(global.__mpCoopSession, true);
     assert.equal(cn.hitsRemote({ x: 5, y: 5 }, "me"), true);
-    assert.equal(cn.hitsRemote({ x: 3, y: 5 }, "me"), false);
+    assert.equal(cn.hitsRemote({ x: 3, y: 5 }, "me"), true);
     assert.equal(typeof global.__mpCoopOnTick, "function");
     assert.equal(typeof global.__mpCoopRenderEnter, "function");
     assert.equal(typeof global.__mpCoopAfterSnakeRender, "function");
@@ -1057,6 +1212,7 @@ describe("versus instant death reset", () => {
     [
       "shared/colors.js",
       "shared/protocol.js",
+      "runtime/bridge.js",
       "session/ready.js",
       "versus/scoreboard.js",
       "coop/state.js",
@@ -1065,6 +1221,8 @@ describe("versus instant death reset", () => {
       "hooks/visibility.js",
       "net/client.js",
       "ui/settingsTab.js",
+      "versus/focus.js",
+      "versus/mosaic.js",
       "mod.js",
     ].forEach(function (rel) {
       const p = require.resolve(path.join(root, "src", rel));
@@ -1110,6 +1268,84 @@ describe("versus instant death reset", () => {
       return { role: "spectator" };
     };
     assert.equal(app.canAutoRestartVersus(), false);
+  });
+
+  it("ATTEMPT_EXPIRED returns admin player to menus (not spectator)", async () => {
+    const MultiplayerApp = loadApp();
+    const Client = global.MultiplayerClient;
+    const Gsm = global.MultiplayerGsm;
+    const origConnect = Client.prototype.connect;
+    Client.prototype.connect = function () {
+      this.connected = true;
+      this.clientId = "admin";
+      this.roster = {
+        mode: "versus",
+        sessionActive: true,
+        allowNewRuns: true,
+        attemptExpired: false,
+        adminId: "admin",
+        clients: [{ clientId: "admin", role: "player" }],
+      };
+      return Promise.resolve();
+    };
+    global.document.getElementById = function () {
+      return null;
+    };
+    const prevShow = Gsm.showDeathScreen;
+    const prevLocked = Gsm.setNativeMenusLocked;
+    const prevPlayLock = Gsm.setPlayButtonLocked;
+    const prevUnlock = Gsm.unlockPersonalMenus;
+    let deathShown = 0;
+    let menusLocked = null;
+    Gsm.showDeathScreen = function () {
+      deathShown++;
+    };
+    Gsm.setNativeMenusLocked = function (locked) {
+      menusLocked = locked;
+    };
+    Gsm.setPlayButtonLocked = function () {};
+    Gsm.unlockPersonalMenus = function () {};
+    try {
+      const app = new MultiplayerApp();
+      app.ui = {
+        mountHud: function () {},
+        updateHud: function () {},
+        updateColorIcon: function () {},
+        renderRoster: function () {},
+        updateRosterScores: function () {},
+      };
+      app.ensureFocusCanvas = function () {};
+      app.updateStatusIndicator = function () {};
+      app.endCoopNativeSession = function () {};
+      app.setCoopAuthorityMode = function () {};
+      await app.connect({});
+      app.client.isAdmin = function () {
+        return true;
+      };
+      app.client.me = function () {
+        return { clientId: "admin", role: "player" };
+      };
+      app._versusFocusSpectate = false;
+      global.__mpVersusFocusSpectate = false;
+      app.client.emit(Protocol.TYPES.ATTEMPT_EXPIRED, {
+        winnerClientId: "admin",
+      });
+      assert.equal(app.versus.expired, true);
+      assert.equal(app.client.roster.attemptExpired, true);
+      assert.equal(app.client.roster.allowNewRuns, false);
+      assert.equal(app.client.roster.sessionActive, false);
+      assert.equal(global.__mpAttemptExpired, true);
+      assert.ok(deathShown >= 1, "death/settings screen shown");
+      assert.equal(menusLocked, false, "admin match menus unlocked");
+      assert.equal(app.canAutoRestartVersus(), false);
+    } finally {
+      Client.prototype.connect = origConnect;
+      Gsm.showDeathScreen = prevShow;
+      Gsm.setNativeMenusLocked = prevLocked;
+      Gsm.setPlayButtonLocked = prevPlayLock;
+      Gsm.unlockPersonalMenus = prevUnlock;
+      delete global.__mpAttemptExpired;
+    }
   });
 
   it("restartVersusAfterDeath calls startNativeRun", async () => {
@@ -1331,3 +1567,142 @@ describe("versus instant death reset", () => {
     }
   });
 });
+
+describe("MultiplayerRuntime bridge", () => {
+  it("enter/leave Focus flips watch without arming the engine inject", () => {
+    global.window = global;
+    const p = require.resolve(path.join(root, "src/runtime/bridge.js"));
+    delete require.cache[p];
+    const Mp = require(path.join(root, "src/runtime/bridge.js"));
+    global.__mpSpectateAllowMenus = true;
+    Mp.enterVersusFocus();
+    assert.equal(global.__mpVersusFocusWatch, true);
+    // gsm's engine inject is gated on __mpVersusFocusSpectate; Focus draws the
+    // board itself, so that gate must stay shut
+    assert.equal(global.__mpVersusFocusSpectate, false);
+    assert.equal(global.__mpSpectateAllowMenus, false);
+    Mp.leaveVersusFocus();
+    assert.equal(global.__mpVersusFocusWatch, false);
+    assert.equal(global.__mpVersusFocusSpectate, false);
+    assert.equal(global.__mpVersusFocusBoard, null);
+  });
+
+  it("escapeHtml neutralizes script-like display names", () => {
+    require(path.join(root, "src/shared/colors.js"));
+    require(path.join(root, "src/session/ready.js"));
+    const uiPath = require.resolve(path.join(root, "src/ui/settingsTab.js"));
+    delete require.cache[uiPath];
+    // settingsTab needs document for ensureStyles — not required for escapeHtml export
+    global.document = global.document || {
+      getElementById: function () {
+        return null;
+      },
+      createElement: function () {
+        return { style: {}, classList: { add: function () {} } };
+      },
+    };
+    require(path.join(root, "src/ui/settingsTab.js"));
+    const esc = global.MultiplayerUI.escapeHtml;
+    assert.ok(typeof esc === "function");
+    const raw = '<img src=x onerror="alert(1)">';
+    const out = esc(raw);
+    assert.equal(out.indexOf("<img"), -1);
+    assert.ok(out.indexOf("&lt;img") >= 0);
+    assert.equal(esc('"&\'<>'), "&quot;&amp;&#39;&lt;&gt;");
+  });
+});
+
+describe("coop phantom walls", () => {
+  function loadNative() {
+    global.window = global;
+    const modPath = require.resolve(path.join(root, "src/coop/native.js"));
+    delete require.cache[modPath];
+    delete global.__mpCoopOnTickInstalled;
+    delete global.__mpCoopRenderInstalled;
+    return require(path.join(root, "src/coop/native.js"));
+  }
+
+  it("stamps remote bodies into the wall grid without peaceful", () => {
+    loadNative();
+    const { CoopNative } = require(path.join(root, "src/coop/native.js"));
+    const cn = new CoopNative();
+    cn.sessionActive = true;
+    cn.injectEnabled = true;
+    cn.myClientId = "me";
+    cn.applySnakeDelta({
+      clientId: "other",
+      body: [
+        { x: 1, y: 0 },
+        { x: 2, y: 0 },
+      ],
+      alive: true,
+    });
+    global.__mpCoopSession = true;
+    global.__mpCoopInject = true;
+    global.__mpCoopMyId = "me";
+    const game = {
+      Ca: { wa: [[0, 0, 0, 0], [0, 0, 0, 0]] },
+      oa: { ka: [{ x: 0, y: 0 }], direction: null },
+      Tb: function () {},
+    };
+    global.__mpCoopOnTick(game);
+    assert.equal(game.Ca.wa[0][1], 1);
+    assert.equal(game.Ca.wa[0][2], 1);
+    assert.equal(game.Ca.wa[0][0], 0);
+  });
+
+  it("yin yang does not stamp remote snakes as walls", () => {
+    loadNative();
+    const { CoopNative } = require(path.join(root, "src/coop/native.js"));
+    const cn = new CoopNative();
+    cn.sessionActive = true;
+    cn.injectEnabled = true;
+    cn.myClientId = "me";
+    cn.applySnakeDelta({
+      clientId: "other",
+      body: [{ x: 1, y: 0 }],
+      alive: true,
+    });
+    global.window = global;
+    global.ModeRegistry = {
+      getCurrentModeKey: function () {
+        return "yin_yang";
+      },
+    };
+    global.__mpCoopSession = true;
+    global.__mpCoopInject = true;
+    const game = {
+      Ca: { wa: [[0, 0, 0]] },
+      oa: { ka: [{ x: 0, y: 0 }] },
+      Tb: function () {},
+    };
+    global.__mpCoopOnTick(game);
+    assert.equal(game.Ca.wa[0][1], 0);
+    delete global.ModeRegistry;
+  });
+
+  it("a peaceful badge on the other snake skips wall stamps", () => {
+    loadNative();
+    const { CoopNative } = require(path.join(root, "src/coop/native.js"));
+    const cn = new CoopNative();
+    cn.sessionActive = true;
+    cn.injectEnabled = true;
+    cn.myClientId = "me";
+    cn.applySnakeDelta({
+      clientId: "other",
+      body: [{ x: 1, y: 0 }],
+      alive: true,
+      peaceful: true,
+    });
+    global.__mpCoopSession = true;
+    global.__mpCoopInject = true;
+    const game = {
+      Ca: { wa: [[0, 0, 0]] },
+      oa: { ka: [{ x: 0, y: 0 }] },
+      Tb: function () {},
+    };
+    global.__mpCoopOnTick(game);
+    assert.equal(game.Ca.wa[0][1], 0);
+  });
+});
+

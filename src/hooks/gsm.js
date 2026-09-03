@@ -132,23 +132,54 @@
     return out;
   }
 
+  /**
+   * Remix keys every custom mode (Burger/Chess/Cat/Bomb/Slot/…) off
+   * window.CurrentModeNum, which the native menu only assigns from its own
+   * `case "trophy":` handler on a real interaction. Programmatic applies
+   * (Start match, SETTINGS_SYNC, Focus menu sync) bypass that handler, so the
+   * mode number stays stale.
+   *
+   * That matters most on the first run of the page: mode predicates such as
+   * isBurgerActive() fall back to __remixGame.settings.ub, but __remixGame is
+   * only assigned from tick() — and the apple manager reset runs before the
+   * first tick. With a stale mode number Burger reads as inactive there, so
+   * native Poison pairs half the board (l4E) before Burger arms its timers.
+   */
+  function syncCurrentModeNum(idx) {
+    if (typeof root.CurrentModeNum !== "number") return;
+    const n = Number(idx);
+    if (!Number.isFinite(n) || root.CurrentModeNum === n) return;
+    root.CurrentModeNum = n;
+    // Mirror the native handler's deferred trophy/SpeedInfo refresh
+    try {
+      if (typeof root.getAllSrc === "function") {
+        const p = root.getAllSrc();
+        if (p && typeof p.catch === "function") p.catch(function () {});
+      }
+    } catch (e) { /* ignore */ }
+  }
+
   function selectMenu(key, idx) {
+    function done() {
+      if (key === "trophy") syncCurrentModeNum(idx);
+      return true;
+    }
     if (typeof root.puddingMenuSelect === "function") {
       try {
-        if (root.puddingMenuSelect(key, idx) === true) return true;
+        if (root.puddingMenuSelect(key, idx) === true) return done();
       } catch (e) {
         console.warn("puddingMenuSelect failed", key, e);
       }
     }
     if (typeof root.clickGameSettingIndex === "function") {
       try {
-        if (root.clickGameSettingIndex(key, idx) === true) return true;
+        if (root.clickGameSettingIndex(key, idx) === true) return done();
       } catch (e) { /* fall through */ }
     }
     const row = document.getElementById(key);
     if (row && row.children && row.children[idx] && typeof row.children[idx].click === "function") {
       row.children[idx].click();
-      return true;
+      return done();
     }
     return false;
   }
@@ -377,6 +408,10 @@
     closeSettingsPanel();
     clearDeathOverlayOverrides();
     setLocalPaused(false);
+    // Settings restored from storage (or already matching a SETTINGS_SYNC) never
+    // pass through the native trophy handler, so reconcile before Play instead of
+    // only when we change the row — mode predicates read this at apple reset.
+    syncCurrentModeNum(readSettingIndex("trophy"));
   }
 
   /**
@@ -489,11 +524,53 @@
     return { score: score, timeMs: timeMs, alive: alive };
   }
 
-  function mapBody(arr) {
+  /**
+   * Dimension mode tracks the snake's dimension per segment in `snake.wa`, an
+   * array parallel to `snake.ka` — the body points themselves carry no `Lh`.
+   * A truthy flag means that segment sits in the dimension the board is
+   * currently showing; falsy means the engine fades it to the ghost alpha.
+   *
+   * Both arrays are kept in step: a normal step unshifts `true`, a step through
+   * a portal unshifts `false`, the tail pops off both, and a swap inverts every
+   * flag at once. So after a portal the head leads a solid run while the tail
+   * drains out as a ghost run, which is the split mosaic has to draw.
+   */
+  function snakeDimFlags(snake) {
+    if (!snake) return null;
+    const flags = snake.wa;
+    if (!Array.isArray(flags) || !flags.length) return null;
+    // Board occupancy grids also live on a `wa` — those are arrays of rows
+    if (Array.isArray(flags[0])) return null;
+    if (!boardHasMode({ modeKey: scrapeModeKey() }, "dimension")) return null;
+    return flags;
+  }
+
+  function mapBody(arr, dimFlags) {
     if (!Array.isArray(arr)) return [];
-    return arr.map(function (p) {
+    const dims = Array.isArray(dimFlags) ? dimFlags : null;
+    return arr.map(function (p, i) {
       if (!p) return { x: 0, y: 0 };
-      return { x: p.x != null ? p.x : 0, y: p.y != null ? p.y : 0 };
+      const pt = p.pos && (p.pos.x != null || p.pos.y != null) ? p.pos : p;
+      const out = {
+        x: pt.x != null ? pt.x : 0,
+        y: pt.y != null ? pt.y : 0,
+      };
+      if (dims && i < dims.length) {
+        if (!dims[i]) out.otherDim = true;
+        return out;
+      }
+      // No flag array (spectator inject, replayed pose): fall back to a tag on
+      // the point itself, the way every other entity carries it.
+      const lh =
+        p.Lh != null
+          ? p.Lh
+          : p.Gh != null
+            ? p.Gh
+            : pt.Lh != null
+              ? pt.Lh
+              : pt.Gh;
+      if (lh === false || p.otherDim) out.otherDim = true;
+      return out;
     });
   }
 
@@ -653,41 +730,209 @@
       const pos = (a && a.pos) || a || {};
       let type = null;
       let poison = false;
+      let shields = null;
       if (a) {
         if (a.type != null) type = a.type;
         else if (a.kind != null) type = a.kind;
         else if (a.Xa != null) type = a.Xa;
         else if (a.oa != null && typeof a.oa !== "object") type = a.oa;
         if (a.Oka || a.nla || a.poison) poison = true;
+        // Shield mode: nba is a Set of directions covering that fruit
+        const nba = a.nba;
+        if (nba && typeof nba.has === "function") {
+          const dirs = [];
+          ["UP", "DOWN", "LEFT", "RIGHT"].forEach(function (d) {
+            try {
+              if (nba.has(d)) dirs.push(d);
+            } catch (eDir) { /* ignore */ }
+          });
+          if (dirs.length) shields = dirs;
+        } else if (Array.isArray(nba) && nba.length) {
+          shields = nba.map(String);
+        } else if (Array.isArray(a.shields) && a.shields.length) {
+          shields = a.shields.map(String);
+        }
+      }
+      // Chess mode: piece identity sits on the fruit object
+      let isPiece = undefined;
+      let chessPiece = undefined; // "pawn" | "knight" | "bishop" | "rook" | "queen" | "king"
+      let chessColor = undefined; // "w" | "b"
+      if (a.isPiece) {
+        isPiece = true;
+        if (a.ChessPiece) chessPiece = String(a.ChessPiece);
+        if (a.ChessColor) chessColor = String(a.ChessColor);
+      }
+      // Slot Machine: the mode badge this fruit activates when eaten. Native
+      // badges only ordinary fruit — never poison hazards or chess pieces.
+      let slotMode = undefined;
+      if (a && a.slotMode != null && !isPiece && !poison) {
+        const sm = Number(a.slotMode);
+        if (Number.isFinite(sm)) slotMode = sm | 0;
       }
       return {
         x: pos.x != null ? pos.x : 0,
         y: pos.y != null ? pos.y : 0,
         type: type,
         poison: poison || undefined,
+        shields: shields || undefined,
+        isPiece: isPiece,
+        chessPiece: chessPiece,
+        chessColor: chessColor,
+        slotMode: slotMode,
+        // Light mode: apple.light radius in tiles (native spawn 1.5, decays)
+        light:
+          a.light != null && Number.isFinite(Number(a.light))
+            ? Number(a.light)
+            : undefined,
+        // Burger: ticks until this fruit rots into poison
+        burgerTimer:
+          a.burgerTimer != null && Number.isFinite(Number(a.burgerTimer))
+            ? Number(a.burgerTimer) | 0
+            : undefined,
+        burgerTimerMax:
+          a.burgerTimerMax != null && Number.isFinite(Number(a.burgerTimerMax))
+            ? Number(a.burgerTimerMax) | 0
+            : undefined,
+        burgerGrey:
+          a.burgerGrey != null && Number.isFinite(Number(a.burgerGrey))
+            ? Number(a.burgerGrey)
+            : undefined,
+        // Dimension: Lh/Gh false = other dimension (ghost fruit)
+        otherDim:
+          a.Lh === false || a.Gh === false || a.otherDim
+            ? true
+            : undefined,
       };
     });
   }
 
-  /** Collect grid points from array or {x,y} map-like structures. */
+  /**
+   * Bomb Fruit danger zones. Native tracks these per cell rather than per fruit
+   * (window.__bombFruitZones), so a fruit only ever plants a zone and eating or
+   * moving it leaves the zone behind — the mosaic has to read the zone list too.
+   * arm -1 is an idle dashed ring; >= 0 is an armed countdown toward the boom.
+   */
+  function scrapeBombZones() {
+    const out = [];
+    let list = null;
+    try {
+      if (typeof root.bombFruit_zones === "function") {
+        list = root.bombFruit_zones();
+      }
+    } catch (eFn) { /* ignore */ }
+    if (!Array.isArray(list)) list = root.__bombFruitZones;
+    if (!Array.isArray(list)) return out;
+    for (let i = 0; i < list.length; i++) {
+      const z = list[i];
+      if (!z || z.x == null || z.y == null) continue;
+      const x = Number(z.x);
+      const y = Number(z.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      out.push({
+        x: x | 0,
+        y: y | 0,
+        arm: z.bombX1a != null ? Number(z.bombX1a) | 0 : -1,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Native light radii live on snake.Aa/Ba.light (floor 2) and apple.light
+   * (spawn 1.5). Other entities stamp ~1-tile mask blobs.
+   */
+  function scrapeSnakeLights(g) {
+    const out = { headLight: null, headLight2: null };
+    const snake = g && g.oa;
+    if (!snake) return out;
+    function readLight(host) {
+      if (!host || host.light == null) return null;
+      const n = Number(host.light);
+      return Number.isFinite(n) ? n : null;
+    }
+    try {
+      const a = readLight(snake.Aa);
+      if (a != null) out.headLight = a;
+      else {
+        const s = readLight(snake);
+        if (s != null) out.headLight = s;
+      }
+    } catch (eA) { /* ignore */ }
+    try {
+      const b = readLight(snake.Ba);
+      if (b != null) out.headLight2 = b;
+    } catch (eB) { /* ignore */ }
+    return out;
+  }
+
+  /** Push one {x,y[,…]} from a host value into out (returns true if added). */
+  function pushMappedPoint(out, p, extra) {
+    if (!p) return false;
+    const pos = p.pos || p;
+    if (pos.x == null || pos.y == null) return false;
+    const pt = { x: Number(pos.x), y: Number(pos.y) };
+    if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return false;
+    if (extra) {
+      Object.keys(extra).forEach(function (k) {
+        if (extra[k] != null) pt[k] = extra[k];
+      });
+    }
+    out.push(pt);
+    return true;
+  }
+
+  /**
+   * Collect grid points from arrays, Maps, Sets, or 2D grids.
+   * Native hosts often use Map/Set (Aa.oa boxes, Ya.oa statues, Ca.Aa walls).
+   */
   function mapPointList(src) {
     const out = [];
     if (!src) return out;
     if (Array.isArray(src)) {
+      // Either [{pos}|{x,y}, …] or a 2D numeric/truthy grid
+      let looks2d = src.length > 0 && Array.isArray(src[0]);
+      if (looks2d) {
+        for (let y = 0; y < src.length; y++) {
+          const row = src[y];
+          if (!row) continue;
+          for (let x = 0; x < row.length; x++) {
+            const cell = row[x];
+            if (cell && typeof cell === "object" && (cell.x != null || cell.pos)) {
+              pushMappedPoint(out, cell);
+            } else if (cell) {
+              // Numeric wall grids: 0/3 = empty (native y4E)
+              const v = cell | 0;
+              if (typeof cell === "number" && (v === 0 || v === 3)) continue;
+              out.push({ x: x, y: y });
+            }
+          }
+        }
+        return out;
+      }
       src.forEach(function (p) {
-        if (!p) return;
-        const pos = p.pos || p;
-        if (pos.x == null || pos.y == null) return;
-        out.push({ x: pos.x, y: pos.y });
+        pushMappedPoint(out, p);
       });
       return out;
     }
     if (typeof src !== "object") return out;
+    // Map / Set
+    if (typeof src.forEach === "function" && src.size != null) {
+      try {
+        src.forEach(function (p) {
+          pushMappedPoint(out, p);
+        });
+        if (out.length) return out;
+      } catch (eIter) { /* fall through */ }
+    }
     Object.keys(src).forEach(function (k) {
       const p = src[k];
       if (!p) return;
       if (p.x != null && p.y != null) {
         out.push({ x: p.x, y: p.y });
+        return;
+      }
+      if (p.pos && p.pos.x != null) {
+        pushMappedPoint(out, p);
         return;
       }
       // 2D grid: src[y][x] truthy
@@ -701,8 +946,292 @@
   }
 
   /**
-   * Extra board entities beyond fruit (walls, keys, mines, …) for co-op sync.
-   * Best-effort against obfuscated engine fields — missing hosts are skipped.
+   * Normal wall-mode spawns never land in the 2×2 at each board corner
+   * (escape routes for border fruit). Temp walls / keyblocks / hotdog may.
+   */
+  function isIllegalNormalWallCell(x, y, width, height) {
+    const xi = Number(x);
+    const yi = Number(y);
+    const w = Number(width);
+    const h = Number(height);
+    if (!Number.isFinite(xi) || !Number.isFinite(yi)) return true;
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w < 2 || h < 2) return false;
+    const left = xi <= 1;
+    const right = xi >= w - 2;
+    const top = yi <= 1;
+    const bottom = yi >= h - 2;
+    return (left && top) || (right && top) || (left && bottom) || (right && bottom);
+  }
+
+  /** Drop phantom corner walls from scrape/mosaic; keep temp/lock/hotdog. */
+  function filterMosaicWalls(walls, width, height) {
+    if (!walls || !walls.length) return walls || [];
+    const w = width != null ? width : 17;
+    const h = height != null ? height : 15;
+    const out = [];
+    for (let i = 0; i < walls.length; i++) {
+      const p = walls[i];
+      if (!p) continue;
+      if (p.temp || p.__tempWall || p.lock || p.hotdog) {
+        out.push(p);
+        continue;
+      }
+      if (isIllegalNormalWallCell(p.x, p.y, w, h)) continue;
+      out.push(p);
+    }
+    return out;
+  }
+
+  /** Walls with lock/hotdog metadata from Ca.Aa Map or Ca.wa grid. */
+  function scrapeWalls(g) {
+    const out = [];
+    const wallHost = g && g.Ca;
+    if (!wallHost) return out;
+    const bw =
+      (g && g.settings && (g.settings.width || g.settings.boardWidth)) ||
+      (g && g.width) ||
+      null;
+    const bh =
+      (g && g.settings && (g.settings.height || g.settings.boardHeight)) ||
+      (g && g.height) ||
+      null;
+    try {
+      const aa = wallHost.Aa;
+      if (aa && typeof aa.forEach === "function") {
+        aa.forEach(function (w) {
+          if (!w) return;
+          const pos = w.pos || w;
+          if (pos.x == null || pos.y == null) return;
+          const lockType =
+            w.yNa != null && Number(w.yNa) >= 0
+              ? Math.max(0, Math.min(23, Number(w.yNa) | 0))
+              : w.XNa != null && Number(w.XNa) >= 0
+                ? Math.max(0, Math.min(23, Number(w.XNa) | 0))
+                : null;
+          out.push({
+            x: Number(pos.x),
+            y: Number(pos.y),
+            lock: lockType != null ? true : undefined,
+            lockType: lockType,
+            hotdog: !!(w.ty || w.ez) || undefined,
+            temp: !!(w.__tempWall || w.temp) || undefined,
+          });
+        });
+        if (out.length) {
+          return filterMosaicWalls(out, bw, bh);
+        }
+      }
+    } catch (eAa) { /* ignore */ }
+    try {
+      const wa = wallHost.wa || wallHost.oa;
+      if (wa) {
+        // Grid fallback often marks corner sentinels — never treat those as walls
+        return filterMosaicWalls(mapPointList(wa), bw, bh);
+      }
+    } catch (eWa) { /* ignore */ }
+    return out;
+  }
+
+  /** Keys with fruit type + marked keyblock cell (r7a). Type 0–23 matches key_types sheet. */
+  function scrapeKeys(g) {
+    const out = [];
+    const keys = g && g.Ba && g.Ba.keys;
+    if (!keys) return out;
+    const list = Array.isArray(keys) ? keys : [];
+    for (let i = 0; i < list.length; i++) {
+      const k = list[i];
+      if (!k) continue;
+      const pos = k.pos || k;
+      if (pos.x == null || pos.y == null) continue;
+      const pt = { x: Number(pos.x), y: Number(pos.y) };
+      let type = k.type;
+      if (type == null) type = k.yNa;
+      if (type != null && Number.isFinite(Number(type))) {
+        pt.type = Math.max(0, Math.min(23, Number(type) | 0));
+      }
+      const block = k.r7a || k.keyblock || k.lockPos;
+      if (block && block.x != null && block.y != null) {
+        pt.keyblock = {
+          x: Number(block.x),
+          y: Number(block.y),
+          type: pt.type,
+        };
+      }
+      out.push(pt);
+    }
+    return out;
+  }
+
+  /** Minesweeper flags (+ xL when present for fade state). */
+  function scrapeMines(g) {
+    const out = [];
+    const host = g && g.Ma && (g.Ma.oa || g.Ma.ka);
+    if (!host) return out;
+    function add(m) {
+      if (!m) return;
+      const pos = m.pos || m;
+      if (pos.x == null || pos.y == null) return;
+      const pt = { x: Number(pos.x), y: Number(pos.y) };
+      if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return;
+      if (m.xL != null && Number.isFinite(Number(m.xL))) {
+        pt.xL = Number(m.xL);
+      }
+      if (m.Lh === false || m.Gh === false) pt.otherDim = true;
+      out.push(pt);
+    }
+    try {
+      if (typeof host.forEach === "function" && host.size != null) {
+        host.forEach(add);
+        return out;
+      }
+    } catch (e) { /* ignore */ }
+    if (Array.isArray(host)) {
+      for (let i = 0; i < host.length; i++) add(host[i]);
+    }
+    return out;
+  }
+  /** Statues; cracked comes from WQ.pdb (native / Ultra place). */
+  function scrapeStatues(g) {
+    const out = [];
+    const host = g && g.Ya && (g.Ya.oa || g.Ya.ka);
+    if (!host) return out;
+    function statueIsCracked(st) {
+      if (!st) return false;
+      if (st.cracked || st.broken || st.crack) return true;
+      if (st.hits != null && Number(st.hits) > 0) return true;
+      const wq = st.WQ;
+      if (wq && (wq.pdb === true || wq.pdb === 1 || wq.pdb === "1")) {
+        return true;
+      }
+      return false;
+    }
+    function add(st) {
+      if (!st) return;
+      const pos = st.pos || st;
+      if (pos.x == null || pos.y == null) return;
+      const pt = {
+        x: Number(pos.x),
+        y: Number(pos.y),
+      };
+      if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return;
+      const wq = st.WQ;
+      const angle =
+        st.angle != null
+          ? Number(st.angle)
+          : wq && wq.angle != null
+            ? Number(wq.angle)
+            : NaN;
+      if (Number.isFinite(angle)) pt.angle = angle;
+      if (statueIsCracked(st)) pt.cracked = true;
+      if (st.Lh === false || st.Gh === false) pt.otherDim = true;
+      out.push(pt);
+    }
+    try {
+      if (typeof host.forEach === "function" && host.size != null) {
+        host.forEach(add);
+        return out;
+      }
+    } catch (e) { /* ignore */ }
+    if (Array.isArray(host)) {
+      for (let i = 0; i < host.length; i++) add(host[i]);
+    }
+    return out;
+  }
+
+  /** Arrow mode tiles: Ka.ka[y][x].direction (or Rb fallback). */
+  function scrapeArrows(g) {
+    const out = [];
+    if (!g) return out;
+    let host = null;
+    try {
+      if (typeof root.slot_arrow_host === "function") {
+        host = root.slot_arrow_host(g);
+      }
+    } catch (eSlot) { /* ignore */ }
+    if (!host) {
+      if (g.Ka && Array.isArray(g.Ka.ka)) host = g.Ka;
+      else if (
+        g.Rb &&
+        Array.isArray(g.Rb.ka) &&
+        g.Rb.ka[0] &&
+        g.Rb.ka[0][0] &&
+        "direction" in g.Rb.ka[0][0]
+      ) {
+        host = g.Rb;
+      }
+    }
+    const ka = host && host.ka;
+    if (!ka) return out;
+    for (let y = 0; y < ka.length; y++) {
+      const row = ka[y];
+      if (!row) continue;
+      for (let x = 0; x < row.length; x++) {
+        const cell = row[x];
+        if (!cell || !cell.direction || cell.direction === "NONE") continue;
+        const pt = { x: x, y: y, dir: String(cell.direction) };
+        if (cell.color && typeof cell.color === "string") pt.color = cell.color;
+        out.push(pt);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Companion body for Twin / Yin Yang.
+   * Twin: only a real second ka (same-color twin) — never invent a mirror.
+   * Yin Yang: prefer real second ka; else mirror across center (native j7).
+   */
+  function scrapeCompanionBody(g, primaryBody, width, height) {
+    const mode = scrapeModeKey();
+    const isYy = boardHasMode({ modeKey: mode }, "yin_yang");
+    const isTwin = boardHasMode({ modeKey: mode }, "twin");
+    if (!isYy && !isTwin) return null;
+    const candidates = [];
+    try {
+      if (g && g.Ra && g.Ra.ka) candidates.push(g.Ra.ka);
+      if (g && g.oa && g.oa.Ra && g.oa.Ra.ka) candidates.push(g.oa.Ra.ka);
+      // Avoid fruit / board hosts — only snake-like Ras
+      if (g && g.oa && g.oa.Sa && g.oa.Sa.ka && g.oa.Sa !== g.wa && g.oa.Sa !== g.oa) {
+        candidates.push(g.oa.Sa.ka);
+      }
+    } catch (eCand) { /* ignore */ }
+    const primary = primaryBody || [];
+    const p0 = primary[0];
+    // Twin bodies are index-aligned with the primary, so they share its flags
+    const dims = snakeDimFlags(g && g.oa);
+    for (let i = 0; i < candidates.length; i++) {
+      const mapped = mapBody(candidates[i], dims);
+      if (!mapped || !mapped.length) continue;
+      // Skip if identical to primary (wrong host)
+      if (
+        p0 &&
+        mapped[0] &&
+        Number(mapped[0].x) === Number(p0.x) &&
+        Number(mapped[0].y) === Number(p0.y) &&
+        mapped.length === primary.length
+      ) {
+        continue;
+      }
+      return mapped;
+    }
+    // Yin Yang only: geometric mirror fallback
+    if (!isYy) return null;
+    if (!primary.length) return null;
+    const w = width || 17;
+    const h = height || 15;
+    return primary.map(function (p) {
+      const out = {
+        x: w - 1 - Number(p.x),
+        y: h - 1 - Number(p.y),
+      };
+      if (p.otherDim) out.otherDim = true;
+      return out;
+    });
+  }
+
+  /**
+   * Extra board entities beyond fruit (walls, keys, mines, …) for co-op sync
+   * and versus mosaic. Best-effort against obfuscated engine fields.
    */
   function scrapeBoardEntities(g) {
     g = g || gameInstance();
@@ -715,16 +1244,16 @@
       statues: [],
       bridges: [],
       gates: [],
+      arrows: [],
+      bombZones: [],
+      headLight: null,
     };
     if (!g) return entities;
     try {
-      const wallHost = g.Ca;
-      if (wallHost) {
-        entities.walls = mapPointList(wallHost.Aa || wallHost.wa || wallHost.oa);
-      }
+      entities.walls = scrapeWalls(g);
     } catch (e) { /* ignore */ }
     try {
-      if (g.Ba && g.Ba.keys) entities.keys = mapPointList(g.Ba.keys);
+      entities.keys = scrapeKeys(g);
     } catch (e) { /* ignore */ }
     try {
       if (g.Aa) {
@@ -733,18 +1262,108 @@
       }
     } catch (e) { /* ignore */ }
     try {
-      if (g.Ma) entities.mines = mapPointList(g.Ma.oa || g.Ma.ka);
+      entities.mines = scrapeMines(g);
     } catch (e) { /* ignore */ }
     try {
-      if (g.Ya) entities.statues = mapPointList(g.Ya.oa || g.Ya.ka);
+      entities.statues = scrapeStatues(g);
     } catch (e) { /* ignore */ }
     try {
-      if (g.Ga) entities.bridges = mapPointList(g.Ga.oa);
+      entities.bridges = scrapeBridges(g);
     } catch (e) { /* ignore */ }
     try {
-      if (g.Qa) entities.gates = mapPointList(g.Qa.pfa || g.Qa.Yfa || g.Qa.oa);
+      entities.gates = scrapeGates(g);
     } catch (e) { /* ignore */ }
+    try {
+      entities.arrows = scrapeArrows(g);
+    } catch (e) { /* ignore */ }
+    try {
+      entities.bombZones = scrapeBombZones();
+    } catch (eZ) { /* ignore */ }
+    try {
+      const lights = scrapeSnakeLights(g);
+      entities.headLight =
+        lights && lights.headLight != null ? lights.headLight : null;
+    } catch (eL) { /* ignore */ }
     return entities;
+  }
+
+  /** Gate mode: Qa.pfa / Qa.Yfa entries use Upa (2×2 corner) + vertical. */
+  function scrapeGates(g) {
+    const out = [];
+    const qa = g && g.Qa;
+    if (!qa) return out;
+    const seen = Object.create(null);
+    function addList(list) {
+      if (!list) return;
+      const arr = Array.isArray(list) ? list : [];
+      for (let i = 0; i < arr.length; i++) {
+        const gate = arr[i];
+        if (!gate) continue;
+        const pos = gate.Upa || gate.pos || gate;
+        if (pos.x == null || pos.y == null) continue;
+        const x = Number(pos.x);
+        const y = Number(pos.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const pt = {
+          x: x,
+          y: y,
+          // Native gates occupy Upa..(Upa+1) on both axes
+          w: 2,
+          h: 2,
+        };
+        if (gate.vertical === true || gate.vertical === 1 || gate.ori === "v") {
+          pt.vertical = true;
+        } else if (
+          gate.vertical === false ||
+          gate.vertical === 0 ||
+          gate.ori === "h"
+        ) {
+          pt.vertical = false;
+        }
+        // A corner can carry one gate per axis — key on orientation too
+        const key = x + "," + y + (pt.vertical ? "v" : "h");
+        if (seen[key]) continue;
+        seen[key] = 1;
+        // Native tints each gate off the theme, so send its own colour
+        if (typeof gate.color === "string" && gate.color) pt.color = gate.color;
+        if (gate.Lh === false || gate.Gh === false || gate.Aj === false) {
+          pt.otherDim = true;
+        }
+        out.push(pt);
+      }
+    }
+    try {
+      addList(qa.pfa);
+      addList(qa.Yfa);
+      // Older dumps / tests may still use oa with .pos
+      if (!out.length) addList(qa.oa);
+    } catch (e) { /* ignore */ }
+    return out;
+  }
+
+  /** Bridge mode: Ga.oa[y][x] = { color, wm, Lh } or empty. */
+  function scrapeBridges(g) {
+    const out = [];
+    const grid = g && g.Ga && g.Ga.oa;
+    if (!grid || !Array.isArray(grid)) return out;
+    for (let y = 0; y < grid.length; y++) {
+      const row = grid[y];
+      if (!row) continue;
+      for (let x = 0; x < row.length; x++) {
+        const cell = row[x];
+        if (!cell) continue;
+        if (typeof cell === "number" && !(cell | 0)) continue;
+        const pt = { x: x, y: y };
+        if (cell && typeof cell === "object") {
+          if (typeof cell.color === "string" && cell.color) {
+            pt.color = cell.color;
+          }
+          if (cell.Lh === false || cell.Gh === false) pt.otherDim = true;
+        }
+        out.push(pt);
+      }
+    }
+    return out;
   }
 
   /** Apply entity point lists onto known hosts when present (non-destructive). */
@@ -753,13 +1372,25 @@
     const g = gameInstance();
     if (!g) return false;
     let applied = false;
+    const meta =
+      (g.wa && g.wa.oa && g.wa.oa.oa) ||
+      (g.oa && g.oa.oa) ||
+      {};
+    const bw = firstNumber(meta.width, meta.W, 17) || 17;
+    const bh = firstNumber(meta.height, meta.H, 15) || 15;
+
     function writeList(hostArr, list) {
       if (!Array.isArray(hostArr) || !Array.isArray(list)) return;
       let templatePos = null;
+      let templateObj = null;
       for (let t = 0; t < hostArr.length; t++) {
-        const p = hostArr[t] && hostArr[t].pos;
+        const item = hostArr[t];
+        if (!item) continue;
+        if (!templateObj) templateObj = item;
+        const p = item.pos;
         if (p && typeof p.clone === "function") {
           templatePos = p;
+          templateObj = item;
           break;
         }
       }
@@ -768,7 +1399,16 @@
         const src = list[i];
         let dst = hostArr[i];
         if (!dst) {
-          dst = { pos: makeNativePoint(src.x, src.y, templatePos) };
+          dst = {};
+          if (templateObj) {
+            try {
+              Object.keys(templateObj).forEach(function (k) {
+                if (k === "pos") return;
+                dst[k] = templateObj[k];
+              });
+            } catch (eCopy) { /* ignore */ }
+          }
+          dst.pos = makeNativePoint(src.x, src.y, templatePos);
           hostArr[i] = dst;
         } else if (dst.pos || templatePos) {
           dst.pos = ensureNativePos(dst.pos, src.x, src.y, templatePos);
@@ -783,32 +1423,236 @@
             hostArr[i] = makeNativePoint(src.x, src.y, null);
           }
         }
+        paintEntityFields(hostArr[i], src);
       }
       applied = true;
     }
+
+    function writeMap(map, list) {
+      if (!map || typeof map.clear !== "function" || !Array.isArray(list)) {
+        return;
+      }
+      let template = null;
+      try {
+        map.forEach(function (v) {
+          if (!template && v) template = v;
+        });
+      } catch (eT) { /* ignore */ }
+      try {
+        map.clear();
+        for (let i = 0; i < list.length; i++) {
+          const src = list[i];
+          const obj = {};
+          if (template) {
+            try {
+              Object.keys(template).forEach(function (k) {
+                if (k === "pos") return;
+                obj[k] = template[k];
+              });
+            } catch (eC) { /* ignore */ }
+          }
+          obj.pos = makeNativePoint(
+            src.x,
+            src.y,
+            template && template.pos
+          );
+          paintEntityFields(obj, src);
+          const key =
+            typeof map.set === "function"
+              ? src.x + "," + src.y
+              : obj;
+          if (typeof map.set === "function") map.set(key, obj);
+          else if (typeof map.add === "function") map.add(obj);
+        }
+        applied = true;
+      } catch (eM) { /* ignore */ }
+    }
+
+    function paintEntityFields(dst, src) {
+      if (!dst || !src) return;
+      if (src.type != null) {
+        dst.type = src.type;
+        dst.yNa = src.type;
+      }
+      if (src.lockType != null) {
+        dst.yNa = src.lockType;
+        dst.XNa = src.lockType;
+      }
+      if (src.lock) dst.lock = true;
+      if (src.hotdog) {
+        dst.ty = true;
+        dst.ez = true;
+        dst.hotdog = true;
+      }
+      if (src.temp) dst.temp = true;
+      if (src.cracked) {
+        dst.cracked = true;
+        if (!dst.WQ || typeof dst.WQ !== "object") dst.WQ = {};
+        dst.WQ.pdb = true;
+      }
+      if (src.angle != null && Number.isFinite(Number(src.angle))) {
+        dst.angle = Number(src.angle);
+      }
+      if (src.otherDim) {
+        dst.Lh = false;
+        dst.Gh = false;
+      }
+      if (src.keyblock && src.keyblock.x != null) {
+        dst.r7a = makeNativePoint(src.keyblock.x, src.keyblock.y, dst.r7a);
+        if (src.keyblock.type != null) dst.r7a.type = src.keyblock.type;
+      }
+      if (src.xL != null) dst.xL = src.xL;
+      if (src.color) dst.color = src.color;
+      if (src.vertical != null) dst.vertical = !!src.vertical;
+    }
+
+    function writeNumericGrid(grid, list, emptyVal, solidVal) {
+      if (!grid || !Array.isArray(grid) || !Array.isArray(list)) return;
+      for (let y = 0; y < grid.length; y++) {
+        const row = grid[y];
+        if (!row) continue;
+        for (let x = 0; x < row.length; x++) {
+          if (typeof row[x] === "number" || row[x] == null) {
+            row[x] = emptyVal;
+          }
+        }
+      }
+      for (let i = 0; i < list.length; i++) {
+        const p = list[i];
+        if (!p) continue;
+        const x = p.x | 0;
+        const y = p.y | 0;
+        if (!grid[y] || x < 0 || x >= grid[y].length) continue;
+        if (typeof grid[y][x] === "object" && grid[y][x]) {
+          continue;
+        }
+        grid[y][x] = solidVal;
+      }
+      applied = true;
+    }
+
     try {
-      if (g.Ba && Array.isArray(g.Ba.keys) && entities.keys) {
-        writeList(g.Ba.keys, entities.keys);
+      if (entities.walls) {
+        if (g.Ca && Array.isArray(g.Ca.wa) && g.Ca.wa.length) {
+          writeNumericGrid(g.Ca.wa, entities.walls, 0, 1);
+        }
+        if (g.Ca && g.Ca.Aa && typeof g.Ca.Aa.forEach === "function") {
+          writeMap(g.Ca.Aa, entities.walls);
+        }
+      }
+    } catch (eW) { /* ignore */ }
+    try {
+      if (g.Ba && entities.keys) {
+        if (Array.isArray(g.Ba.keys)) writeList(g.Ba.keys, entities.keys);
+        else if (g.Ba.keys && g.Ba.keys.forEach) writeMap(g.Ba.keys, entities.keys);
       }
     } catch (e) { /* ignore */ }
     try {
-      if (g.Aa && Array.isArray(g.Aa.oa) && entities.boxes) {
-        writeList(g.Aa.oa, entities.boxes);
+      if (g.Aa && entities.boxes) {
+        if (Array.isArray(g.Aa.oa)) writeList(g.Aa.oa, entities.boxes);
+        else if (g.Aa.oa && g.Aa.oa.forEach) writeMap(g.Aa.oa, entities.boxes);
       }
-      if (g.Aa && Array.isArray(g.Aa.d_) && entities.goals) {
-        writeList(g.Aa.d_, entities.goals);
+      if (g.Aa && entities.goals) {
+        const gh = g.Aa.d_ || g.Aa.da;
+        if (Array.isArray(g.Aa.d_)) writeList(g.Aa.d_, entities.goals);
+        else if (Array.isArray(g.Aa.da)) writeList(g.Aa.da, entities.goals);
+        else if (gh && gh.forEach) writeMap(gh, entities.goals);
       }
     } catch (e) { /* ignore */ }
     try {
-      if (g.Ma && Array.isArray(g.Ma.oa) && entities.mines) {
-        writeList(g.Ma.oa, entities.mines);
+      if (g.Ma && entities.mines) {
+        const mh = g.Ma.oa || g.Ma.ka;
+        if (Array.isArray(mh)) writeList(mh, entities.mines);
+        else if (mh && mh.forEach) writeMap(mh, entities.mines);
       }
     } catch (e) { /* ignore */ }
     try {
-      if (g.Ya && Array.isArray(g.Ya.oa) && entities.statues) {
-        writeList(g.Ya.oa, entities.statues);
+      if (g.Ya && entities.statues) {
+        const sh = g.Ya.oa || g.Ya.ka;
+        if (Array.isArray(sh)) writeList(sh, entities.statues);
+        else if (sh && sh.forEach) writeMap(sh, entities.statues);
       }
     } catch (e) { /* ignore */ }
+    try {
+      if (entities.bridges && g.Ga && Array.isArray(g.Ga.oa)) {
+        const grid = g.Ga.oa;
+        for (let y = 0; y < grid.length; y++) {
+          const row = grid[y];
+          if (!row) continue;
+          for (let x = 0; x < row.length; x++) row[x] = null;
+        }
+        for (let i = 0; i < entities.bridges.length; i++) {
+          const p = entities.bridges[i];
+          if (!p || !grid[p.y | 0]) continue;
+          const cell = { color: p.color || "#578a34" };
+          if (p.otherDim) {
+            cell.Lh = false;
+            cell.Gh = false;
+          }
+          grid[p.y | 0][p.x | 0] = cell;
+        }
+        applied = true;
+      }
+    } catch (eB) { /* ignore */ }
+    try {
+      if (entities.arrows) {
+        let host = g.Ka && Array.isArray(g.Ka.ka) ? g.Ka : null;
+        if (!host && g.Rb && Array.isArray(g.Rb.ka)) host = g.Rb;
+        const ka = host && host.ka;
+        if (ka) {
+          for (let y = 0; y < ka.length; y++) {
+            const row = ka[y];
+            if (!row) continue;
+            for (let x = 0; x < row.length; x++) {
+              if (row[x] && typeof row[x] === "object") {
+                row[x].direction = "NONE";
+              }
+            }
+          }
+          for (let i = 0; i < entities.arrows.length; i++) {
+            const p = entities.arrows[i];
+            if (!p || !ka[p.y | 0] || !ka[p.y | 0][p.x | 0]) continue;
+            const cell = ka[p.y | 0][p.x | 0];
+            if (typeof cell !== "object") continue;
+            cell.direction = p.dir || "NONE";
+            if (p.color) cell.color = p.color;
+          }
+          applied = true;
+        }
+      }
+    } catch (eA) { /* ignore */ }
+    try {
+      if (entities.gates && g.Qa) {
+        const list = entities.gates;
+        const bucket = Array.isArray(g.Qa.pfa)
+          ? g.Qa.pfa
+          : Array.isArray(g.Qa.oa)
+            ? g.Qa.oa
+            : null;
+        if (bucket) writeList(bucket, list);
+      }
+    } catch (eG) { /* ignore */ }
+    try {
+      if (entities.bombZones && typeof root.bombFruit_setZones === "function") {
+        root.bombFruit_setZones(entities.bombZones);
+        applied = true;
+      } else if (entities.bombZones && Array.isArray(root.__bombFruitZones)) {
+        root.__bombFruitZones.length = 0;
+        for (let i = 0; i < entities.bombZones.length; i++) {
+          root.__bombFruitZones.push(entities.bombZones[i]);
+        }
+        applied = true;
+      }
+    } catch (eZ) { /* ignore */ }
+    try {
+      if (entities.headLight != null && g.oa) {
+        if (g.oa.Aa && typeof g.oa.Aa === "object") g.oa.Aa.light = entities.headLight;
+        else g.oa.light = entities.headLight;
+        applied = true;
+      }
+    } catch (eL) { /* ignore */ }
+    void bw;
+    void bh;
     return applied;
   }
 
@@ -828,7 +1672,7 @@
 
     const snake = (g && g.oa) || {};
     const fruit = (g && g.wa) || {};
-    const body = mapBody(bodySrc);
+    const body = mapBody(bodySrc, snakeDimFlags(snake));
     const apples = mapApples(appleSrc);
     const boardMeta =
       (fruit && fruit.oa && fruit.oa.oa) ||
@@ -890,6 +1734,7 @@
       width: width,
       height: height,
       score: scoreInfo.score,
+      timeMs: scoreInfo.timeMs != null ? scoreInfo.timeMs : 0,
       alive: scoreInfo.alive !== false,
       themeIndex: themeIndex,
       themeColors: themeColors,
@@ -905,8 +1750,265 @@
       speedIndex: readSettingIndex("speed"),
       trophyIndex: readSettingIndex("trophy"),
     };
+
+    // Eating an Oka fruit (Poison mode, or a Burger fruit that rotted) sets a
+    // tick countdown on the snake and the engine greys the whole body until it
+    // runs out. Carry the countdown so mosaic can mirror that instead of the
+    // player's colour, and so the un-poison lands on the same tick it does
+    // in-game.
+    try {
+      const ja = Number(snake.Ja);
+      if (Number.isFinite(ja) && ja > 0) board.poisonTicks = ja | 0;
+    } catch (ePoison) { /* ignore */ }
+
+    // Mode geometry for mosaic (cheese / portal / walls / keys / …)
+    try {
+      board.modeKey = scrapeModeKey();
+    } catch (eMode) {
+      board.modeKey = "";
+    }
+    try {
+      const entities = scrapeBoardEntities(g);
+      let walls = (entities && entities.walls) || [];
+      if ((!walls || !walls.length) && Array.isArray(root.wallCoords)) {
+        walls = [];
+        for (let wi = 0; wi < root.wallCoords.length; wi++) {
+          const c = root.wallCoords[wi];
+          if (Array.isArray(c) && c.length >= 2) {
+            walls.push({ x: Number(c[0]), y: Number(c[1]) });
+          } else if (c && c.x != null) {
+            walls.push({ x: Number(c.x), y: Number(c.y) });
+          }
+        }
+      }
+      board.walls = walls;
+      board.keys = (entities && entities.keys) || [];
+      board.boxes = (entities && entities.boxes) || [];
+      board.goals = (entities && entities.goals) || [];
+      board.mines = (entities && entities.mines) || [];
+      board.statues = (entities && entities.statues) || [];
+      board.bridges = (entities && entities.bridges) || [];
+      board.gates = (entities && entities.gates) || [];
+      board.arrows = (entities && entities.arrows) || [];
+      // Re-filter with known board size (scrapeWalls may lack width/height)
+      board.walls = filterMosaicWalls(board.walls, board.width, board.height);
+    } catch (eWall) {
+      board.walls = board.walls || [];
+      board.keys = [];
+      board.boxes = [];
+      board.goals = [];
+      board.mines = [];
+      board.statues = [];
+      board.bridges = [];
+      board.gates = [];
+      board.arrows = [];
+    }
+    try {
+      const body2 = scrapeCompanionBody(g, body, width, height);
+      if (body2 && body2.length) board.body2 = body2;
+    } catch (eBody2) { /* ignore */ }
+
+    try {
+      if (boardHasMode(board, "light")) {
+        const lights = scrapeSnakeLights(g);
+        board.headLight =
+          lights.headLight != null ? lights.headLight : 2;
+        if (lights.headLight2 != null) board.headLight2 = lights.headLight2;
+        else if (board.body2 && board.body2.length) board.headLight2 = 2;
+      }
+    } catch (eLight) { /* ignore */ }
+
+    // Cat: lives + peaceful grace, so mosaic spectators read the same status
+    // the native lives HUD gives the player.
+    try {
+      if (boardHasMode(board, "cat")) {
+        board.catLives = Math.max(0, Number(root.cat_lives) | 0);
+        const maxLives = Number(root.CAT_MAX_LIVES);
+        board.catLivesMax =
+          Number.isFinite(maxLives) && maxLives > 0 ? maxLives | 0 : 9;
+        const grace = Math.max(0, Number(root.cat_peaceful_ticks) | 0);
+        if (grace > 0) board.catGrace = grace;
+      }
+    } catch (eCat) { /* ignore */ }
+
+    // Bomb Fruit: dashed danger rings live on zones, not on the fruit objects
+    try {
+      if (boardHasMode(board, "bomb_fruit")) {
+        const zones = scrapeBombZones();
+        if (zones.length) board.bombZones = zones;
+        const arm = Number(root.BOMB_FRUIT_ARM_TICKS);
+        if (Number.isFinite(arm) && arm > 0) board.bombArmTicks = arm | 0;
+      }
+    } catch (eBomb) { /* ignore */ }
+
     root.__mpBoardCache = board;
     return board;
+  }
+
+  function scrapeModeKey() {
+    try {
+      if (root.ModeRegistry && typeof root.ModeRegistry.getCurrentModeKey === "function") {
+        return String(root.ModeRegistry.getCurrentModeKey() || "");
+      }
+    } catch (e) { /* ignore */ }
+    try {
+      if (root.timeKeeper && root.timeKeeper.mode) {
+        return String(root.timeKeeper.mode);
+      }
+    } catch (e2) { /* ignore */ }
+    return "";
+  }
+
+  function boardHasMode(board, id) {
+    if (!board || !id) return false;
+    const key = String(board.modeKey || "");
+    if (!key) return false;
+    if (key === id) return true;
+    const parts = key.split("+");
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i] === id) return true;
+    }
+    return false;
+  }
+
+  function isCheeseHoleSegment(p, bodyIndex) {
+    if (!p || bodyIndex === 0) return false;
+    const x = Number(p.x);
+    const y = Number(p.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    return (x + y) % 2 === 0;
+  }
+
+  /** Native head floor is 2 tiles; fruit spawn is 1.5. */
+  const LIGHT_HEAD_FLOOR = 2;
+  const LIGHT_FRUIT_DEFAULT = 1.5;
+  const LIGHT_OBJECT_RADIUS = 1;
+  const LIGHT_ARROW_RADIUS = 0.5;
+  const LIGHT_GOAL_RADIUS = 0.5;
+  const LIGHT_GATE_RADIUS = 1.5;
+  const LIGHT_FOG_ALPHA = 0.55;
+
+  function mosaicPointLit(px, py, lights) {
+    if (!lights || !lights.length) return true;
+    const x = Number(px);
+    const y = Number(py);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    for (let i = 0; i < lights.length; i++) {
+      const L = lights[i];
+      if (!L || !(L.r > 0)) continue;
+      const dx = x - L.x;
+      const dy = y - L.y;
+      if (dx * dx + dy * dy <= L.r * L.r) return true;
+    }
+    return false;
+  }
+
+  function mosaicCellLit(ix, iy, lights) {
+    return mosaicPointLit(Number(ix) + 0.5, Number(iy) + 0.5, lights);
+  }
+
+  function pushMosaicLight(out, x, y, r) {
+    const lx = Number(x);
+    const ly = Number(y);
+    const lr = Number(r);
+    if (!Number.isFinite(lx) || !Number.isFinite(ly) || !(lr > 0)) return;
+    out.push({ x: lx + 0.5, y: ly + 0.5, r: lr });
+  }
+
+  /**
+   * Collect light-mode mask disks in tile space (center + radius).
+   * Returns null when light mode is off.
+   */
+  function collectMosaicLights(board) {
+    if (!board || !boardHasMode(board, "light")) return null;
+    const lights = [];
+    const body = board.body || [];
+    if (body[0]) {
+      const hr =
+        board.headLight != null && Number.isFinite(Number(board.headLight))
+          ? Number(board.headLight)
+          : LIGHT_HEAD_FLOOR;
+      pushMosaicLight(lights, body[0].x, body[0].y, Math.max(LIGHT_HEAD_FLOOR, hr));
+    }
+    const body2 = board.body2 || [];
+    if (body2[0]) {
+      const hr2 =
+        board.headLight2 != null && Number.isFinite(Number(board.headLight2))
+          ? Number(board.headLight2)
+          : LIGHT_HEAD_FLOOR;
+      pushMosaicLight(
+        lights,
+        body2[0].x,
+        body2[0].y,
+        Math.max(LIGHT_HEAD_FLOOR, hr2)
+      );
+    }
+    const apples = board.apples || [];
+    for (let i = 0; i < apples.length; i++) {
+      const a = apples[i];
+      if (!a) continue;
+      let r =
+        a.light != null && Number.isFinite(Number(a.light))
+          ? Number(a.light)
+          : LIGHT_FRUIT_DEFAULT;
+      if (r > 0) pushMosaicLight(lights, a.x, a.y, r);
+    }
+    function stampList(list, radius) {
+      if (!list) return;
+      for (let i = 0; i < list.length; i++) {
+        const p = list[i];
+        if (!p) continue;
+        const r =
+          p.light != null && Number.isFinite(Number(p.light))
+            ? Number(p.light)
+            : radius;
+        if (r > 0) pushMosaicLight(lights, p.x, p.y, r);
+      }
+    }
+    stampList(board.keys, LIGHT_OBJECT_RADIUS);
+    stampList(board.mines, LIGHT_OBJECT_RADIUS);
+    stampList(board.statues, LIGHT_OBJECT_RADIUS);
+    stampList(board.boxes, LIGHT_OBJECT_RADIUS);
+    stampList(board.walls, LIGHT_OBJECT_RADIUS);
+    stampList(board.bridges, LIGHT_OBJECT_RADIUS);
+    // Gates are 2×2 — stamp light at footprint center
+    if (board.gates) {
+      for (let i = 0; i < board.gates.length; i++) {
+        const p = board.gates[i];
+        if (!p) continue;
+        const gw = p.w != null && Number(p.w) > 0 ? Number(p.w) : 2;
+        const gh = p.h != null && Number(p.h) > 0 ? Number(p.h) : 2;
+        const r =
+          p.light != null && Number.isFinite(Number(p.light))
+            ? Number(p.light)
+            : LIGHT_GATE_RADIUS;
+        if (r > 0) {
+          out.push({
+            x: Number(p.x) + gw / 2,
+            y: Number(p.y) + gh / 2,
+            r: r,
+          });
+        }
+      }
+    }
+    stampList(board.goals, LIGHT_GOAL_RADIUS);
+    stampList(board.arrows, LIGHT_ARROW_RADIUS);
+    return lights;
+  }
+
+  function darkenHex(hex, amount) {
+    const rgb = hexToRgb(hex);
+    if (!rgb) return "rgba(0,0,0," + amount + ")";
+    const k = 1 - Math.max(0, Math.min(1, amount));
+    return (
+      "rgb(" +
+      Math.round(rgb[0] * k) +
+      "," +
+      Math.round(rgb[1] * k) +
+      "," +
+      Math.round(rgb[2] * k) +
+      ")"
+    );
   }
 
   function resolveThemeColors(board, themeOverride) {
@@ -936,11 +2038,284 @@
   }
 
   /**
+   * Borderless / Peaceful wrap the playfield — body coords may be unwrapped
+   * (x=17 next to x=16 on a width-17 board). Flat-adjacency then draws a
+   * chord across the whole row after wrapping to the canvas.
+   */
+  function boardWraps(board) {
+    return (
+      boardHasMode(board, "borderless") || boardHasMode(board, "peaceful")
+    );
+  }
+
+  function normalizeBodyCell(p, width, height) {
+    if (!p) return p;
+    let x = Number(p.x);
+    let y = Number(p.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return p;
+    const w = Number(width);
+    const h = Number(height);
+    if (Number.isFinite(w) && w > 0) {
+      x = ((x % w) + w) % w;
+    }
+    if (Number.isFinite(h) && h > 0) {
+      y = ((y % h) + h) % h;
+    }
+    if (x === p.x && y === p.y) return p;
+    const out = Object.assign({}, p);
+    out.x = x;
+    out.y = y;
+    return out;
+  }
+
+  /**
    * WallSolver-style snake: tapered tip→head stroke + googly eyes (canvas).
    * Body list is head-first (native / BOARD_DELTA); reversed to tip→head for draw.
+   * opts.cheese: skip light-tile body holes (cheese mode).
+   * opts.lights: light-mode disks — skip body outside the mask.
+   * opts.wrapWidth/wrapHeight: torus-normalize then split portal/wrap jumps so
+   * the body is not stretched across the board.
    */
-  function drawWallSolverStyleSnake(ctx, body, ox, oy, cell, colorInfo, dir) {
+  function bodySegmentsAdjacent(a, b) {
+    if (!a || !b) return false;
+    const ax = Number(a.x);
+    const ay = Number(a.y);
+    const bx = Number(b.x);
+    const by = Number(b.y);
+    if (
+      !Number.isFinite(ax) ||
+      !Number.isFinite(ay) ||
+      !Number.isFinite(bx) ||
+      !Number.isFinite(by)
+    ) {
+      return false;
+    }
+    return Math.abs(ax - bx) + Math.abs(ay - by) === 1;
+  }
+
+  /** Flat gap, or neighbors only via wrap (opposite edges). */
+  function bodySegmentsNeedSplit(a, b, width, height) {
+    if (!bodySegmentsAdjacent(a, b)) return true;
+    return false;
+  }
+
+  /* ------------------------------------------------- smooth snake movement */
+
+  // Bodies reach us one tick at a time, so painting them straight makes the
+  // snake hop a whole cell per update. snakeMotion remembers where a snake was
+  // and how long its last tick took; the renderer then slides the head out of
+  // the cell it used to be in and drags the tail into the one it just left.
+  // Only the two ends move, so corners stay square instead of being cut. The
+  // picture trails the wire by one tick, which is what buys the slide.
+  const MOTION_MIN_STEP_MS = 45;
+  const MOTION_MAX_STEP_MS = 500;
+  // Grace after a step so a repaint loop gets one frame to land on the cell
+  const MOTION_SETTLE_MS = 32;
+
+  function motionEnd(p) {
+    return { x: Number(p.x), y: Number(p.y) };
+  }
+
+  /**
+   * Record `body` under `slot` on `holder` — a canvas, a remote record, any
+   * object we can hang state on — and return what the renderer needs to draw
+   * it mid-step: { u, headFrom, tailFrom }, or null when there is nothing to
+   * animate (first sight, a stall, or a jump that is not a single step).
+   */
+  function snakeMotion(holder, slot, body, now) {
+    if (!holder || !body || !body.length) return null;
+    const head = body[0];
+    const tail = body[body.length - 1];
+    if (!head || !tail || head.x == null || tail.x == null) return null;
+    const key = slot || "body";
+    const t = now != null ? Number(now) : Date.now();
+    // The interior can only change when an end does, so the ends plus the
+    // length are enough to spot a tick.
+    const fp =
+      head.x + "," + head.y + ":" + tail.x + "," + tail.y + ":" + body.length;
+    const store =
+      holder.__mpMotion || (holder.__mpMotion = Object.create(null));
+    let st = store[key];
+    if (!st) {
+      store[key] = {
+        fp: fp,
+        at: t,
+        step: 0,
+        from: null,
+        ends: { head: motionEnd(head), tail: motionEnd(tail) },
+      };
+      return null;
+    }
+    if (st.fp !== fp) {
+      const gap = t - st.at;
+      // Outside this window it is a stall, a resync or two updates in one
+      // frame — none of which should be stretched into a slide.
+      st.step = gap >= MOTION_MIN_STEP_MS && gap <= MOTION_MAX_STEP_MS ? gap : 0;
+      st.from = st.ends;
+      st.ends = { head: motionEnd(head), tail: motionEnd(tail) };
+      st.fp = fp;
+      st.at = t;
+    }
+    if (!st.step || !st.from) return null;
+    const u = (t - st.at) / st.step;
+    // u === 0 still animates: the frame a tick lands on has to draw the old
+    // cells, or the snake jumps ahead and then slides back into place.
+    if (!(u >= 0) || u >= 1) return null;
+    return { u: u, headFrom: st.from.head, tailFrom: st.from.tail };
+  }
+
+  /** Any snake on `holder` still mid-step? Drives the repaint loops. */
+  function snakeMotionActive(holder, now) {
+    const store = holder && holder.__mpMotion;
+    if (!store) return false;
+    const t = now != null ? Number(now) : Date.now();
+    for (const k in store) {
+      const st = store[k];
+      if (st && st.step > 0 && t - st.at < st.step + MOTION_SETTLE_MS) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function drawWallSolverStyleSnake(ctx, body, ox, oy, cell, colorInfo, dir, opts) {
+    opts = opts || {};
     if (!ctx || !body || !body.length) return;
+    const cheese = !!opts.cheese;
+    const lights = opts.lights || null;
+    const wrapW = opts.wrapWidth | 0;
+    const wrapH = opts.wrapHeight | 0;
+    const wrap = wrapW > 0 && wrapH > 0;
+    // Normalize onto the board first so unwrapped wrap-steps (16→17) become
+    // edge jumps (16→0) and split instead of stroking across the row/column.
+    const src = [];
+    for (let i = 0; i < body.length; i++) {
+      const raw = body[i];
+      if (!raw) continue;
+      src.push(wrap ? normalizeBodyCell(raw, wrapW, wrapH) : raw);
+    }
+    if (!src.length) return;
+    // Mid-step slide (see snakeMotion). Validate against the normalized body:
+    // anything that is not a one-cell step — a portal, a wrap, a respawn — has
+    // no path to slide along, so that end draws in place.
+    let motion = null;
+    if (opts.motion && opts.motion.u >= 0 && opts.motion.u < 1) {
+      let hf = opts.motion.headFrom || null;
+      let tf = opts.motion.tailFrom || null;
+      if (hf && wrap) hf = normalizeBodyCell(hf, wrapW, wrapH);
+      if (tf && wrap) tf = normalizeBodyCell(tf, wrapW, wrapH);
+      if (hf && !bodySegmentsAdjacent(hf, src[0])) hf = null;
+      if (tf && !bodySegmentsAdjacent(tf, src[src.length - 1])) tf = null;
+      if (hf || tf) motion = { u: opts.motion.u, headFrom: hf, tailFrom: tf };
+    }
+    const runs = [];
+    let cur = [];
+    let curOther = null;
+    let curStart = 0;
+    let dimSplit = false;
+    function closeRun() {
+      if (!cur.length) return;
+      runs.push({
+        segs: cur,
+        isHead: cur[0] === src[0],
+        otherDim: !!curOther,
+        start: curStart,
+        // Only a dimension change leaves a body that is still physically
+        // continuous — cheese holes, fog and portal jumps are real breaks.
+        dimSplitPrev: dimSplit,
+      });
+      cur = [];
+      curOther = null;
+      dimSplit = false;
+    }
+    for (let bi = 0; bi < src.length; bi++) {
+      const p = src[bi];
+      if (!p) continue;
+      if (cheese && isCheeseHoleSegment(p, bi)) {
+        closeRun();
+        continue;
+      }
+      if (lights && !mosaicCellLit(p.x, p.y, lights)) {
+        closeRun();
+        continue;
+      }
+      const pOther = !!p.otherDim;
+      const broken =
+        cur.length && bodySegmentsNeedSplit(cur[cur.length - 1], p, wrapW, wrapH);
+      const flipped = cur.length && pOther !== curOther;
+      if (broken || flipped) {
+        const dimOnly = !!flipped && !broken;
+        closeRun();
+        dimSplit = dimOnly;
+      }
+      if (!cur.length) {
+        curOther = pOther;
+        curStart = bi;
+      }
+      cur.push(p);
+    }
+    closeRun();
+    if (!runs.length) {
+      runs.push({
+        segs: [src[0]],
+        isHead: true,
+        otherDim: !!src[0].otherDim,
+        start: 0,
+        dimSplitPrev: false,
+      });
+    }
+    // A dimension boundary would otherwise leave a one-cell hole between the
+    // two strokes. The ghost side is painted under the solid one, so stretching
+    // it across the boundary closes the seam without ever putting a solid
+    // segment on a cell that is in the other dimension.
+    for (let ri = 1; ri < runs.length; ri++) {
+      const next = runs[ri];
+      if (!next.dimSplitPrev) continue;
+      const prev = runs[ri - 1];
+      if (next.otherDim) {
+        next.segs.unshift(prev.segs[prev.segs.length - 1]);
+        next.start -= 1;
+      } else if (prev.otherDim) {
+        prev.segs.push(next.segs[0]);
+      }
+    }
+    // Ghost (other dimension) under solid so current-dim body stays readable
+    function paintRuns(ghostOnly) {
+      for (let ri = 0; ri < runs.length; ri++) {
+        const run = runs[ri];
+        if (!!run.otherDim !== ghostOnly) continue;
+        if (ghostOnly) {
+          ctx.save();
+          ctx.globalAlpha = 0.32;
+        }
+        drawWallSolverStyleSnakeRun(
+          ctx,
+          run.segs,
+          ox,
+          oy,
+          cell,
+          colorInfo,
+          dir,
+          {
+            drawEyes: run.isHead,
+            // Taper and gradient run across the whole body, so a split does not
+            // read as two smaller snakes each with its own head and tail.
+            taperStart: run.start,
+            taperLength: src.length,
+            motion: motion,
+          }
+        );
+        if (ghostOnly) ctx.restore();
+      }
+    }
+    paintRuns(true);
+    paintRuns(false);
+  }
+
+  function drawWallSolverStyleSnakeRun(ctx, body, ox, oy, cell, colorInfo, dir, opts) {
+    opts = opts || {};
+    if (!ctx || !body || !body.length) return;
+    const drawEyes = opts.drawEyes !== false;
     const pts = [];
     for (let i = body.length - 1; i >= 0; i--) {
       const p = body[i];
@@ -978,6 +2353,37 @@
         uy = 0;
       }
     }
+    // Taper window inside the full body, so runs split off a longer snake keep
+    // one continuous head→tail gradient instead of restarting their own.
+    const taperLen = opts.taperLength > 1 ? opts.taperLength | 0 : 0;
+    const taperStart = taperLen ? opts.taperStart | 0 : 0;
+    const ownsHead = !taperLen || taperStart <= 0;
+    const ownsTip = !taperLen || taperStart + n >= taperLen;
+
+    // Mid-step slide: pull the two ends back toward the cells they came from.
+    // Interior points stay on their centres, so the tube keeps its length and
+    // its corners while it moves. Direction is already fixed above, off the
+    // real cells, so the head keeps facing the way it is going at u≈0.
+    const motion = opts.motion;
+    if (motion) {
+      if (ownsHead && motion.headFrom) {
+        const hx = ox + (Number(motion.headFrom.x) + 0.5) * cell;
+        const hy = oy + (Number(motion.headFrom.y) + 0.5) * cell;
+        pts[headI] = [
+          hx + (pts[headI][0] - hx) * motion.u,
+          hy + (pts[headI][1] - hy) * motion.u,
+        ];
+      }
+      if (ownsTip && motion.tailFrom && n > 1) {
+        const tx = ox + (Number(motion.tailFrom.x) + 0.5) * cell;
+        const ty = oy + (Number(motion.tailFrom.y) + 0.5) * cell;
+        pts[0] = [
+          tx + (pts[0][0] - tx) * motion.u,
+          ty + (pts[0][1] - ty) * motion.u,
+        ];
+      }
+    }
+
     let tipPull = 0;
     let headPull = 0;
     if (n > 1) {
@@ -986,8 +2392,8 @@
         pts[0][1] - pts[headI][1]
       );
       if (gapPx < cell * 1.25) {
-        tipPull = cell * 0.45;
-        headPull = cell * 0.2;
+        if (ownsTip) tipPull = cell * 0.45;
+        if (ownsHead) headPull = cell * 0.2;
       }
     }
     let tipX = pts[0][0];
@@ -1030,7 +2436,6 @@
       if (tRgb) tipCol = tRgb;
     }
     function mix(t) {
-      // t=0 at head, t=1 at tip — rainbow samples the player's set along the body
       if (rainbowSet && rainbowSet.length > 1) {
         const f = Math.max(0, Math.min(1, t)) * (rainbowSet.length - 1);
         const i0 = Math.floor(f);
@@ -1050,6 +2455,10 @@
       return rgbToHex(c);
     }
     function tAt(i) {
+      if (taperLen) {
+        const bi = taperStart + (n - 1 - i);
+        return Math.max(0, Math.min(1, bi / (taperLen - 1)));
+      }
       return n <= 1 ? 0 : (headI - i) / headI;
     }
     function widthAt(t) {
@@ -1057,42 +2466,11 @@
     }
 
     const poly = [];
-    poly.push([tipX, tipY, 1]);
+    poly.push([tipX, tipY, tAt(0)]);
     for (let i = 1; i < headI; i++) {
       poly.push([pts[i][0], pts[i][1], tAt(i)]);
     }
-    poly.push([headX, headY, 0]);
-
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.shadowColor = "rgba(0,0,0,0.4)";
-    ctx.shadowBlur = Math.max(1, cell * 0.045);
-    ctx.shadowOffsetY = Math.max(1, cell * 0.05);
-    for (let i = 0; i < poly.length - 1; i++) {
-      const x0 = poly[i][0];
-      const y0 = poly[i][1];
-      const t0 = poly[i][2];
-      const x1 = poly[i + 1][0];
-      const y1 = poly[i + 1][1];
-      const t1 = poly[i + 1][2];
-      const steps = 4;
-      for (let s = 0; s < steps; s++) {
-        const u0 = s / steps;
-        const u1 = (s + 1) / steps;
-        const xa = x0 + (x1 - x0) * u0;
-        const ya = y0 + (y1 - y0) * u0;
-        const xb = x0 + (x1 - x0) * u1;
-        const yb = y0 + (y1 - y0) * u1;
-        const t = t0 * (1 - (u0 + u1) / 2) + t1 * ((u0 + u1) / 2);
-        ctx.strokeStyle = mix(t);
-        ctx.lineWidth = widthAt(t);
-        ctx.beginPath();
-        ctx.moveTo(xa, ya);
-        ctx.lineTo(xb, yb);
-        ctx.stroke();
-      }
-    }
+    poly.push([headX, headY, tAt(headI)]);
 
     const col = mix(0);
     const neckR = headW / 2;
@@ -1101,6 +2479,80 @@
     const bulgeY = neckR * 0.92;
     const snoutR = neckR * 1.02;
     const snoutX = neckR * 0.78;
+
+    // The gradient is faked with a run of short overlapping strokes, so the
+    // drop shadow has to be laid down first and then buried under a flat
+    // repaint of the same shapes. Shadowing each stroke as it goes drops a dark
+    // crescent on the stroke before it, which is what made the body read as a
+    // row of separate discs instead of one snake.
+    function strokeBody() {
+      for (let i = 0; i < poly.length - 1; i++) {
+        const x0 = poly[i][0];
+        const y0 = poly[i][1];
+        const t0 = poly[i][2];
+        const x1 = poly[i + 1][0];
+        const y1 = poly[i + 1][1];
+        const t1 = poly[i + 1][2];
+        const steps = 4;
+        for (let s = 0; s < steps; s++) {
+          const u0 = s / steps;
+          const u1 = (s + 1) / steps;
+          const xa = x0 + (x1 - x0) * u0;
+          const ya = y0 + (y1 - y0) * u0;
+          const xb = x0 + (x1 - x0) * u1;
+          const yb = y0 + (y1 - y0) * u1;
+          const t = t0 * (1 - (u0 + u1) / 2) + t1 * ((u0 + u1) / 2);
+          ctx.strokeStyle = mix(t);
+          ctx.lineWidth = widthAt(t);
+          ctx.beginPath();
+          ctx.moveTo(xa, ya);
+          ctx.lineTo(xb, yb);
+          ctx.stroke();
+        }
+      }
+    }
+
+    /** Skull: neck, the two eye bulges and the snout, in head colour. */
+    function fillHeadBlobs() {
+      ctx.save();
+      ctx.fillStyle = col;
+      ctx.translate(headX, headY);
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.arc(0, 0, neckR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(bulgeX, -bulgeY, bulgeR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(bulgeX, bulgeY, bulgeR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(snoutX, 0, snoutR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    // A see-through body — a ghost run, a corpse — is painted once and left
+    // without a shadow: two passes would stack up and darken it.
+    const opaque = !(ctx.globalAlpha != null && Number(ctx.globalAlpha) < 1);
+    for (let pass = opaque ? 0 : 1; pass < 2; pass++) {
+      const shade = pass === 0;
+      ctx.shadowColor = shade ? "rgba(0,0,0,0.4)" : "transparent";
+      ctx.shadowBlur = shade ? Math.max(1, cell * 0.045) : 0;
+      ctx.shadowOffsetY = shade ? Math.max(1, cell * 0.05) : 0;
+      strokeBody();
+      if (drawEyes) fillHeadBlobs();
+    }
+
+    if (!drawEyes) {
+      ctx.restore();
+      return;
+    }
+
     const eyeR = Math.max(2.6, bulgeR * 0.72);
     const eyeX = bulgeX + bulgeR * 0.02;
     const eyeY = bulgeY;
@@ -1119,25 +2571,12 @@
       : "#1a3a8a";
     const nostrilCol = tipCol ? rgbToHex(tipCol) : "#2a4a9a";
 
-    ctx.fillStyle = col;
-    ctx.translate(headX, headY);
-    ctx.rotate(angle);
-    ctx.beginPath();
-    ctx.arc(0, 0, neckR, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(bulgeX, -bulgeY, bulgeR, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(bulgeX, bulgeY, bulgeR, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(snoutX, 0, snoutR, 0, Math.PI * 2);
-    ctx.fill();
-
+    // Face sits on the skull the passes above already laid down
     ctx.shadowColor = "transparent";
     ctx.shadowBlur = 0;
     ctx.shadowOffsetY = 0;
+    ctx.translate(headX, headY);
+    ctx.rotate(angle);
     ctx.fillStyle = "#fff";
     ctx.beginPath();
     ctx.arc(eyeX, -eyeY, eyeR, 0, Math.PI * 2);
@@ -1168,6 +2607,96 @@
   const _appleImgCache = Object.create(null);
   let _mosaicFruitRepaintTimer = 0;
 
+  /** RemixUltra / native key sheets: 24 frames on X (types 0–23). */
+  const KEY_TYPES_URL =
+    "https://www.google.com/logos/fnbx/snake_arcade/v19/key_types.png";
+  const KEY_TYPES_DARK_URL =
+    "https://www.google.com/logos/fnbx/snake_arcade/v19/key_types_dark.png";
+  const KEY_TYPE_FRAMES = 24;
+
+  /** RemixUltra Objects tab: sokobox frame 0, sokogoal frame 2 on v4/box.png. */
+  const SOKO_BOX_URL =
+    "https://www.google.com/logos/fnbx/snake_arcade/v4/box.png";
+  const SOKO_BOX_FRAMES = 8;
+  const SOKO_BOX_FRAME = 0;
+  const SOKO_GOAL_FRAME = 2;
+
+  /**
+   * Remix "Distinct Soko Goals" (`pudding_settings.SokoGoals`, on by default)
+   * swaps the box sheet for one whose goal frames are red-on-white instead of
+   * theme-tinted green. Same 1024×128 eight-frame layout and the box frames are
+   * untouched, so only the goal draw needs the alternate URL.
+   */
+  const SOKO_GOAL_DISTINCT_URL =
+    "https://i.postimg.cc/x11nt4Pb/box-distinct-soko-goals.png";
+  const SOKO_GOAL_DISTINCT_PX_URL =
+    "https://i.postimg.cc/NFnWqP35/px-box-red.png";
+  const SOKO_GOAL_FALLBACK = "rgba(255,220,80,0.9)";
+  const SOKO_GOAL_DISTINCT_FALLBACK = "rgba(244,67,54,0.95)";
+
+  /** True when the viewer has Distinct Soko Goals on (Remix defaults to on). */
+  function sokoGoalsDistinct() {
+    try {
+      const s = root.pudding_settings;
+      if (s && s.SokoGoals != null) return !!s.SokoGoals;
+    } catch (e) { /* ignore */ }
+    return true;
+  }
+
+  /**
+   * Goal sheet for one board. Distinct on/off is the viewer's own cosmetic
+   * preference (Remix never syncs it), while pixel/normal follows the graphics
+   * setting of the board being drawn — matching `graphics_selected === 1`.
+   */
+  function resolveSokoGoalUrl(board) {
+    if (!sokoGoalsDistinct()) return SOKO_BOX_URL;
+    let gfx =
+      board && board.graphicsIndex != null ? board.graphicsIndex | 0 : -1;
+    if (gfx < 0) gfx = Number(root.graphics_selected) | 0;
+    return gfx === 1 ? SOKO_GOAL_DISTINCT_PX_URL : SOKO_GOAL_DISTINCT_URL;
+  }
+
+  /** Poison-mode skull (same icon Skull Poison Fruit / Ultra place use). */
+  const POISON_SKULL_URL =
+    "https://www.google.com/logos/fnbx/snake_arcade/v12/trophy_10.png";
+
+  /**
+   * Poisoned-snake gradient, from the engine's f3E/g3E ([145,145,145] and
+   * [100,100,100]). While the poison countdown runs, the body colour function
+   * discards the player's colour — rainbow skins included — and strokes from
+   * these two greys instead.
+   */
+  const POISON_SNAKE_PRIMARY = "#919191";
+  const POISON_SNAKE_SECONDARY = "#646464";
+
+  /** True while the engine is painting this board's snake as poisoned. */
+  function boardSnakePoisoned(board) {
+    return !!board && (Number(board.poisonTicks) | 0) > 0;
+  }
+
+  /** RemixUltra Objects: mine flag is frame 9 on a vertical mine.png strip. */
+  const MINE_FLAG_URL =
+    "https://www.google.com/logos/fnbx/snake_arcade/mine.png";
+  const MINE_FLAG_FRAMES = 10;
+  const MINE_FLAG_FRAME = 9;
+  /** In-game danger radius is a ~3-tile dashed square (#f23606). */
+  const MINE_RADIUS_CELLS = 3;
+  const MINE_RADIUS_COLOR = "#f23606";
+  /** Bomb Fruit arm countdown (window.BOMB_FRUIT_ARM_TICKS) + pulse fill alpha. */
+  const BOMB_ARM_TICKS_DEFAULT = 4;
+  const BOMB_PULSE_ALPHA = 0.15;
+  /** Slot badge chip: native draws the trophy at 45% of the fruit sprite. */
+  const SLOT_BADGE_SCALE = 0.45;
+  const SLOT_BADGE_BG = "rgba(0,0,0,0.45)";
+
+  /** Statue trophy + cracks overlay (RemixUltra Objects tab). */
+  const STATUE_URL =
+    "https://www.google.com/logos/fnbx/snake_arcade/v16/trophy_13.png";
+  const STATUE_CRACKS_URL =
+    "https://www.google.com/logos/fnbx/snake_arcade/cracks.png";
+  const STATUE_CRACKS_FRAMES = 4;
+  const STATUE_CRACKS_FRAME = 0;
+
   function scheduleMosaicFruitRepaint() {
     if (_mosaicFruitRepaintTimer) return;
     _mosaicFruitRepaintTimer = setTimeout(function () {
@@ -1178,6 +2707,139 @@
         } catch (e) { /* ignore */ }
       }
     }, 40);
+  }
+
+  /**
+   * Draw one frame from a sprite strip (horizontal by default; axis "y" for mine.png).
+   * Returns true if the sprite was drawn.
+   */
+  function drawSpriteSheetFrame(ctx, url, frame, frames, dx, dy, dw, dh, axis) {
+    if (!ctx || !url || typeof ctx.drawImage !== "function") return false;
+    const img = getAppleImage(url);
+    if (!img || !img.complete || !(img.naturalWidth > 0)) return false;
+    const n = Math.max(1, frames | 0);
+    let f = Number(frame);
+    if (!Number.isFinite(f) || f < 0) f = 0;
+    f = Math.min(n - 1, f | 0);
+    const vert = axis === "y" || axis === "Y";
+    const fw = vert ? img.naturalWidth : img.naturalWidth / n;
+    const fh = vert ? img.naturalHeight / n : img.naturalHeight;
+    if (!(fw > 0) || !(fh > 0)) return false;
+    const sx = vert ? 0 : f * fw;
+    const sy = vert ? f * fh : 0;
+    try {
+      ctx.drawImage(img, sx, sy, fw, fh, dx, dy, dw, dh);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function drawKeyTypeAt(ctx, type, x0, y0, size, dark) {
+    return drawSpriteSheetFrame(
+      ctx,
+      dark ? KEY_TYPES_DARK_URL : KEY_TYPES_URL,
+      type,
+      KEY_TYPE_FRAMES,
+      x0,
+      y0,
+      size,
+      size,
+      "x"
+    );
+  }
+
+  function drawMineFlagAt(ctx, x0, y0, size) {
+    return drawSpriteSheetFrame(
+      ctx,
+      MINE_FLAG_URL,
+      MINE_FLAG_FRAME,
+      MINE_FLAG_FRAMES,
+      x0,
+      y0,
+      size,
+      size,
+      "y"
+    );
+  }
+
+  function drawFullImageAt(ctx, url, x0, y0, size) {
+    if (!ctx || !url || typeof ctx.drawImage !== "function") return false;
+    const img = getAppleImage(url);
+    if (!img || !img.complete || !(img.naturalWidth > 0)) return false;
+    try {
+      ctx.drawImage(img, x0, y0, size, size);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function drawStatueAt(ctx, x0, y0, size, cracked) {
+    const drew = drawFullImageAt(ctx, STATUE_URL, x0, y0, size);
+    if (!drew) return false;
+    if (cracked) {
+      drawSpriteSheetFrame(
+        ctx,
+        STATUE_CRACKS_URL,
+        STATUE_CRACKS_FRAME,
+        STATUE_CRACKS_FRAMES,
+        x0,
+        y0,
+        size,
+        size,
+        "x"
+      );
+    }
+    return true;
+  }
+
+  /** Dashed orange danger square around a mine (matches native #f23606 rings). */
+  function drawMineRadius(ctx, ox, oy, cell, mine) {
+    if (!ctx || !mine) return;
+    const c = cellCenter(ox, oy, cell, mine);
+    const side = cell * MINE_RADIUS_CELLS;
+    const x0 = c.cx - side / 2;
+    const y0 = c.cy - side / 2;
+    ctx.save();
+    ctx.strokeStyle = MINE_RADIUS_COLOR;
+    ctx.lineWidth = Math.max(1, cell / 12);
+    if (typeof ctx.setLineDash === "function") {
+      const d = Math.max(2, cell / 4);
+      ctx.setLineDash([d, d]);
+      if (ctx.lineDashOffset != null) ctx.lineDashOffset = cell / 8;
+    }
+    ctx.strokeRect(x0, y0, side, side);
+    ctx.restore();
+  }
+
+  /**
+   * Bomb Fruit: the same dashed danger ring the player sees around each fruit,
+   * plus the armed countdown pulse — a translucent square that grows out from
+   * the cell toward the ring as the timer runs down (native draw_one_radius).
+   */
+  function drawBombZones(ctx, board, ox, oy, cell, lights) {
+    const zones = (board && board.bombZones) || [];
+    if (!ctx || !zones.length) return;
+    const armed = Number(board.bombArmTicks);
+    const armTicks = armed > 0 ? armed : BOMB_ARM_TICKS_DEFAULT;
+    for (let i = 0; i < zones.length; i++) {
+      const z = zones[i];
+      if (!z || z.x == null || z.y == null) continue;
+      if (lights && !mosaicCellLit(z.x, z.y, lights)) continue;
+      drawMineRadius(ctx, ox, oy, cell, z);
+      const arm = z.arm != null ? Number(z.arm) : -1;
+      if (!(arm > 0)) continue;
+      const f = Math.max(0, Math.min(1, (armTicks - arm) / armTicks));
+      const side = cell * MINE_RADIUS_CELLS * f;
+      if (!(side > 0)) continue;
+      const c = cellCenter(ox, oy, cell, z);
+      ctx.save();
+      ctx.globalAlpha = BOMB_PULSE_ALPHA;
+      ctx.fillStyle = MINE_RADIUS_COLOR;
+      ctx.fillRect(c.cx - side / 2, c.cy - side / 2, side, side);
+      ctx.restore();
+    }
   }
 
   /**
@@ -1213,6 +2875,96 @@
     );
   }
 
+  /**
+   * Poison fruit → skull icon (poison mode trophy / Skull Poison Fruit).
+   * Prefer live Ultra/Pudding assets when present.
+   */
+  function resolvePoisonImageUrl() {
+    try {
+      if (typeof root.ultraPlacePoisonSrc === "function") {
+        const u = root.ultraPlacePoisonSrc();
+        if (u) return String(u);
+      }
+    } catch (eUltra) { /* ignore */ }
+    try {
+      if (root.skull && root.skull.src) return String(root.skull.src);
+    } catch (eSkull) { /* ignore */ }
+    try {
+      if (root.pudding_settings && root.pudding_settings.Skull && root.real_skull && root.real_skull.src) {
+        return String(root.real_skull.src);
+      }
+    } catch (eReal) { /* ignore */ }
+    return POISON_SKULL_URL;
+  }
+
+  /**
+   * Slot badge icon for a mode id. Remix owns the mapping (its own icons for
+   * modes 23–29, plus the live #trophy row), so prefer its resolver and fall
+   * back to the stock trophy CDN for native modes.
+   */
+  function resolveSlotBadgeUrl(mode) {
+    const m = Number(mode);
+    if (!Number.isFinite(m) || m < 0) return "";
+    const idx = m | 0;
+    try {
+      if (typeof root.slot_trophy_url_for_mode === "function") {
+        const u = root.slot_trophy_url_for_mode(idx);
+        if (u) return String(u);
+      }
+    } catch (e) { /* ignore */ }
+    try {
+      const row =
+        typeof document !== "undefined"
+          ? document.getElementById("trophy")
+          : null;
+      const el = row && row.children && row.children[idx];
+      const src = el && (el.src || el.getAttribute("src"));
+      if (src) return String(src);
+    } catch (e2) { /* ignore */ }
+    if (idx <= 21) {
+      const id = idx < 10 ? "0" + idx : String(idx);
+      return (
+        "https://www.google.com/logos/fnbx/snake_arcade/v22/trophy_" + id + ".png"
+      );
+    }
+    return "";
+  }
+
+  /**
+   * Slot Machine badge: the mode trophy a fruit will activate, centered on the
+   * sprite over a rounded dark chip (native slot_draw_badge_at_fruit).
+   * Alpha is inherited rather than forced to 1 so dimension ghost fruit keep a
+   * ghosted badge, and the size floor is lower than native since a mosaic cell
+   * is a fraction of a real board tile.
+   */
+  function drawSlotBadge(ctx, cx, cy, fruitSize, mode) {
+    if (!ctx) return false;
+    const url = resolveSlotBadgeUrl(mode);
+    if (!url) return false;
+    const img = getAppleImage(url);
+    if (!img || !img.complete || !(img.naturalWidth > 0)) return false;
+    if (typeof ctx.drawImage !== "function") return false;
+    const d = fruitSize > 0 ? fruitSize : 16;
+    const size = Math.max(4, d * SLOT_BADGE_SCALE);
+    const bg = size + Math.max(1, size * 0.18) * 2;
+    ctx.save();
+    ctx.fillStyle = SLOT_BADGE_BG;
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") {
+      ctx.roundRect(cx - bg / 2, cy - bg / 2, bg, bg, Math.max(2, bg * 0.22));
+    } else {
+      ctx.arc(cx, cy, bg / 2, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    let drew = false;
+    try {
+      ctx.drawImage(img, cx - size / 2, cy - size / 2, size, size);
+      drew = true;
+    } catch (e) { /* cross-origin / incomplete */ }
+    ctx.restore();
+    return drew;
+  }
+
   function getAppleImage(url) {
     if (!url) return null;
     let img = _appleImgCache[url];
@@ -1241,7 +2993,14 @@
     return img;
   }
 
-  function drawBoardApples(ctx, board, ox, oy, cell, theme) {
+  /** Drop cached sprite Images so the next draw re-resolves every URL. */
+  function resetSpriteImageCache() {
+    Object.keys(_appleImgCache).forEach(function (k) {
+      delete _appleImgCache[k];
+    });
+  }
+
+  function drawBoardApples(ctx, board, ox, oy, cell, theme, lights) {
     const apples = board && board.apples;
     if (!apples || !apples.length) return;
     const appleIndex = board.appleIndex;
@@ -1250,12 +3009,20 @@
       if (!a || a.x == null || a.y == null) continue;
       // Skip parked off-grid Focus placeholders
       if (Number(a.x) < 0 || Number(a.y) < 0) continue;
+      if (lights && !mosaicCellLit(a.x, a.y, lights)) continue;
       const cx = ox + Number(a.x) * cell + cell / 2;
       const cy = oy + Number(a.y) * cell + cell / 2;
       const size = cell * 0.88;
-      const url = resolveAppleImageUrl(a.type, appleIndex);
+      const url = a.poison
+        ? resolvePoisonImageUrl()
+        : resolveAppleImageUrl(a.type, appleIndex);
       const img = getAppleImage(url);
       let drew = false;
+      const ghost = !!a.otherDim;
+      if (ghost) {
+        ctx.save();
+        ctx.globalAlpha = 0.32;
+      }
       if (
         img &&
         img.complete &&
@@ -1268,23 +3035,518 @@
         } catch (e) { /* cross-origin / incomplete */ }
       }
       if (!drew) {
-        ctx.fillStyle = a.poison
-          ? "#8e24aa"
-          : theme.apple || "#e7471d";
-        ctx.beginPath();
-        ctx.arc(cx, cy, cell * 0.35, 0, Math.PI * 2);
-        ctx.fill();
+        // Chess-piece fallback: colored square (white/black) with piece initial
+        if (a.isPiece && a.chessPiece) {
+          const isWhite = a.chessColor === "w";
+          ctx.fillStyle = isWhite ? "#f0d9b5" : "#b58863";
+          ctx.fillRect(cx - cell * 0.38, cy - cell * 0.38, cell * 0.76, cell * 0.76);
+          ctx.fillStyle = isWhite ? "#000" : "#fff";
+          ctx.font = "bold " + Math.max(8, cell * 0.38) + "px sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          const initial =
+            a.chessPiece === "knight" ? "N" : a.chessPiece.charAt(0).toUpperCase();
+          ctx.fillText(initial, cx, cy);
+        } else {
+          ctx.fillStyle = a.poison
+            ? "#37474f"
+            : theme.apple || "#e7471d";
+          ctx.beginPath();
+          ctx.arc(cx, cy, cell * 0.35, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
-      if (a.poison) {
-        ctx.fillStyle = "rgba(142,36,170,0.35)";
-        ctx.beginPath();
-        ctx.arc(cx, cy, size * 0.42, 0, Math.PI * 2);
-        ctx.fill();
+      // Slot Machine: mode badge sits on top of the fruit sprite
+      if (a.slotMode != null) {
+        drawSlotBadge(ctx, cx, cy, size, a.slotMode);
+      }
+      if (ghost) ctx.restore();
+      // Shield mode: edge ticks matching nba directions
+      if (a.shields && a.shields.length) {
+        drawAppleShields(ctx, cx, cy, cell, a.shields, theme);
       }
     }
   }
 
-  function drawBoardOnCanvas(canvas, board, colorInfo, themeOverride) {
+  function drawAppleShields(ctx, cx, cy, cell, dirs, theme) {
+    if (!ctx || !dirs || !dirs.length) return;
+    // Native H3E: each tick lies on the cell edge itself, a fifth of a cell
+    // thick, ends pulled in by half its thickness, and every end gets a square
+    // corner block — so a fruit shielded on all four sides reads as a closed
+    // frame. Colour is theme slot 3, the same one walls use.
+    let thick = Math.round(cell / 5);
+    if (thick % 2 !== 0) thick += 1;
+    if (thick < 1) thick = 1;
+    const d = cell / 2;
+    const b = thick / 2;
+    const has = {};
+    for (let i = 0; i < dirs.length; i++) {
+      has[String(dirs[i]).toUpperCase()] = true;
+    }
+    ctx.save();
+    ctx.strokeStyle = (theme && theme.border) || "#578a34";
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = thick;
+    ctx.lineCap = "butt";
+    function edge(x0, y0, x1, y1) {
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    }
+    if (has.UP) edge(cx - d + b, cy - d, cx + d - b, cy - d);
+    if (has.DOWN) edge(cx - d + b, cy + d, cx + d - b, cy + d);
+    if (has.LEFT) edge(cx - d, cy - d + b, cx - d, cy + d - b);
+    if (has.RIGHT) edge(cx + d, cy - d + b, cx + d, cy + d - b);
+    // Corners are the union of the sides that touch them, so a lone side still
+    // closes off with both of its own blocks
+    const tl = has.LEFT || has.UP;
+    const bl = has.LEFT || has.DOWN;
+    const tr = has.RIGHT || has.UP;
+    const br = has.RIGHT || has.DOWN;
+    if (tl) ctx.fillRect(cx - d - b, cy - d - b, thick, thick);
+    if (bl) ctx.fillRect(cx - d - b, cy + d - b, thick, thick);
+    if (tr) ctx.fillRect(cx + d - b, cy - d - b, thick, thick);
+    if (br) ctx.fillRect(cx + d - b, cy + d - b, thick, thick);
+    ctx.restore();
+  }
+
+  function drawBoardWalls(ctx, board, ox, oy, cell, theme, lights) {
+    const raw = board && board.walls;
+    if (!ctx || !raw || !raw.length) return;
+    const walls = filterMosaicWalls(raw, board.width, board.height);
+    for (let i = 0; i < walls.length; i++) {
+      const p = walls[i];
+      if (!p) continue;
+      const x = Number(p.x);
+      const y = Number(p.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (lights && !mosaicCellLit(x, y, lights)) continue;
+      const x0 = ox + x * cell;
+      const y0 = oy + y * cell;
+      // Keyblocks: native yNa/XNa type → key_types_dark frame (RemixUltra)
+      if (p.lock || (p.lockType != null && Number(p.lockType) >= 0)) {
+        const lt =
+          p.lockType != null && Number.isFinite(Number(p.lockType))
+            ? Number(p.lockType)
+            : 0;
+        if (drawKeyTypeAt(ctx, lt, x0, y0, cell, true)) continue;
+        ctx.fillStyle = "#c9a227";
+        ctx.fillRect(x0, y0, cell, cell);
+        ctx.strokeStyle = "rgba(80,50,0,0.55)";
+        ctx.lineWidth = Math.max(1, cell * 0.06);
+        ctx.beginPath();
+        ctx.moveTo(x0 + cell * 0.2, y0 + cell * 0.2);
+        ctx.lineTo(x0 + cell * 0.8, y0 + cell * 0.8);
+        ctx.moveTo(x0 + cell * 0.8, y0 + cell * 0.2);
+        ctx.lineTo(x0 + cell * 0.2, y0 + cell * 0.8);
+        ctx.stroke();
+        continue;
+      }
+      if (p.hotdog) {
+        ctx.fillStyle = "#d2691e";
+      } else if (p.temp || p.__tempWall) {
+        ctx.fillStyle = theme && theme.border ? theme.border : "#578a34";
+      } else {
+        ctx.fillStyle = theme && theme.border ? theme.border : "#578a34";
+      }
+      ctx.fillRect(x0, y0, cell, cell);
+    }
+  }
+
+  function drawBoardPortalLinks(ctx, board, ox, oy, cell, lights) {
+    if (!ctx || !boardHasMode(board, "portal")) return;
+    const apples = board.apples || [];
+    if (apples.length < 2) return;
+    const byType = Object.create(null);
+    for (let i = 0; i < apples.length; i++) {
+      const a = apples[i];
+      if (!a || a.type == null) continue;
+      if (lights && !mosaicCellLit(a.x, a.y, lights)) continue;
+      const t = String(a.type);
+      if (!byType[t]) byType[t] = [];
+      byType[t].push(a);
+    }
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.55)";
+    ctx.lineWidth = Math.max(1.2, cell * 0.1);
+    ctx.setLineDash([Math.max(2, cell * 0.18), Math.max(2, cell * 0.14)]);
+    Object.keys(byType).forEach(function (t) {
+      const pair = byType[t];
+      if (!pair || pair.length < 2) return;
+      for (let i = 0; i + 1 < pair.length; i += 2) {
+        const a = pair[i];
+        const b = pair[i + 1];
+        ctx.beginPath();
+        ctx.moveTo(ox + (Number(a.x) + 0.5) * cell, oy + (Number(a.y) + 0.5) * cell);
+        ctx.lineTo(ox + (Number(b.x) + 0.5) * cell, oy + (Number(b.y) + 0.5) * cell);
+        ctx.stroke();
+      }
+    });
+    // Soft rings so portal fruit read as gates even without pairs
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(120,200,255,0.7)";
+    ctx.lineWidth = Math.max(1, cell * 0.08);
+    for (let i = 0; i < apples.length; i++) {
+      const a = apples[i];
+      if (!a || a.type == null) continue;
+      if (lights && !mosaicCellLit(a.x, a.y, lights)) continue;
+      ctx.beginPath();
+      ctx.arc(
+        ox + (Number(a.x) + 0.5) * cell,
+        oy + (Number(a.y) + 0.5) * cell,
+        cell * 0.42,
+        0,
+        Math.PI * 2
+      );
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function cellCenter(ox, oy, cell, p) {
+    return {
+      cx: ox + (Number(p.x) + 0.5) * cell,
+      cy: oy + (Number(p.y) + 0.5) * cell,
+    };
+  }
+
+  /** Keys, boxes, goals, mines, statues, bridges, gates, arrows, keyblocks. */
+  function drawBoardModeEntities(ctx, board, ox, oy, cell, theme, lights) {
+    if (!ctx || !board) return;
+    const pad = cell * 0.12;
+    function vis(p) {
+      return !lights || (p && mosaicCellLit(p.x, p.y, lights));
+    }
+
+    // Bridges — native obF static tiles: full-cell solid fill (theme color / #e68f1b)
+    const bridges = board.bridges || [];
+    for (let i = 0; i < bridges.length; i++) {
+      const p = bridges[i];
+      if (!p || !vis(p)) continue;
+      if (p.otherDim) {
+        ctx.save();
+        ctx.globalAlpha = 0.32;
+      }
+      const x0 = ox + Number(p.x) * cell;
+      const y0 = oy + Number(p.y) * cell;
+      ctx.fillStyle =
+        p.color && typeof p.color === "string" ? p.color : BRIDGE_DEFAULT_COLOR;
+      ctx.fillRect(x0, y0, cell, cell);
+      if (p.otherDim) ctx.restore();
+    }
+
+    // Sokoban goals then boxes — RemixUltra v4/box.png frames 2 / 0, with the
+    // goal sheet swapped when Distinct Soko Goals is on
+    const goals = board.goals || [];
+    const goalUrl = resolveSokoGoalUrl(board);
+    for (let i = 0; i < goals.length; i++) {
+      const p = goals[i];
+      if (!p || !vis(p)) continue;
+      const x0 = ox + Number(p.x) * cell;
+      const y0 = oy + Number(p.y) * cell;
+      if (
+        !drawSpriteSheetFrame(
+          ctx,
+          goalUrl,
+          SOKO_GOAL_FRAME,
+          SOKO_BOX_FRAMES,
+          x0,
+          y0,
+          cell,
+          cell
+        )
+      ) {
+        ctx.strokeStyle =
+          goalUrl === SOKO_BOX_URL
+            ? SOKO_GOAL_FALLBACK
+            : SOKO_GOAL_DISTINCT_FALLBACK;
+        ctx.lineWidth = Math.max(1.2, cell * 0.1);
+        ctx.strokeRect(x0 + pad, y0 + pad, cell - pad * 2, cell - pad * 2);
+      }
+    }
+
+    const boxes = board.boxes || [];
+    for (let i = 0; i < boxes.length; i++) {
+      const p = boxes[i];
+      if (!p || !vis(p)) continue;
+      const x0 = ox + Number(p.x) * cell;
+      const y0 = oy + Number(p.y) * cell;
+      if (
+        !drawSpriteSheetFrame(
+          ctx,
+          SOKO_BOX_URL,
+          SOKO_BOX_FRAME,
+          SOKO_BOX_FRAMES,
+          x0,
+          y0,
+          cell,
+          cell
+        )
+      ) {
+        ctx.fillStyle = "#a0522d";
+        ctx.fillRect(x0 + pad, y0 + pad, cell - pad * 2, cell - pad * 2);
+      }
+    }
+
+    // Gates — native u5E draws one dashed line on the edge the gate blocks,
+    // nothing else. A gate at Upa=(x,y) owns the 2×2 block from there: vertical
+    // ones sit on the x+1 column edge, flat ones on the y+1 row edge, and both
+    // run the 2 cells the block spans.
+    const gates = board.gates || [];
+    for (let i = 0; i < gates.length; i++) {
+      const p = gates[i];
+      if (!p) continue;
+      const gw = p.w != null && Number(p.w) > 0 ? Number(p.w) : 2;
+      const gh = p.h != null && Number(p.h) > 0 ? Number(p.h) : 2;
+      // Visible if any cell of the 2×2 is lit (or no fog)
+      let gateVis = !lights;
+      if (lights) {
+        for (let dy = 0; dy < gh && !gateVis; dy++) {
+          for (let dx = 0; dx < gw && !gateVis; dx++) {
+            if (mosaicCellLit(Number(p.x) + dx, Number(p.y) + dy, lights)) {
+              gateVis = true;
+            }
+          }
+        }
+      }
+      if (!gateVis) continue;
+      const vertical = p.vertical === true;
+      const x0 = ox + Number(p.x) * cell;
+      const y0 = oy + Number(p.y) * cell;
+      const span = (vertical ? gh : gw) * cell;
+      ctx.save();
+      if (p.otherDim) ctx.globalAlpha = 0.32;
+      ctx.strokeStyle = p.color || darkenHex(theme.dark, 0.45);
+      ctx.lineWidth = Math.max(1, cell * 0.1);
+      ctx.lineCap = "butt";
+      if (typeof ctx.setLineDash === "function") {
+        // Native lands 5 dashes and 4 gaps exactly on the span, all span/9 long
+        const dash = span / 9;
+        ctx.setLineDash([dash, dash]);
+        if (ctx.lineDashOffset != null) ctx.lineDashOffset = 0;
+      }
+      ctx.beginPath();
+      if (vertical) {
+        ctx.moveTo(x0 + cell, y0);
+        ctx.lineTo(x0 + cell, y0 + span);
+      } else {
+        ctx.moveTo(x0, y0 + cell);
+        ctx.lineTo(x0 + span, y0 + cell);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Minesweeper: dashed danger ring + flag sprite (RemixUltra mine.png frame 9)
+    const mines = board.mines || [];
+    for (let i = 0; i < mines.length; i++) {
+      const p = mines[i];
+      if (!p || !vis(p)) continue;
+      if (p.otherDim) {
+        ctx.save();
+        ctx.globalAlpha = 0.32;
+      }
+      drawMineRadius(ctx, ox, oy, cell, p);
+      const x0 = ox + Number(p.x) * cell;
+      const y0 = oy + Number(p.y) * cell;
+      if (!drawMineFlagAt(ctx, x0, y0, cell)) {
+        // Fallback: simple flag pole + banner
+        const c = cellCenter(ox, oy, cell, p);
+        ctx.strokeStyle = "#37474f";
+        ctx.lineWidth = Math.max(1, cell * 0.06);
+        ctx.beginPath();
+        ctx.moveTo(c.cx - cell * 0.05, c.cy + cell * 0.28);
+        ctx.lineTo(c.cx - cell * 0.05, c.cy - cell * 0.28);
+        ctx.stroke();
+        ctx.fillStyle = "#c62828";
+        ctx.beginPath();
+        ctx.moveTo(c.cx - cell * 0.05, c.cy - cell * 0.28);
+        ctx.lineTo(c.cx + cell * 0.28, c.cy - cell * 0.12);
+        ctx.lineTo(c.cx - cell * 0.05, c.cy + cell * 0.02);
+        ctx.closePath();
+        ctx.fill();
+      }
+      if (p.otherDim) ctx.restore();
+    }
+
+    // Bomb Fruit rings sit under the fruit sprites, same as the native pass
+    drawBombZones(ctx, board, ox, oy, cell, lights);
+
+    // Statues (trophy_13 + cracks.png overlay when WQ.pdb / cracked)
+    const statues = board.statues || [];
+    for (let i = 0; i < statues.length; i++) {
+      const p = statues[i];
+      if (!p || !vis(p)) continue;
+      if (p.otherDim) {
+        ctx.save();
+        ctx.globalAlpha = 0.32;
+      }
+      const x0 = ox + Number(p.x) * cell;
+      const y0 = oy + Number(p.y) * cell;
+      if (!drawStatueAt(ctx, x0, y0, cell, !!p.cracked)) {
+        const pad = Math.max(1, cell * 0.12);
+        const sx = x0 + pad;
+        const sy = y0 + pad;
+        const s = cell - pad * 2;
+        ctx.fillStyle = p.cracked ? "#9e9e9e" : "#757575";
+        ctx.fillRect(sx, sy, s, s);
+        if (p.cracked) {
+          ctx.strokeStyle = "rgba(40,40,40,0.75)";
+          ctx.lineWidth = Math.max(1, cell * 0.07);
+          ctx.beginPath();
+          ctx.moveTo(sx + s * 0.15, sy + s * 0.15);
+          ctx.lineTo(sx + s * 0.85, sy + s * 0.85);
+          ctx.moveTo(sx + s * 0.85, sy + s * 0.15);
+          ctx.lineTo(sx + s * 0.15, sy + s * 0.85);
+          ctx.stroke();
+        }
+      }
+      if (p.otherDim) ctx.restore();
+    }
+
+    // Keyblocks (type-matched dark sheet) then keys (key_types.png) — RemixUltra
+    const keys = board.keys || [];
+    const drawnBlocks = Object.create(null);
+    // Walls with lock already painted keyblocks; still paint from keys if missing
+    const walls = board.walls || [];
+    for (let wi = 0; wi < walls.length; wi++) {
+      const w = walls[wi];
+      if (!w || !(w.lock || (w.lockType != null && Number(w.lockType) >= 0))) continue;
+      drawnBlocks[Number(w.x) + "," + Number(w.y)] = 1;
+    }
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      if (!k || !k.keyblock) continue;
+      const kb = k.keyblock;
+      if (!vis(kb)) continue;
+      const bk = Number(kb.x) + "," + Number(kb.y);
+      if (drawnBlocks[bk]) continue;
+      const type =
+        kb.type != null
+          ? kb.type
+          : k.type != null
+            ? k.type
+            : 0;
+      const x0 = ox + Number(kb.x) * cell;
+      const y0 = oy + Number(kb.y) * cell;
+      if (!drawKeyTypeAt(ctx, type, x0, y0, cell, true)) {
+        ctx.strokeStyle = "rgba(255,215,0,0.85)";
+        ctx.lineWidth = Math.max(1.2, cell * 0.1);
+        ctx.strokeRect(
+          x0 + pad * 0.5,
+          y0 + pad * 0.5,
+          cell - pad,
+          cell - pad
+        );
+      }
+      drawnBlocks[bk] = 1;
+    }
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      if (!k || !vis(k)) continue;
+      const x0 = ox + Number(k.x) * cell;
+      const y0 = oy + Number(k.y) * cell;
+      if (!drawKeyTypeAt(ctx, k.type != null ? k.type : 0, x0, y0, cell, false)) {
+        const c = cellCenter(ox, oy, cell, k);
+        ctx.fillStyle = "#ffd54f";
+        ctx.beginPath();
+        ctx.moveTo(c.cx, c.cy - cell * 0.28);
+        ctx.lineTo(c.cx + cell * 0.22, c.cy);
+        ctx.lineTo(c.cx, c.cy + cell * 0.28);
+        ctx.lineTo(c.cx - cell * 0.22, c.cy);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    // Arrows
+    const arrows = board.arrows || [];
+    for (let i = 0; i < arrows.length; i++) {
+      const a = arrows[i];
+      if (!a || !vis(a)) continue;
+      drawArrowGlyph(ctx, ox, oy, cell, a);
+    }
+  }
+
+  /**
+   * Native arrow chevron (xpl/ypl): orange V pointing in dir, lineWidth=cell/8.
+   * Geometry matches source: half=cell/2, arm=0.6*half, tip=sqrt(3*arm^2/4).
+   */
+  /** Native bridge tile fill (placeBridge / bridgeColor helper). */
+  const BRIDGE_DEFAULT_COLOR = "#e68f1b";
+
+  const ARROW_DEFAULT_COLOR = "#EA7E0B";
+
+  function drawArrowGlyph(ctx, ox, oy, cell, a) {
+    if (!ctx || !a || !(cell > 0)) return;
+    const dir = String(a.dir || a.direction || "").toUpperCase();
+    if (dir !== "UP" && dir !== "DOWN" && dir !== "LEFT" && dir !== "RIGHT") {
+      return;
+    }
+    const cx = ox + (Number(a.x) + 0.5) * cell;
+    const cy = oy + (Number(a.y) + 0.5) * cell;
+    const half = cell / 2;
+    const arm = 0.6 * half;
+    const tip = Math.sqrt((3 * arm * arm) / 4);
+    ctx.save();
+    ctx.translate(cx, cy);
+    if (dir === "UP") ctx.rotate(-Math.PI / 2);
+    else if (dir === "DOWN") ctx.rotate(Math.PI / 2);
+    else if (dir === "LEFT") ctx.rotate(Math.PI);
+    ctx.strokeStyle =
+      a.color && typeof a.color === "string" ? a.color : ARROW_DEFAULT_COLOR;
+    ctx.lineWidth = Math.max(1, cell / 8);
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "round";
+    if (typeof ctx.setLineDash === "function") ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(-tip, -arm);
+    ctx.lineTo(tip, 0);
+    ctx.lineTo(-tip, arm);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /**
+   * Soft light halos sized from scraped radii (head ≥2, fruit ~1.5, objects ~1).
+   * Fog / object culling is handled separately via collectMosaicLights.
+   */
+  function drawBoardLightGlow(ctx, board, ox, oy, cell, lights) {
+    if (!ctx || !lights || !lights.length) return;
+    ctx.save();
+    for (let i = 0; i < lights.length; i++) {
+      const L = lights[i];
+      if (!L || !(L.r > 0)) continue;
+      const cx = ox + L.x * cell;
+      const cy = oy + L.y * cell;
+      const rad = L.r * cell;
+      if (typeof ctx.createRadialGradient === "function") {
+        const grd = ctx.createRadialGradient(cx, cy, rad * 0.15, cx, cy, rad);
+        grd.addColorStop(0, "rgba(255,255,210,0.28)");
+        grd.addColorStop(0.7, "rgba(255,255,200,0.08)");
+        grd.addColorStop(1, "rgba(255,255,200,0)");
+        ctx.fillStyle = grd;
+        ctx.beginPath();
+        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = "rgba(255,255,200,0.12)";
+        ctx.beginPath();
+        ctx.arc(cx, cy, rad * 0.85, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Paint one board (mosaic cell, Focus view, preview) onto a canvas.
+   * motionKey names whose snake this is: the canvas carries the slide state,
+   * and the Focus canvas is reused for every player it watches, so switching
+   * player must not slide the new snake out of the old one's cells.
+   */
+  function drawBoardOnCanvas(canvas, board, colorInfo, themeOverride, motionKey) {
     if (!canvas || !board) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -1296,29 +3558,79 @@
     const cell = Math.min(cw / w, ch / h);
     const ox = (cw - cell * w) / 2;
     const oy = (ch - cell * h) / 2;
+    const lights = collectMosaicLights(board);
     ctx.fillStyle = theme.border || "#578a34";
     ctx.fillRect(0, 0, cw, ch);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        ctx.fillStyle = (x + y) % 2 === 0 ? theme.light : theme.dark;
+        const base = (x + y) % 2 === 0 ? theme.light : theme.dark;
+        if (lights && !mosaicCellLit(x, y, lights)) {
+          ctx.fillStyle = darkenHex(base, LIGHT_FOG_ALPHA);
+        } else {
+          ctx.fillStyle = base;
+        }
         ctx.fillRect(ox + x * cell, oy + y * cell, cell, cell);
       }
     }
-    drawBoardApples(ctx, board, ox, oy, cell, theme);
+    drawBoardWalls(ctx, board, ox, oy, cell, theme, lights);
+    drawBoardModeEntities(ctx, board, ox, oy, cell, theme, lights);
+    drawBoardPortalLinks(ctx, board, ox, oy, cell, lights);
+    drawBoardApples(ctx, board, ox, oy, cell, theme, lights);
+    if (lights) drawBoardLightGlow(ctx, board, ox, oy, cell, lights);
+    const snakeDrawOpts = {
+      cheese: boardHasMode(board, "cheese"),
+      lights: lights,
+    };
+    if (boardWraps(board)) {
+      snakeDrawOpts.wrapWidth = w;
+      snakeDrawOpts.wrapHeight = h;
+    }
+    // Poison outranks the player's colour for as long as the countdown runs,
+    // and the engine greys the companion along with the primary body.
+    const poisoned = boardSnakePoisoned(board);
+    const snakeColor = poisoned
+      ? { primary: POISON_SNAKE_PRIMARY, secondary: POISON_SNAKE_SECONDARY }
+      : colorInfo;
+    const motionSlot = motionKey ? ":" + motionKey : "";
+    // Companion under primary: Yin Yang = muted alt; Twin = same colors
+    if (board.body2 && board.body2.length) {
+      let companionColor = snakeColor;
+      if (!poisoned && boardHasMode(board, "yin_yang")) {
+        companionColor = { primary: "#eceff1", secondary: "#90a4ae" };
+      }
+      snakeDrawOpts.motion = snakeMotion(
+        canvas,
+        "body2" + motionSlot,
+        board.body2
+      );
+      drawWallSolverStyleSnake(
+        ctx,
+        board.body2,
+        ox,
+        oy,
+        cell,
+        companionColor,
+        board.dir2 || board.dir,
+        snakeDrawOpts
+      );
+    }
+    snakeDrawOpts.motion = snakeMotion(canvas, "body" + motionSlot, board.body);
     drawWallSolverStyleSnake(
       ctx,
       board.body || [],
       ox,
       oy,
       cell,
-      colorInfo,
-      board.dir
+      snakeColor,
+      board.dir,
+      snakeDrawOpts
     );
   }
 
   /**
    * Versus Focus: local GameInstance still simulates between injects and can
-   * call die() even when the remote player is alive. Swallow those false deaths.
+   * call die() even when the remote player is alive. Never run native die UI —
+   * Focus spectators must not flash the endscreen (that resets Play/seat).
    */
   function installFocusDieGuard(g) {
     if (!g || g.__mpFocusDieGuarded) return;
@@ -1326,17 +3638,25 @@
     const origDie = typeof g.die === "function" ? g.die : null;
     g.die = function () {
       if (root.__mpVersusFocusSpectate) {
-        const b = root.__mpVersusFocusBoard;
-        // Only honor die when the focused board says the remote is dead
-        if (!b || b.alive !== false) {
-          try {
+        try {
+          const b = root.__mpVersusFocusBoard;
+          if (b && b.alive === false) {
+            this.nj = true;
+            if (this.dead != null) this.dead = true;
+            if (this.isDead != null) this.isDead = true;
+            if (root.timeKeeper) {
+              root.timeKeeper._dead = true;
+              root.timeKeeper.playing = false;
+            }
+          } else {
             this.nj = false;
             if (this.dead) this.dead = false;
+            if (this.isDead) this.isDead = false;
             if (root.timeKeeper) root.timeKeeper._dead = false;
-            if (!root.__mpSpectateAllowMenus) hideDeathScreen();
-          } catch (e) { /* ignore */ }
-          return;
-        }
+          }
+          if (!root.__mpSpectateAllowMenus) hideDeathScreen();
+        } catch (e) { /* ignore */ }
+        return;
       }
       if (origDie) return origDie.apply(this, arguments);
     };
@@ -1474,10 +3794,13 @@
   }
 
   /**
-   * Versus Focus: inject focused player's state into the live GameInstance so
-   * native snake/fruit renderers draw the spectated run. Paint is opt-in only
-   * (opts.paint === true) — product Focus must stay native for admin and
-   * non-admin alike (never canvas-square fallback).
+   * Inject a focused player's state into the live GameInstance so the native
+   * snake/fruit renderers draw the spectated run.
+   *
+   * Dormant: Focus draws the watched board itself now, and every branch below
+   * is gated on __mpVersusFocusSpectate, which nothing sets. Kept with the rest
+   * of the seat plumbing in case we go back — see archive/focus-native/.
+   *
    * After the initial seat, each remote pose change writes the full body list
    * so the trail stays connected (head-only inject fragmented the body).
    * Returns { ok, injected, painted, menusSynced }.
@@ -1512,13 +3835,21 @@
     ].join("|");
     let menusSynced = false;
     const forceMenus = opts.forceMenus === true;
+    // Admins own match rules — Focus must not overwrite trophy/count/speed/size.
+    // After attempt expire we also skip so lobby edits stick.
+    const skipMatchMenus =
+      opts.skipMatchMenus === true ||
+      !!root.__mpSpectateSkipMatchMenus ||
+      !!root.__mpAttemptExpired;
     if (forceMenus || menuFp !== root.__mpSpectateMenuFp) {
       root.__mpApplyingSettings = true;
       try {
-        syncMenu("size", board.sizeIndex);
-        syncMenu("count", board.countIndex);
-        syncMenu("speed", board.speedIndex);
-        syncMenu("trophy", board.trophyIndex);
+        if (!skipMatchMenus) {
+          syncMenu("size", board.sizeIndex);
+          syncMenu("count", board.countIndex);
+          syncMenu("speed", board.speedIndex);
+          syncMenu("trophy", board.trophyIndex);
+        }
         if (board.themeIndex != null) syncMenu("theme", board.themeIndex);
         if (board.appleIndex != null) syncMenu("apple", board.appleIndex);
         if (board.graphicsIndex != null) syncMenu("graphics", board.graphicsIndex);
@@ -1663,15 +3994,17 @@
               hideDeathScreen();
             }
           } else {
-            // Remote actually died — keep dead; do not hide death chrome
+            // Remote died — mark local dead for inject, but never show endscreen chrome
             g.nj = true;
             if (g.dead != null) g.dead = true;
             if (root.timeKeeper) {
               root.timeKeeper._dead = true;
               root.timeKeeper.playing = false;
             }
+            if (!root.__mpSpectateAllowMenus) hideDeathScreen();
           }
-          root.__mpVersusFocusRemoteAlive = remoteAlive;
+          // Do not overwrite the App latch of __mpVersusFocusRemoteAlive — the
+          // caller owns the death/revive edge (see archive/focus-native/).
         } catch (eAlive) { /* ignore */ }
       }
     } catch (e) {
@@ -1885,6 +4218,21 @@
         });
         obs.observe(document.body, { childList: true, subtree: true });
         root.__mpControlTipObserver = obs;
+        if (!root.__mpControlTipUnloadHooked) {
+          root.__mpControlTipUnloadHooked = true;
+          const disconnect = function () {
+            try {
+              if (root.__mpControlTipObserver) {
+                root.__mpControlTipObserver.disconnect();
+                root.__mpControlTipObserver = null;
+              }
+            } catch (eDisc) { /* ignore */ }
+          };
+          if (typeof root.addEventListener === "function") {
+            root.addEventListener("pagehide", disconnect);
+            root.addEventListener("beforeunload", disconnect);
+          }
+        }
       }
     } catch (e2) { /* ignore */ }
 
@@ -1928,7 +4276,11 @@
 
   /** Co-op / versus Focus spectate — never persist TimeKeeper PBs or attempts. */
   function isSpectatingForTimeKeeper() {
-    return !!(root.__mpCoopSpectator || root.__mpVersusFocusSpectate);
+    return !!(
+      root.__mpCoopSpectator ||
+      root.__mpVersusFocusWatch ||
+      root.__mpVersusFocusSpectate
+    );
   }
 
   /**
@@ -2056,8 +4408,60 @@
    * Offsets come from SESSION_START slots (count-dependent: 2→±1, 3→0/+3/−2, 4→±1/±4).
    * Does NOT force a facing direction — native Snake stays idle until the player
    * presses a key (forcing RIGHT made everyone crawl on Start match).
+   *
+   * Yin Yang uses corners instead: left side faces right, right side faces left
+   * so the body trails off the edge. Direction is still left unset until the
+   * shared start signal.
    */
-  function applyCoopSpawnOffset(oy) {
+  function coopSpawnBodyFromPose(pose) {
+    const dir = pose && pose.dir === "LEFT" ? "LEFT" : "RIGHT";
+    const x = pose && pose.x != null ? pose.x | 0 : 0;
+    const y = pose && pose.y != null ? pose.y | 0 : 0;
+    if (dir === "LEFT") {
+      return [
+        { x: x, y: y },
+        { x: x + 1, y: y },
+        { x: x + 2, y: y },
+      ];
+    }
+    return [
+      { x: x, y: y },
+      { x: x - 1, y: y },
+      { x: x - 2, y: y },
+    ];
+  }
+
+  function coopYinYangCorner(slot, width, height) {
+    const w = width || 17;
+    const h = height || 15;
+    const leftX = 2;
+    const rightX = Math.max(leftX, w - 3);
+    const topY = 1;
+    const botY = Math.max(topY, h - 2);
+    const corners = [
+      { x: leftX, y: topY, dir: "RIGHT" },
+      { x: rightX, y: topY, dir: "LEFT" },
+      { x: leftX, y: botY, dir: "RIGHT" },
+      { x: rightX, y: botY, dir: "LEFT" },
+    ];
+    return corners[(slot | 0) % 4];
+  }
+
+  function coopIsYinYang() {
+    try {
+      const key =
+        (root.ModeRegistry &&
+          typeof root.ModeRegistry.getCurrentModeKey === "function" &&
+          root.ModeRegistry.getCurrentModeKey()) ||
+        "";
+      return String(key).toLowerCase().split("+").indexOf("yin_yang") >= 0;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function applyCoopSpawnOffset(oy, opts) {
+    opts = opts || {};
     const g = gameInstance();
     if (!g || !g.oa) return false;
     const meta =
@@ -2067,18 +4471,42 @@
       {};
     const w = firstNumber(meta.width, meta.W, 17) || 17;
     const h = firstNumber(meta.height, meta.H, 15) || 15;
-    const cx = Math.floor(w / 2);
-    const cy = Math.floor(h / 2) + (Number(oy) || 0);
-    const body = [
-      { x: cx, y: cy },
-      { x: cx - 1, y: cy },
-      { x: cx - 2, y: cy },
-    ];
+    let pose = opts.pose;
+    if (!pose && (opts.yinYang || coopIsYinYang()) && opts.slot != null) {
+      pose = coopYinYangCorner(opts.slot, w, h);
+    }
+    if (!pose) {
+      pose = {
+        x: Math.floor(w / 2),
+        y: Math.floor(h / 2) + (Number(oy) || 0),
+        dir: "RIGHT",
+      };
+    }
+    const body = coopSpawnBodyFromPose(pose);
     try {
       // Keep native idle-until-key behavior: do not assign direction here.
       return writeNativeBody(g.oa, body);
     } catch (e) {
       console.warn("applyCoopSpawnOffset", e);
+      return false;
+    }
+  }
+
+  /** First co-op player moved: give this idle snake its spawn facing so it crawls. */
+  function applyCoopStartMoving(dir) {
+    const g = gameInstance();
+    if (!g || !g.oa) return false;
+    const cur = g.oa.direction || g.oa.dir;
+    if (cur) return true;
+    const d = dir === "LEFT" || dir === "UP" || dir === "DOWN" ? dir : "RIGHT";
+    try {
+      g.oa.direction = d;
+      if ("dir" in g.oa) g.oa.dir = d;
+      root.pauseGame = 0;
+      if (g.nj) g.nj = false;
+      return true;
+    } catch (e) {
+      console.warn("applyCoopStartMoving", e);
       return false;
     }
   }
@@ -2295,8 +4723,9 @@
   }
 
   /**
-   * Slim co-op pose scrape: body + dir + alive (+ colors when includeColors).
-   * No width/height/score on the pose channel (reduces lag).
+   * Slim co-op pose scrape: body + dir + alive + score (+ colors when
+   * includeColors). No width/height on the pose channel (reduces lag); score is
+   * one integer and feeds the combined co-op total.
    */
   function scrapeCoopSnakeDelta(colorId, opts) {
     opts = opts || {};
@@ -2308,13 +4737,30 @@
       (root.__mpBoardCache && root.__mpBoardCache.body);
     if (!bodySrc && !g) return null;
     const snake = (g && g.oa) || {};
-    const body = mapBody(bodySrc);
+    const body = mapBody(bodySrc, snakeDimFlags(snake));
     const scoreInfo = readScoreAndAlive();
     const out = {
       body: body,
       dir: snake.direction || snake.dir || root.head_dir || null,
       alive: scoreInfo.alive !== false,
+      score: scoreInfo.score != null ? scoreInfo.score | 0 : 0,
     };
+    try {
+      const key =
+        (root.ModeRegistry &&
+          typeof root.ModeRegistry.getCurrentModeKey === "function" &&
+          root.ModeRegistry.getCurrentModeKey()) ||
+        "";
+      const parts = String(key).toLowerCase().split("+");
+      if (
+        parts.indexOf("peaceful") >= 0 ||
+        (root.cat_peaceful_ticks | 0) > 0 ||
+        (typeof root.chess_peaceful_active === "function" &&
+          root.chess_peaceful_active())
+      ) {
+        out.peaceful = true;
+      }
+    } catch (eP) { /* ignore */ }
     if (!includeColors) return out;
 
     const Colors = root.MultiplayerColors;
@@ -2359,7 +4805,9 @@
 
   function snakeDeltaFingerprint(delta) {
     if (!delta) return "";
-    // Pose identity is head + length + dir (+ alive) — avoid O(n) string growth
+    // Pose identity is head + length + dir (+ alive + score) — avoid O(n)
+    // string growth. Score is in here so the combined co-op total still moves
+    // on a mode that scores without growing the body.
     const body = delta.body || [];
     const h = body[0];
     return (
@@ -2369,7 +4817,144 @@
       "|" +
       body.length +
       "|" +
-      (h ? h.x + "," + h.y : "")
+      (h ? h.x + "," + h.y : "") +
+      "|" +
+      (delta.score != null ? delta.score : "")
+    );
+  }
+
+  /** Compact board identity for versus mosaic upload skip. */
+  function boardDeltaFingerprint(board) {
+    if (!board) return "";
+    const body = board.body || [];
+    const h = body[0];
+    const apples = board.apples || [];
+    const a0 = apples[0];
+    const body2 = board.body2 || [];
+    const h2 = body2[0];
+    function len(arr) {
+      return (arr && arr.length) || 0;
+    }
+    return (
+      (board.alive === false ? "0" : "1") +
+      "|" +
+      (board.dir || "") +
+      "|" +
+      body.length +
+      "|" +
+      (h ? h.x + "," + h.y : "") +
+      "|" +
+      (board.score != null ? board.score : "") +
+      "|" +
+      apples.length +
+      "|" +
+      (a0
+        ? a0.x +
+          "," +
+          a0.y +
+          (a0.type != null ? ":" + a0.type : "") +
+          (a0.isPiece ? ":P" : "") +
+          (a0.shields ? ":s" + a0.shields.join("") : "") +
+          (a0.otherDim ? ":D" : "")
+        : "") +
+      "|" +
+      (function () {
+        // Dimension: mosaic paints solid and ghost stretches of the body, so
+        // where the runs split matters, not just how many segments are ghosted
+        // — a swap inverts every flag and can leave the count untouched. Runs
+        // stay short (steps unshift at the head, the tail pops), so this is a
+        // few characters in practice.
+        let runs = "";
+        let cur = null;
+        let n = 0;
+        for (let i = 0; i < body.length; i++) {
+          const ghost = !!(body[i] && body[i].otherDim);
+          if (ghost === cur) {
+            n++;
+            continue;
+          }
+          if (cur !== null) runs += (cur ? "D" : "S") + n;
+          cur = ghost;
+          n = 1;
+        }
+        if (cur !== null) runs += (cur ? "D" : "S") + n;
+        let ghostApples = 0;
+        for (let j = 0; j < apples.length; j++) {
+          if (apples[j] && apples[j].otherDim) ghostApples++;
+        }
+        return runs + ":" + ghostApples;
+      })() +
+      "|" +
+      (board.colorId != null ? board.colorId : "") +
+      "|" +
+      (board.Sc || "") +
+      "|" +
+      (board.Yc || "") +
+      "|" +
+      (boardSnakePoisoned(board) ? "p" : "") +
+      "|" +
+      (board.modeKey || "") +
+      "|" +
+      len(board.walls) +
+      "," +
+      len(board.keys) +
+      "," +
+      len(board.boxes) +
+      "," +
+      len(board.goals) +
+      "," +
+      len(board.mines) +
+      "," +
+      len(board.statues) +
+      "," +
+      len(board.bridges) +
+      "," +
+      len(board.gates) +
+      "," +
+      len(board.arrows) +
+      "|" +
+      (board.headLight != null ? board.headLight : "") +
+      "|" +
+      body2.length +
+      "|" +
+      (h2 ? h2.x + "," + h2.y : "") +
+      "|" +
+      (board.catLives != null ? board.catLives : "") +
+      "," +
+      (board.catGrace != null ? board.catGrace : "") +
+      "|" +
+      (function () {
+        // Zones move with eats and each armed tick redraws the pulse
+        const zs = board.bombZones;
+        if (!zs || !zs.length) return "";
+        let s = "";
+        for (let i = 0; i < zs.length; i++) {
+          const z = zs[i];
+          if (!z) continue;
+          s +=
+            (i ? ";" : "") +
+            z.x +
+            "," +
+            z.y +
+            "," +
+            (z.arm != null ? z.arm : -1);
+        }
+        return s;
+      })() +
+      "|" +
+      (function () {
+        // Slot badges reshuffle across every fruit on a badge eat, and Yin Yang
+        // flips them in place, so a0 alone would not notice the change.
+        let s = "";
+        let any = false;
+        for (let i = 0; i < apples.length; i++) {
+          const a = apples[i];
+          const m = a && a.slotMode != null ? a.slotMode : "";
+          if (m !== "") any = true;
+          s += (i ? "," : "") + m;
+        }
+        return any ? s : "";
+      })()
     );
   }
 
@@ -2393,9 +4978,50 @@
       out.statues = entities.statues;
       out.bridges = entities.bridges;
       out.gates = entities.gates;
+      out.arrows = entities.arrows;
+      out.bombZones = entities.bombZones;
+      out.headLight = entities.headLight;
       out.score = board.score;
     }
     return out;
+  }
+
+  function collectablesFingerprint(cols) {
+    if (!cols) return "";
+    function len(arr) {
+      return (arr && arr.length) || 0;
+    }
+    const apples = cols.apples || [];
+    let fruit = "";
+    for (let i = 0; i < apples.length; i++) {
+      const a = apples[i];
+      if (!a) continue;
+      fruit +=
+        (i ? ";" : "") +
+        (a.x | 0) +
+        "," +
+        (a.y | 0) +
+        "," +
+        (a.type != null ? a.type : "") +
+        (a.poison ? "p" : "") +
+        (a.slotMode != null ? "s" + a.slotMode : "") +
+        (a.burgerTimer != null ? "b" + a.burgerTimer : "") +
+        (a.isPiece ? "c" + (a.chessPiece || "") : "") +
+        (a.otherDim ? "d" : "");
+    }
+    return [
+      fruit,
+      len(cols.walls),
+      len(cols.keys),
+      len(cols.boxes),
+      len(cols.goals),
+      len(cols.mines),
+      len(cols.statues),
+      len(cols.bridges),
+      len(cols.gates),
+      len(cols.arrows),
+      len(cols.bombZones),
+    ].join("|");
   }
 
   /**
@@ -2524,9 +5150,38 @@
           if (src.poison) {
             dst.Oka = true;
             if (dst.nla != null) dst.nla = true;
+          } else {
+            dst.Oka = false;
+          }
+          if (src.slotMode != null) dst.slotMode = src.slotMode;
+          else if ("slotMode" in dst) dst.slotMode = undefined;
+          if (src.isPiece) {
+            dst.isPiece = true;
+            if (src.chessPiece) dst.ChessPiece = src.chessPiece;
+            if (src.chessColor) dst.ChessColor = src.chessColor;
+          }
+          if (src.burgerTimer != null) {
+            dst.burgerTimer = src.burgerTimer;
+            dst.burgerTimerMax =
+              src.burgerTimerMax != null ? src.burgerTimerMax : src.burgerTimer;
+            dst.burgerGrey = src.burgerGrey != null ? src.burgerGrey : 0;
+          }
+          if (src.light != null) dst.light = src.light;
+          if (src.otherDim) {
+            dst.Lh = false;
+            dst.Gh = false;
+          }
+          if (Array.isArray(src.shields) && src.shields.length) {
+            const set = new Set(src.shields);
+            dst.nba = set;
           }
         }
         applyBoardEntities(payload);
+        if (typeof root.__mpCoopStampPhantomWalls === "function") {
+          try {
+            root.__mpCoopStampPhantomWalls(g);
+          } catch (ePh) { /* ignore */ }
+        }
         return true;
       }
     } catch (e) {
@@ -2715,11 +5370,19 @@
     scrapeSnakeDelta: scrapeSnakeDelta,
     scrapeCoopSnakeDelta: scrapeCoopSnakeDelta,
     snakeDeltaFingerprint: snakeDeltaFingerprint,
+    boardDeltaFingerprint: boardDeltaFingerprint,
     scrapeCollectables: scrapeCollectables,
+    collectablesFingerprint: collectablesFingerprint,
     scrapeBoardEntities: scrapeBoardEntities,
+    filterMosaicWalls: filterMosaicWalls,
+    isIllegalNormalWallCell: isIllegalNormalWallCell,
     applyCollectables: applyCollectables,
     applyBoardEntities: applyBoardEntities,
     applyCoopSpawnOffset: applyCoopSpawnOffset,
+    applyCoopStartMoving: applyCoopStartMoving,
+    coopYinYangCorner: coopYinYangCorner,
+    coopSpawnBodyFromPose: coopSpawnBodyFromPose,
+    coopIsYinYang: coopIsYinYang,
     parkLocalSnakeOffBoard: parkLocalSnakeOffBoard,
     emptyLocalSnakeBody: emptyLocalSnakeBody,
     applySpectateState: applySpectateState,
@@ -2745,9 +5408,48 @@
     wrapTimeKeeper: wrapTimeKeeper,
     alterSnakeCodeExposeGame: alterSnakeCodeExposeGame,
     drawBoardOnCanvas: drawBoardOnCanvas,
+    BRIDGE_DEFAULT_COLOR: BRIDGE_DEFAULT_COLOR,
+    ARROW_DEFAULT_COLOR: ARROW_DEFAULT_COLOR,
+    boardHasMode: boardHasMode,
+    scrapeModeKey: scrapeModeKey,
+    collectMosaicLights: collectMosaicLights,
+    mosaicCellLit: mosaicCellLit,
+    mosaicPointLit: mosaicPointLit,
+    LIGHT_HEAD_FLOOR: LIGHT_HEAD_FLOOR,
+    LIGHT_FRUIT_DEFAULT: LIGHT_FRUIT_DEFAULT,
+    LIGHT_OBJECT_RADIUS: LIGHT_OBJECT_RADIUS,
     drawWallSolverStyleSnake: drawWallSolverStyleSnake,
+    snakeMotion: snakeMotion,
+    snakeMotionActive: snakeMotionActive,
+    bodySegmentsAdjacent: bodySegmentsAdjacent,
+    normalizeBodyCell: normalizeBodyCell,
+    boardWraps: boardWraps,
     resolveAppleImageUrl: resolveAppleImageUrl,
+    resolvePoisonImageUrl: resolvePoisonImageUrl,
+    boardSnakePoisoned: boardSnakePoisoned,
+    POISON_SNAKE_PRIMARY: POISON_SNAKE_PRIMARY,
+    POISON_SNAKE_SECONDARY: POISON_SNAKE_SECONDARY,
     resolveThemeColors: resolveThemeColors,
+    scrapeCompanionBody: scrapeCompanionBody,
+    drawSpriteSheetFrame: drawSpriteSheetFrame,
+    KEY_TYPES_URL: KEY_TYPES_URL,
+    KEY_TYPES_DARK_URL: KEY_TYPES_DARK_URL,
+    SOKO_BOX_URL: SOKO_BOX_URL,
+    SOKO_BOX_FRAMES: SOKO_BOX_FRAMES,
+    SOKO_BOX_FRAME: SOKO_BOX_FRAME,
+    SOKO_GOAL_FRAME: SOKO_GOAL_FRAME,
+    SOKO_GOAL_DISTINCT_URL: SOKO_GOAL_DISTINCT_URL,
+    SOKO_GOAL_DISTINCT_PX_URL: SOKO_GOAL_DISTINCT_PX_URL,
+    resolveSokoGoalUrl: resolveSokoGoalUrl,
+    resetSpriteImageCache: resetSpriteImageCache,
+    POISON_SKULL_URL: POISON_SKULL_URL,
+    MINE_FLAG_URL: MINE_FLAG_URL,
+    MINE_FLAG_FRAMES: MINE_FLAG_FRAMES,
+    MINE_FLAG_FRAME: MINE_FLAG_FRAME,
+    MINE_RADIUS_COLOR: MINE_RADIUS_COLOR,
+    STATUE_URL: STATUE_URL,
+    STATUE_CRACKS_URL: STATUE_CRACKS_URL,
+    STATUE_CRACKS_FRAMES: STATUE_CRACKS_FRAMES,
     drawCoopSnapshot: drawCoopSnapshot,
     setNativeMenusLocked: setNativeMenusLocked,
     unlockPersonalMenus: unlockPersonalMenus,

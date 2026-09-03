@@ -16,11 +16,38 @@
     return e;
   }
 
+  function escapeHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   function ensureStyles() {
     if (document.getElementById("mp-mod-styles")) return;
     const s = document.createElement("style");
     s.id = "mp-mod-styles";
     s.textContent = `
+/* Shuffle → Ready. Theme switches restyle the native button; these win. */
+button[jsname="qycu7d"].mp-ready-btn,
+[jsname="qycu7d"].mp-ready-btn{
+  color:#fff !important;
+  pointer-events:auto !important;
+}
+button[jsname="qycu7d"].mp-ready-btn.mp-ready-off,
+[jsname="qycu7d"].mp-ready-btn.mp-ready-off{
+  background:#b71c1c !important;
+  background-color:#b71c1c !important;
+  border-color:#7f0000 !important;
+}
+button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
+[jsname="qycu7d"].mp-ready-btn.mp-ready-on{
+  background:#1b5e20 !important;
+  background-color:#1b5e20 !important;
+  border-color:#0d3d12 !important;
+}
 #mp-settings-host {
   display:flex; flex-direction:column; gap:6px; min-height:0; flex:1 1 auto;
 }
@@ -224,8 +251,17 @@
   font-size:12px; font-weight:600; margin:6px 0 4px;
 }
 .mp-hud{position:fixed;top:48px;right:8px;z-index:9999;background:rgba(0,0,0,.55);color:#fff;
-  padding:8px 10px;border-radius:8px;font:12px/1.35 Roboto,Arial,sans-serif;min-width:160px}
+  padding:8px 10px;border-radius:8px;font:12px/1.35 Roboto,Arial,sans-serif;min-width:180px;max-width:280px}
 .mp-hud h4{margin:0 0 6px;font-size:13px}
+.mp-hud .mp-hud-winner{
+  margin:4px 0 8px;padding:6px 8px;border-radius:6px;
+  background:rgba(255,213,79,.22);border:1px solid rgba(255,213,79,.45);
+  font-weight:700;font-size:12px;line-height:1.35;
+}
+.mp-hud .mp-hud-winner .mp-hud-winner-detail{font-weight:500;opacity:.92;font-size:11px}
+.mp-hud .mp-hud-place{margin:2px 0}
+.mp-hud .mp-hud-place.mp-hud-lead{color:#ffe082;font-weight:600}
+.mp-hud .mp-hud-meta{opacity:.85;margin:2px 0}
 .mp-color-icon{width:28px;height:28px;border-radius:6px;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.3)}
 #mp-mosaic{
   position:fixed;left:50%;top:12px;transform:translateX(-50%);
@@ -249,10 +285,61 @@
   background:rgba(0,0,0,.55);padding:3px 6px;border-radius:4px;
   pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   max-width:100%;
+  font-variant-numeric:tabular-nums;
 }
 #mp-mosaic .mp-mosaic-cell.mp-mosaic-focus canvas{outline:2px solid #fff}
 #mp-mosaic .mp-mosaic-cell.mp-mosaic-focus .mp-mosaic-label{
   background:rgba(255,255,255,.22);
+}
+#mp-mosaic .mp-mosaic-cell.mp-mosaic-lead .mp-mosaic-label{
+  background:rgba(255,213,79,.28);
+  color:#ffe082;
+  box-shadow:inset 0 0 0 1px rgba(255,213,79,.45);
+}
+/* Cat strip is shared by mosaic cells and the full-size Focus view */
+.mp-mosaic-cat{
+  display:none;align-items:center;justify-content:center;gap:2px;
+  padding:2px 6px;border-radius:4px;background:rgba(0,0,0,.45);
+  pointer-events:none;line-height:1;
+}
+.mp-mosaic-cat img.mp-mosaic-cat-pip{
+  width:9px;height:9px;object-fit:contain;opacity:.22;filter:grayscale(1);
+}
+.mp-mosaic-cat i.mp-mosaic-cat-pip{
+  width:7px;height:7px;border-radius:50%;background:#ffd54f;opacity:.25;
+}
+.mp-mosaic-cat .mp-mosaic-cat-pip.on{opacity:1;filter:none}
+.mp-mosaic-cat .mp-mosaic-cat-n{
+  margin-left:4px;font:700 10px/1 Roboto,Arial,sans-serif;color:#fff;
+  font-variant-numeric:tabular-nums;
+}
+.mp-mosaic-cat .mp-mosaic-cat-grace{
+  margin-left:4px;font:10px/1 Roboto,Arial,sans-serif;color:#cfe8ff;
+  opacity:.9;font-variant-numeric:tabular-nums;
+}
+/* Focus: one mosaic board scaled onto the game canvas. Left click-through so
+   Escape peek / the gear underneath stay reachable. Padding is the border
+   frame — mod.js sizes it to about one cell. */
+#mp-focus-view{
+  position:fixed;display:none;z-index:9996;
+  box-sizing:border-box;pointer-events:none;overflow:hidden;
+}
+#mp-focus-view canvas.mp-focus-canvas{
+  display:block;width:100%;height:100%;
+}
+#mp-focus-view .mp-focus-label{
+  position:absolute;left:50%;top:6px;transform:translateX(-50%);
+  max-width:88%;padding:3px 10px;border-radius:6px;
+  background:rgba(0,0,0,.5);color:#fff;
+  font:600 13px/1.3 Roboto,Arial,sans-serif;text-align:center;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  pointer-events:none;font-variant-numeric:tabular-nums;
+}
+#mp-focus-view .mp-focus-label.mp-focus-dead{
+  background:rgba(120,20,20,.6);color:#ffcdd2;
+}
+#mp-focus-view .mp-focus-cat{
+  position:absolute;left:50%;bottom:6px;transform:translateX(-50%);
 }
 `;
     document.head.appendChild(s);
@@ -673,13 +760,17 @@
     }
 
     connBtn.onclick = function () {
-      const connected = !!(self.app.client && self.app.client.connected);
+      const connected = !!(
+        self.app.client &&
+        (self.app.client.joined || self.app.client.connected)
+      );
       if (connected) {
         self.app.disconnect();
         setConnButton(false);
         status.textContent = "Disconnected";
       } else {
         persistConnectFields();
+        status.textContent = "Connecting…";
         self.app
           .connect({
             url: urlIn.value.trim() || "ws://127.0.0.1:7777/ws",
@@ -687,21 +778,23 @@
             roomCode: roomIn.value.trim(),
             create: !roomIn.value.trim(),
           })
-          .then(function () {
+          .then(function (welcome) {
             setConnButton(true);
-            // Push saved Versus attempt length once we know we're admin
-            const mins = Math.max(1, parseInt(dur.value, 10) || 30);
-            lsSet("MULTIPLAYER_VERSUS_ATTEMPT_MIN", String(mins));
-            if (self.app.client && self.app.client.isAdmin()) {
-              self.app.client.setDuration(mins);
-              if (self.app.client.setVersusGoal) {
-                self.app.client.setVersusGoal(goalSel.value);
-              }
-            }
+    // Push saved Versus attempt length once we know we're admin (WELCOME.isAdmin)
+    const mins = Math.max(1, parseInt(dur.value, 10) || 30);
+    lsSet("MULTIPLAYER_VERSUS_ATTEMPT_MIN", String(mins));
+    if (welcome && welcome.isAdmin && self.app.client) {
+      self.app.client.setDuration(mins);
+      if (self.app.client.setVersusGoal) {
+        self.app.client.setVersusGoal(goalSel.value);
+      }
+    }
           })
-          .catch(function () {
+          .catch(function (err) {
             setConnButton(false);
-            status.textContent = "Connect failed";
+            status.textContent =
+              "Error: " +
+              ((err && (err.message || err.code)) || "Connect failed");
           });
       }
     };
@@ -914,6 +1007,14 @@
           (self.app.versus.winnerClientId || self.app.versus.leaderClientId)) ||
         null;
       const isLeader = leaderId && leaderId === clientId;
+      const matchOver = !!(
+        self.app.versus &&
+        (self.app.versus.expired ||
+          (self.app.client &&
+            self.app.client.roster &&
+            (self.app.client.roster.attemptExpired ||
+              self.app.client.roster.allowNewRuns === false)))
+      );
       const goalBest =
         VersusState && VersusState.formatGoalBest
           ? VersusState.formatGoalBest(sc, goal)
@@ -921,7 +1022,7 @@
             ? String(sc.bestScore)
             : "—";
       const live =
-        sc.score != null
+        !matchOver && sc.score != null
           ? "Live " +
             sc.score +
             (sc.alive === false ? " · dead" : "") +
@@ -936,14 +1037,26 @@
         " <strong>" +
         goalBest +
         "</strong>" +
-        (isLeader ? " · leading" : "");
+        (isLeader ? (matchOver ? " · winner" : " · leading") : "");
       if (live) html += "<br>" + live;
       return html;
     }
 
     /** Update live/best lines without destroying Spec/Play buttons. */
     self.updateRosterScores = function () {
-      if (!showBestCb.checked) return;
+      const rosterData = (self.app.client && self.app.client.roster) || {};
+      const matchOver = !!(
+        rosterData.mode === "versus" &&
+        (rosterData.allowNewRuns === false ||
+          rosterData.attemptExpired ||
+          (self.app.versus && self.app.versus.expired))
+      );
+      const hasScores = !!(
+        self.app.versus &&
+        self.app.versus.scores &&
+        Object.keys(self.app.versus.scores).length
+      );
+      if (!showBestCb.checked && !(matchOver && hasScores)) return;
       roster.querySelectorAll("[data-mp-stats-id]").forEach(function (node) {
         const id = node.getAttribute("data-mp-stats-id");
         const html = statsHtmlFor(id);
@@ -1001,12 +1114,32 @@
           lsSet("MULTIPLAYER_VERSUS_GOAL", g);
         }
       }
-      // End match only while a session is running
+      // End match is how the admin leaves a live (or stuck) run and gets
+      // native trophy/count/speed/size back. Keep it up while the server still
+      // has a session OR this client is still in a co-op inject — a peer who
+      // quit without dying can leave sessionActive true with the admin stuck
+      // on a hidden death screen.
       const sessionOn = !!rosterData.sessionActive;
-      endBtn.classList.toggle("hidden", !sessionOn);
-      endBtn.style.display = sessionOn ? "" : "none";
+      const matchOver = !!(
+        rosterData.mode === "versus" &&
+        (rosterData.allowNewRuns === false ||
+          rosterData.attemptExpired ||
+          (self.app.versus && self.app.versus.expired))
+      );
+      const coopLive = !!(
+        (self.app && self.app._coopSessionActive) ||
+        (typeof window !== "undefined" && window.__mpCoopSession)
+      );
+      const showEnd = !!(isAdmin && (sessionOn || coopLive));
+      endBtn.classList.toggle("hidden", !showEnd);
+      endBtn.style.display = showEnd ? "" : "none";
       matchHint.style.display =
         !connected || (isAdmin || (me && me.role === "player")) ? "none" : "block";
+      // Start match has nothing left to do once a match is live — it comes back
+      // when the session ends or the versus attempt runs out.
+      const canOfferStart = !sessionOn || matchOver;
+      startBtn.classList.toggle("hidden", !canOfferStart);
+      startBtn.style.display = canOfferStart ? "" : "none";
       startBtn.disabled =
         !Session.canStart(rosterData) ||
         (rosterData.mode === "versus" &&
@@ -1014,6 +1147,14 @@
           rosterData.allowNewRuns === false &&
           !rosterData.attemptExpired);
       readyBtn.textContent = me && me.ready ? "Unready" : "Ready";
+      // Every player readies on the in-game Shuffle→Ready button, admin
+      // included; only spectator seats keep the Match Ready button.
+      const useInGameReady = !!(connected && me && me.role === "player");
+      readyBtn.style.display = useInGameReady ? "none" : "";
+      readyBtn.classList.toggle("hidden", !!useInGameReady);
+      if (self.app && self.app._paintShuffleAsReady) {
+        self.app._paintShuffleAsReady();
+      }
       roomIn.value = rosterData.roomCode || roomIn.value;
       if (rosterData.roomCode) lsSet("MULTIPLAYER_ROOM_CODE", rosterData.roomCode);
       if (
@@ -1029,7 +1170,14 @@
             : "Disconnected") + suffix;
       }
 
-      const showBest = !!(isAdmin && showBestCb.checked);
+      const showBestToggle = !!(isAdmin && showBestCb.checked);
+      const hasScores = !!(
+        self.app.versus &&
+        self.app.versus.scores &&
+        Object.keys(self.app.versus.scores).length
+      );
+      // After match end: show goal bests to everyone (not only admin "Best times")
+      const showBest = showBestToggle || (matchOver && hasScores);
       showBestWrap.classList.toggle("hidden", !isAdmin);
       const clients = rosterData.clients || [];
       const VersusStateApi = root.VersusState;
@@ -1046,29 +1194,12 @@
           (self.app.versus.winnerClientId || self.app.versus.leaderClientId)) ||
         rosterData.leaderClientId ||
         null;
-      if (rosterData.mode === "versus" && winId) {
-        const tag =
-          rosterData.allowNewRuns === false ||
-          rosterData.attemptExpired ||
-          (self.app.versus && self.app.versus.expired)
-            ? "Winner"
-            : "Leading";
-        const c = clients.find(function (x) {
-          return x.clientId === winId;
-        });
-        const nm =
-          (c && (c.resolvedName || c.displayName || c.colorName)) ||
-          String(winId).slice(0, 6);
-        rosterHint.textContent =
-          tag + ": " + nm + " · " + goalLabel;
-      } else {
-        rosterHint.textContent = "Connected players";
-      }
+
       const nPlayers = clients.filter(function (c) {
         return c.role === "player";
       }).length;
       const nSpecs = clients.length - nPlayers;
-      rosterHint.textContent = connected
+      let hint = connected
         ? clients.length +
           " connected · " +
           nPlayers +
@@ -1077,6 +1208,26 @@
           " spec" +
           (rosterData.mode ? " · " + rosterData.mode : "")
         : "Not connected";
+      if (rosterData.mode === "versus" && winId && (matchOver || hasScores)) {
+        const c = clients.find(function (x) {
+          return x.clientId === winId;
+        });
+        const nm =
+          (c && (c.resolvedName || c.displayName || c.colorName)) ||
+          String(winId).slice(0, 6);
+        const tag = matchOver ? "Winner" : "Leading";
+        const winSc =
+          (self.app.versus &&
+            self.app.versus.scores &&
+            self.app.versus.scores[winId]) ||
+          {};
+        const detail =
+          VersusStateApi && VersusStateApi.formatGoalDetail
+            ? VersusStateApi.formatGoalDetail(winSc, goalId)
+            : goalLabel;
+        hint = tag + ": " + nm + " · " + detail + " — " + hint;
+      }
+      rosterHint.textContent = hint;
 
       const myId = self.app.client && self.app.client.clientId;
 
@@ -1261,8 +1412,10 @@
       const c = clients.find(function (x) {
         return x.clientId === id;
       });
-      if (!c) return id ? id.slice(0, 6) : "?";
-      return c.resolvedName || c.displayName || c.colorName || id.slice(0, 6);
+      if (!c) return id ? escapeHtml(id.slice(0, 6)) : "?";
+      return escapeHtml(
+        c.resolvedName || c.displayName || c.colorName || id.slice(0, 6)
+      );
     }
     let html = "<h4>" + (r.mode || "").toUpperCase() + "</h4>";
     if (r.mode === "versus" && app.versus) {
@@ -1273,69 +1426,120 @@
         (VersusState && VersusState.goalLabel && VersusState.goalLabel(goal)) ||
         r.versusGoalLabel ||
         "Score";
-      html += "<div>Goal: " + goalLabel + "</div>";
-      if (r.sessionActive && app.versus.attemptRemainingMs != null && !app.versus.expired) {
-        const s = Math.max(0, Math.ceil(Number(app.versus.attemptRemainingMs) / 1000));
+      const scores = app.versus.scores || {};
+      const matchOver = !!(
+        app.versus.expired ||
+        r.attemptExpired ||
+        (r.allowNewRuns === false && Object.keys(scores).length)
+      );
+      html +=
+        '<div class="mp-hud-meta">Goal: ' + escapeHtml(goalLabel) + "</div>";
+      if (
+        r.sessionActive &&
+        app.versus.attemptRemainingMs != null &&
+        !app.versus.expired
+      ) {
+        const s = Math.max(
+          0,
+          Math.ceil(Number(app.versus.attemptRemainingMs) / 1000)
+        );
         html +=
-          "<div>Attempt: " +
+          '<div class="mp-hud-meta">Attempt: ' +
           String(Math.floor(s / 60)).padStart(2, "0") +
           ":" +
           String(s % 60).padStart(2, "0") +
           "</div>";
-      } else if (app.versus.expired || r.attemptExpired) {
-        html += "<div>Attempt: ended</div>";
+      } else if (matchOver) {
+        html += '<div class="mp-hud-meta">Attempt: ended</div>';
       }
-      if (
-        (app.versus.expired || r.attemptExpired || r.allowNewRuns === false) &&
-        Object.keys(app.versus.scores || {}).length
-      ) {
-        html += "<div>Last match results</div>";
-      } else if (app.versus.expired || r.allowNewRuns === false) {
-        html += "<div>No new runs</div>";
-      }
+
       const winId =
         app.versus.winnerClientId ||
         app.versus.leaderClientId ||
         (VersusState && VersusState.pickLeader
-          ? VersusState.pickLeader(app.versus.scores, goal)
+          ? VersusState.pickLeader(scores, goal)
           : null);
-      if (winId) {
-        const tag =
-          app.versus.expired || r.attemptExpired || r.allowNewRuns === false
-            ? "Winner"
-            : "Leading";
+
+      if (matchOver && Object.keys(scores).length) {
+        html += '<div class="mp-hud-meta">Last match results</div>';
+        if (winId) {
+          const winSc = scores[winId] || {};
+          const detail =
+            VersusState && VersusState.formatGoalDetail
+              ? VersusState.formatGoalDetail(winSc, goal)
+              : goalLabel;
+          html +=
+            '<div class="mp-hud-winner">Winner: ' +
+            nameOf(winId) +
+            '<div class="mp-hud-winner-detail">' +
+            escapeHtml(detail) +
+            "</div></div>";
+        } else {
+          html +=
+            '<div class="mp-hud-winner">No winner<div class="mp-hud-winner-detail">No scored runs</div></div>';
+        }
+      } else if (winId) {
         html +=
-          "<div><strong>" + tag + ": " + nameOf(winId) + "</strong></div>";
+          "<div><strong>Leading: " + nameOf(winId) + "</strong></div>";
+      } else if (app.versus.expired || r.allowNewRuns === false) {
+        html += "<div>No new runs</div>";
       }
-      Object.keys(app.versus.scores).forEach(function (id) {
-        const sc = app.versus.scores[id];
+
+      const ordered =
+        VersusState && VersusState.rankPlayers
+          ? VersusState.rankPlayers(scores, goal)
+          : Object.keys(scores);
+      ordered.forEach(function (id, idx) {
+        const sc = scores[id];
+        if (!sc) return;
         const bestLine =
           VersusState && VersusState.formatGoalBest
             ? VersusState.formatGoalBest(sc, goal)
             : sc.bestScore != null
               ? String(sc.bestScore)
               : "—";
-        const mark = winId && winId === id ? " ★" : "";
-        html +=
-          "<div>" +
+        const isWin = winId && winId === id;
+        const place = matchOver ? idx + 1 + ". " : "";
+        const mark = isWin ? " ★" : "";
+        let line =
+          place +
           nameOf(id) +
           ": " +
-          sc.score +
-          " (" +
-          goalLabel +
+          escapeHtml(goalLabel) +
           " " +
-          bestLine +
-          ")" +
-          mark +
+          escapeHtml(bestLine) +
+          mark;
+        if (sc.score != null && !matchOver) {
+          line +=
+            " · live " +
+            sc.score +
+            (sc.alive === false ? " dead" : "");
+        } else if (matchOver && sc.score != null) {
+          line += " · last " + sc.score;
+        }
+        html +=
+          '<div class="mp-hud-place' +
+          (isWin ? " mp-hud-lead" : "") +
+          '">' +
+          line +
           "</div>";
       });
       if (app.versus.focusClientId) {
-        html += "<div>Focus: " + nameOf(app.versus.focusClientId) + "</div>";
+        html +=
+          '<div class="mp-hud-meta">Focus: ' +
+          nameOf(app.versus.focusClientId) +
+          "</div>";
       }
-      html +=
-        "<div>View: " +
-        (app.versus.spectateMode === "mosaic" ? "mosaic" : "focus") +
-        "</div>";
+      if (
+        (clients || []).some(function (c) {
+          return c.role === "spectator";
+        })
+      ) {
+        html +=
+          '<div class="mp-hud-meta">View: ' +
+          (app.versus.spectateMode === "mosaic" ? "mosaic" : "focus") +
+          "</div>";
+      }
     }
     this.hud.innerHTML = html;
   };
@@ -1474,5 +1678,6 @@
   };
 
   root.MultiplayerUI = MultiplayerUI;
+  root.MultiplayerUI.escapeHtml = escapeHtml;
   if (typeof module !== "undefined" && module.exports) module.exports = MultiplayerUI;
 })(typeof window !== "undefined" ? window : globalThis);
