@@ -9,7 +9,7 @@ One Mod Loader entry: **`MultiplayerMod`** — fully-featured **Remix is bundled
 
 | Mode | Players | Behavior |
 |------|---------|----------|
-| **Versus** | ≤10 | Independent local games; server relays scores/times, settings/Play, attempt timer; Focus + Mosaic spectate |
+| **Versus** | ≤9 | Independent local games; server relays scores/times, settings/Play, attempt timer; Focus + Mosaic spectate (3×3) |
 | **Co-op** | ≤4 | Client-native Google Snake + room relay; remotes painted once per engine tick (native `PlayerRenderer`); shared fruit; spawn Y by count (2: ±1, 3: 0/+3/−2, 4: ±1/−4/+4); corpses stay and collide; fruit/objects never spawn on live or dead snakes; unique colors |
 
 - Rooms: ≤**30** connections; join as **spectator**; admin promotes to player  

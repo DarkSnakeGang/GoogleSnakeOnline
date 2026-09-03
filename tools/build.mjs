@@ -51,6 +51,11 @@ if (remixSrc) {
     /localStorage\.getItem\('snakeChosenMod'\) === "PuddingMod" \|\| window\.NepDebug/g,
     'localStorage.getItem(\'snakeChosenMod\') === "PuddingMod" || localStorage.getItem(\'snakeChosenMod\') === "MultiplayerMod" || window.NepDebug || window.MultiplayerMod'
   );
+  // DiceCounts inject failures are soft (engine string drift) — don't red-console on Classic
+  remixCode = remixCode.replace(
+    /console\.error\("DiceCounts: failed to ([^"]+)"\)/g,
+    'console.debug("DiceCounts: skipped ($1)")'
+  );
   parts.push("\n/* ==== BEGIN RemixMod ==== */\n");
   parts.push(remixCode);
   parts.push("\n/* ==== END RemixMod ==== */\n");

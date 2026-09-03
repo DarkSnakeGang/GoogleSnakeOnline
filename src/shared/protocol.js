@@ -36,6 +36,8 @@
     COOP_PLAYER_DEAD: "COOP_PLAYER_DEAD",
     /** Native co-op: native goal hit (e.g. ALL apples). */
     COOP_GOAL: "COOP_GOAL",
+    /** Native co-op: shared run timer armed (first player moved). */
+    COOP_TIMER_START: "COOP_TIMER_START",
     ERROR: "ERROR",
     PING: "PING",
     PONG: "PONG",

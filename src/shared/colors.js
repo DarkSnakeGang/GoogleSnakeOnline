@@ -149,6 +149,19 @@
     return id !== 46 && !!BY_ID[id] && BY_ID[id].kind !== "random";
   }
 
+  /** First claimable id not in takenIds (numbers). */
+  function firstFreeClaimable(takenIds) {
+    const taken = {};
+    (takenIds || []).forEach(function (id) {
+      if (id != null) taken[Number(id)] = true;
+    });
+    for (let i = 0; i < CLAIMABLE_IDS.length; i++) {
+      const id = CLAIMABLE_IDS[i];
+      if (!taken[id]) return id;
+    }
+    return null;
+  }
+
   /** Disambiguate duplicate color names in Versus: Blue, Blue 2, … */
   function displayNameFor(client, roster) {
     if (client.displayName && String(client.displayName).trim()) {
@@ -184,6 +197,7 @@
     getColor,
     colorName,
     isClaimable,
+    firstFreeClaimable,
     displayNameFor,
   };
 

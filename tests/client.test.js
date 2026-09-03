@@ -383,7 +383,7 @@ describe("coop native inject bridge", () => {
     global.__mpCoopSpectator = false;
   });
 
-  it("paints companions once from tick using cached renderer (not per-frame wrap)", () => {
+  it("paints companions from tick and after each local render frame", () => {
     global.window = global;
     const modPath = require.resolve(path.join(root, "src/coop/native.js"));
     delete require.cache[modPath];
@@ -417,6 +417,13 @@ describe("coop native inject bridge", () => {
       },
     };
 
+    // Capture works even before inject
+    global.__mpCoopInject = false;
+    global.__mpCoopSession = false;
+    global.__mpCoopRenderEnter(renderer, 0.5, true, {});
+    assert.equal(global.__mpCoopPlayerRenderer, renderer);
+    assert.equal(calls.length, 0, "no companion paint before session");
+
     global.__mpCoopInject = true;
     global.__mpCoopSession = true;
     global.__mpCoopMyId = "me";
@@ -430,30 +437,437 @@ describe("coop native inject bridge", () => {
           { x: 7, y: 7 },
           { x: 6, y: 7 },
         ],
-        colorId: 4, // Red
+        colorId: 4,
         Sc: "#F53D40",
         Yc: "#D00B0E",
       },
     };
 
-    // Capture renderer only — must not paint companions on enter
-    global.__mpCoopRenderEnter(renderer, 0.5, true, {});
-    assert.equal(calls.length, 0, "render enter must not paint companions");
-    assert.equal(global.__mpCoopPlayerRenderer, renderer);
-
-    // Calling local render alone must not wrap into N companion frames
-    renderer.render(0.5, true, {});
-    assert.equal(calls.length, 1, "plain render is local-only");
-
-    // Tick drives one companion pass
+    // Tick drives companion pass
     global.__mpCoopOnTick(game);
-    assert.ok(calls.length >= 2, "tick should paint companions once");
+    assert.ok(calls.length >= 1, "tick should paint companions");
     const companion = calls.find(function (c) {
       return c.body0 === 8 && c.Sc === "#F53D40";
     });
     assert.ok(companion, "companion should draw at seeded body with Red Sc");
     assert.equal(game.oa.Sc, "#4E7CF6");
     assert.equal(game.oa.ka[0].x, 1);
+  });
+
+  it("skips companion paint for NaN bodies and sanitizes NaN lerp args", () => {
+    global.window = global;
+    const modPath = require.resolve(path.join(root, "src/coop/native.js"));
+    delete require.cache[modPath];
+    delete global.__mpCoopRenderInstalled;
+    delete global.__mpCoopOnTickInstalled;
+    require(path.join(root, "src/coop/native.js"));
+
+    const calls = [];
+    const game = {
+      oa: {
+        ka: [
+          { x: 1, y: 1 },
+          { x: 0, y: 1 },
+        ],
+        Sc: "#4E7CF6",
+        Yc: "#17439F",
+      },
+      Tb: function () {},
+    };
+    const renderer = {
+      wb: game,
+      render: function (a) {
+        if (typeof a === "number" && !Number.isFinite(a)) {
+          throw new Error("yi NaN NaN NaN");
+        }
+        calls.push({ a: a, x: game.oa.ka[0] && game.oa.ka[0].x });
+      },
+    };
+
+    global.__mpCoopInject = true;
+    global.__mpCoopSession = true;
+    global.__mpCoopMyId = "me";
+    global.__mpCoopRemotes = {
+      bad: {
+        clientId: "bad",
+        body: [
+          { x: NaN, y: 3 },
+          { x: 2, y: NaN },
+        ],
+        Sc: "#F00",
+        Yc: "#C00",
+      },
+      good: {
+        clientId: "good",
+        body: [
+          { x: 8, y: 7 },
+          { x: 7, y: 7 },
+        ],
+        Sc: "#0F0",
+        Yc: "#0C0",
+      },
+    };
+    global.__mpCoopPlayerRenderer = renderer;
+    // Stale NaN lerp from a dead/paused frame — must not throw or paint bad body
+    global.__mpCoopRenderArgs = [NaN, true, {}];
+    global.__mpCoopPaintCompanions(game);
+    assert.equal(
+      calls.filter(function (c) {
+        return c.x === 8;
+      }).length,
+      1,
+      "only finite remote should paint"
+    );
+    assert.ok(
+      calls.every(function (c) {
+        return Number.isFinite(c.a);
+      }),
+      "lerp arg must be finite"
+    );
+  });
+
+  it("wrapped PlayerRenderer re-paints companions after local draw", () => {
+    global.window = global;
+    const modPath = require.resolve(path.join(root, "src/coop/native.js"));
+    delete require.cache[modPath];
+    delete global.__mpCoopRenderInstalled;
+    delete global.__mpCoopOnTickInstalled;
+    require(path.join(root, "src/coop/native.js"));
+
+    const order = [];
+    const game = {
+      oa: {
+        ka: [
+          { x: 1, y: 1 },
+          { x: 0, y: 1 },
+        ],
+        Sc: "#4E7CF6",
+        Yc: "#17439F",
+      },
+      Tb: function () {},
+    };
+    const renderer = {
+      wb: game,
+      render: function (a) {
+        order.push({
+          who: game.oa.ka[0].x === 1 ? "local" : "remote",
+          a: a,
+        });
+      },
+    };
+    global.__mpCoopInject = true;
+    global.__mpCoopSession = true;
+    global.__mpCoopMyId = "me";
+    global.__mpCoopLocalDead = false;
+    global.__mpCoopSpectator = false;
+    global.__mpCoopRemotes = {
+      other: {
+        body: [
+          { x: 9, y: 9 },
+          { x: 8, y: 9 },
+        ],
+        Sc: "#F00",
+        Yc: "#C00",
+        _visualBody: [
+          { x: 9, y: 9 },
+          { x: 8, y: 9 },
+        ],
+        _lerpAt: performance.now() - 45,
+        _lerpStepMs: 90,
+      },
+    };
+    global.__mpCoopRenderEnter(renderer, 0.88, true, {});
+    // Local frames must re-paint remotes so RAF does not wipe them
+    renderer.render(0.88, true, {});
+    assert.ok(
+      order.some(function (o) {
+        return o.who === "local";
+      }),
+      "local render runs"
+    );
+    assert.ok(
+      order.some(function (o) {
+        return o.who === "remote";
+      }),
+      "render wrap must paint companions after local"
+    );
+    assert.equal(game.oa.ka[0].x, 1, "local body restored");
+    const remoteCalls = order.filter(function (o) {
+      return o.who === "remote";
+    });
+    assert.ok(remoteCalls.length >= 1);
+    assert.ok(
+      remoteCalls.every(function (o) {
+        return o.a !== 0.88;
+      }),
+      "companions must not reuse local lerp progress"
+    );
+    assert.ok(
+      remoteCalls.every(function (o) {
+        return Number.isFinite(o.a) && o.a > 0 && o.a < 1;
+      }),
+      "remote lerp t must be independent mid-step"
+    );
+  });
+
+  it("companion lerp resets on that remote head move and differs per remote", () => {
+    global.window = global;
+    const gsmPath = require.resolve(path.join(root, "src/hooks/gsm.js"));
+    const modPath = require.resolve(path.join(root, "src/coop/native.js"));
+    delete require.cache[gsmPath];
+    delete require.cache[modPath];
+    delete global.__mpCoopRenderInstalled;
+    delete global.__mpCoopOnTickInstalled;
+    require(path.join(root, "src/shared/colors.js"));
+    require(path.join(root, "src/hooks/gsm.js"));
+    const { CoopNative } = require(path.join(root, "src/coop/native.js"));
+
+    const seen = [];
+    const game = {
+      oa: {
+        ka: [
+          { x: 0, y: 0 },
+          { x: 0, y: 1 },
+        ],
+        Sc: "#111",
+        Yc: "#222",
+      },
+    };
+    const renderer = {
+      wb: game,
+      render: function (a) {
+        seen.push({
+          x: game.oa.ka[0] && game.oa.ka[0].x,
+          a: a,
+        });
+      },
+    };
+    global.__mpCoopInject = true;
+    global.__mpCoopSession = true;
+    global.__mpCoopMyId = "me";
+    global.__mpCoopPlayerRenderer = renderer;
+
+    const cn = new CoopNative();
+    cn.sessionActive = true;
+    cn.myClientId = "me";
+    cn.applySnakeDelta({
+      clientId: "a",
+      body: [
+        { x: 2, y: 2 },
+        { x: 1, y: 2 },
+      ],
+      dir: "RIGHT",
+      Sc: "#A00",
+      Yc: "#800",
+    });
+    cn.applySnakeDelta({
+      clientId: "b",
+      body: [
+        { x: 5, y: 5 },
+        { x: 4, y: 5 },
+      ],
+      dir: "UP",
+      Sc: "#0A0",
+      Yc: "#080",
+    });
+    // Stagger remote A as if it moved earlier than B (same clock as paintCompanionsOnce)
+    cn.remotes.a._lerpAt = performance.now() - 80;
+    cn.remotes.a._lerpStepMs = 100;
+    cn.remotes.b._lerpAt = performance.now() - 10;
+    cn.remotes.b._lerpStepMs = 100;
+    cn.syncBridge();
+
+    global.__mpCoopPaintCompanions(game);
+    const paintA = seen.find(function (s) {
+      return s.x === 2;
+    });
+    const paintB = seen.find(function (s) {
+      return s.x === 5;
+    });
+    assert.ok(paintA && paintB, "both remotes painted");
+    assert.ok(paintA.a > paintB.a, "older head move should be further in crawl");
+
+    seen.length = 0;
+    cn.applySnakeDelta({
+      clientId: "b",
+      body: [
+        { x: 5, y: 4 },
+        { x: 5, y: 5 },
+      ],
+      dir: "UP",
+    });
+    assert.ok(cn.remotes.b._lerpAt > cn.remotes.a._lerpAt);
+    global.__mpCoopPaintCompanions(game);
+    const paintB2 = seen.find(function (s) {
+      return s.x === 5;
+    });
+    assert.ok(paintB2);
+    assert.ok(paintB2.a < 0.3, "fresh head move resets remote lerp near 0");
+  });
+
+  it("settled companions still redraw so local RAF cannot wipe them", () => {
+    global.window = global;
+    const gsmPath = require.resolve(path.join(root, "src/hooks/gsm.js"));
+    const modPath = require.resolve(path.join(root, "src/coop/native.js"));
+    delete require.cache[gsmPath];
+    delete require.cache[modPath];
+    delete global.__mpCoopRenderInstalled;
+    delete global.__mpCoopOnTickInstalled;
+    require(path.join(root, "src/shared/colors.js"));
+    require(path.join(root, "src/hooks/gsm.js"));
+    require(path.join(root, "src/coop/native.js"));
+
+    const calls = [];
+    const game = {
+      oa: {
+        ka: [
+          { x: 0, y: 0, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } },
+          { x: 0, y: 1, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } },
+        ],
+        Sc: "#111",
+        Yc: "#222",
+      },
+    };
+    const renderer = {
+      wb: game,
+      render: function () {
+        calls.push(game.oa.ka[0] && game.oa.ka[0].x);
+      },
+    };
+    global.__mpCoopInject = true;
+    global.__mpCoopSession = true;
+    global.__mpCoopMyId = "me";
+    global.__mpCoopPlayerRenderer = renderer;
+    global.__mpCoopRemotes = {
+      other: {
+        clientId: "other",
+        body: [
+          { x: 5, y: 5 },
+          { x: 4, y: 5 },
+        ],
+        _visualBody: [
+          { x: 5, y: 5 },
+          { x: 4, y: 5 },
+        ],
+        _lerpAt: performance.now() - 500,
+        _lerpStepMs: 90,
+        _paintDirty: true,
+        Sc: "#F00",
+        Yc: "#C00",
+      },
+    };
+    global.__mpCoopPaintCompanions(game);
+    assert.equal(calls.length, 1, "settled remote paints");
+    assert.equal(global.__mpCoopRemotes.other._paintDirty, false);
+    global.__mpCoopPaintCompanions(game);
+    global.__mpCoopPaintCompanions(game);
+    assert.equal(calls.length, 3, "settled remotes must keep redrawing");
+    assert.equal(game.oa.ka[0].x, 0, "local body restored");
+  });
+
+  it("skips friendly collision when peaceful / cat / cheese light tiles", () => {
+    global.window = global;
+    const modPath = require.resolve(path.join(root, "src/coop/native.js"));
+    delete require.cache[modPath];
+    delete global.__mpCoopRenderInstalled;
+    delete global.__mpCoopOnTickInstalled;
+    require(path.join(root, "src/coop/native.js"));
+    const { CoopNative } = require(path.join(root, "src/coop/native.js"));
+    const cn = new CoopNative();
+    cn.sessionActive = true;
+    cn.myClientId = "me";
+    cn.injectEnabled = true;
+    cn.applySnakeDelta({
+      clientId: "other",
+      body: [
+        { x: 4, y: 4 },
+        { x: 3, y: 4 },
+        { x: 2, y: 4 },
+      ],
+      alive: true,
+    });
+    global.__mpCoopInject = true;
+    global.__mpCoopSession = true;
+    global.__mpCoopMyId = "me";
+    global.__mpCoopLocalDead = false;
+    global.__mpCoopSpectator = false;
+
+    let died = 0;
+    const game = {
+      oa: {
+        ka: [
+          { x: 3, y: 4 },
+          { x: 3, y: 5 },
+        ],
+      },
+      die: function () {
+        died++;
+      },
+      Tb: function () {},
+    };
+
+    global.ModeRegistry = { getCurrentModeKey: function () { return "peaceful"; } };
+    global.__mpCoopOnTick(game);
+    assert.equal(died, 0, "peaceful must not kill on friendly hit");
+    assert.equal(cn.hitsRemote({ x: 3, y: 4 }, "me"), false);
+
+    global.ModeRegistry = { getCurrentModeKey: function () { return "classic"; } };
+    global.cat_peaceful_ticks = 5;
+    global.__mpCoopLocalDead = false;
+    global.__mpCoopOnTick(game);
+    assert.equal(died, 0, "cat_peaceful_ticks must skip friendly death");
+    global.cat_peaceful_ticks = 0;
+
+    global.ModeRegistry = { getCurrentModeKey: function () { return "cheese"; } };
+    // (3+4)%2 === 1 → dark tile → still solid
+    assert.equal(cn.hitsRemote({ x: 3, y: 4 }, "me"), true);
+    assert.equal(cn.occupancyKeys(false)["3,4"], true);
+    // (4+4)%2 === 0 → light tile → passthrough / not occupied
+    cn.applySnakeDelta({
+      clientId: "other",
+      body: [
+        { x: 5, y: 5 },
+        { x: 4, y: 4 },
+        { x: 3, y: 4 },
+      ],
+      alive: true,
+    });
+    assert.equal(cn.hitsRemote({ x: 4, y: 4 }, "me"), false, "cheese light tile pass");
+    assert.equal(cn.occupancyKeys(false)["4,4"], undefined);
+    assert.equal(cn.occupancyKeys(false)["3,4"], true, "dark remote cell still solid");
+
+    delete global.ModeRegistry;
+  });
+
+  it("wrapped render sanitizes NaN lerp so versus Focus does not crash", () => {
+    global.window = global;
+    const modPath = require.resolve(path.join(root, "src/coop/native.js"));
+    delete require.cache[modPath];
+    delete global.__mpCoopRenderInstalled;
+    delete global.__mpCoopOnTickInstalled;
+    require(path.join(root, "src/coop/native.js"));
+
+    const seen = [];
+    const renderer = {
+      wb: { oa: { ka: [{ x: 1, y: 1 }] } },
+      render: function (a) {
+        if (typeof a === "number" && !Number.isFinite(a)) {
+          throw new Error("yi NaN NaN NaN");
+        }
+        seen.push(a);
+      },
+    };
+    // Versus: wrap is installed via RenderEnter even without co-op session
+    global.__mpCoopInject = false;
+    global.__mpCoopSession = false;
+    global.__mpCoopRenderEnter(renderer, NaN, true, {});
+    assert.doesNotThrow(function () {
+      renderer.render(NaN, true, {});
+    });
+    assert.ok(seen.length >= 1);
+    assert.ok(seen.every(function (a) {
+      return Number.isFinite(a);
+    }));
   });
 
   it("keeps corpse body when a dead delta arrives empty", () => {
@@ -510,6 +924,35 @@ describe("coop native inject bridge", () => {
     assert.equal(cn.remotes.p2.colorId, 7);
     assert.equal(cn.remotes.p2.body[0].x, 2);
     assert.equal(cn.remotes.p2._fromDelta, true);
+  });
+
+  it("sticky seeds ignore empty live deltas briefly", () => {
+    global.window = global;
+    const modPath = require.resolve(path.join(root, "src/coop/native.js"));
+    delete require.cache[modPath];
+    delete global.__mpCoopRenderInstalled;
+    delete global.__mpCoopOnTickInstalled;
+    const { CoopNative } = require(path.join(root, "src/coop/native.js"));
+    const cn = new CoopNative();
+    cn.beginSeedSticky(5000);
+    cn.applySnakeDelta({
+      clientId: "p2",
+      body: [
+        { x: 8, y: 9 },
+        { x: 7, y: 9 },
+        { x: 6, y: 9 },
+      ],
+      alive: true,
+      _seeded: true,
+    });
+    cn.applySnakeDelta({
+      clientId: "p2",
+      body: [],
+      alive: true,
+    });
+    assert.equal(cn.remotes.p2.body.length, 3);
+    assert.equal(cn.remotes.p2.body[0].x, 8);
+    assert.equal(cn.remotes.p2._seeded, true);
   });
 
   it("blocks spawns on live and dead snakes and updates as bodies move", () => {
@@ -619,6 +1062,7 @@ describe("versus instant death reset", () => {
       "coop/state.js",
       "coop/native.js",
       "hooks/gsm.js",
+      "hooks/visibility.js",
       "net/client.js",
       "ui/settingsTab.js",
       "mod.js",
@@ -697,6 +1141,193 @@ describe("versus instant death reset", () => {
       assert.equal(started, 1);
     } finally {
       Gsm.startNativeRun = prev;
+    }
+  });
+
+  it("reasserts coop spawn after native overwrites body", () => {
+    const MultiplayerApp = loadApp();
+    const Gsm = global.MultiplayerGsm;
+    const game = {
+      oa: {
+        ka: [
+          { x: 8, y: 7 },
+          { x: 7, y: 7 },
+          { x: 6, y: 7 },
+        ],
+      },
+      wa: { oa: { oa: { width: 17, height: 15 } } },
+    };
+    global.__remixGame = game;
+    global.__mpGame = game;
+    const app = new MultiplayerApp();
+    app.client = { clientId: "me" };
+    app._coopSlots = [{ clientId: "me", oy: 2 }];
+    app._coopSpawnApplied = false;
+    app._coopSeatedPublish = false;
+    Gsm.applyCoopSpawnOffset(2);
+    assert.equal(game.oa.ka[0].y, 7 + 2);
+    // Native rebuilds to center
+    game.oa.ka = [
+      { x: 8, y: 7 },
+      { x: 7, y: 7 },
+      { x: 6, y: 7 },
+    ];
+    assert.equal(app._bodyMatchesSpawnOy(), false);
+    app._reassertCoopSpawnIfNeeded();
+    assert.equal(game.oa.ka[0].y, 9);
+    assert.equal(app._bodyMatchesSpawnOy(), true);
+    app._reassertCoopSpawnIfNeeded();
+    assert.equal(app._coopSpawnApplied, true);
+  });
+
+  it("VisibilityFix.install aliases fix (remixOrganizeSettings)", () => {
+    loadApp();
+    const Vis = global.MultiplayerVisibilityFix;
+    assert.ok(Vis);
+    assert.equal(typeof Vis.fix, "function");
+    assert.equal(typeof Vis.install, "function");
+    assert.equal(Vis.install, Vis.fix);
+  });
+
+  it("publishCoopState skips unchanged pose and stops after SESSION_END", () => {
+    const MultiplayerApp = loadApp();
+    global.__remixGame = {
+      oa: {
+        ka: [
+          { x: 1, y: 1 },
+          { x: 0, y: 1 },
+        ],
+        direction: "RIGHT",
+      },
+    };
+    global.__mpGame = global.__remixGame;
+    const sent = [];
+    const app = new MultiplayerApp();
+    app._coopSessionActive = true;
+    app.client = {
+      connected: true,
+      clientId: "me",
+      me: function () {
+        return { clientId: "me", role: "player", colorId: 0 };
+      },
+      roster: { mode: "coop", sessionActive: true },
+      snakeDelta: function (d) {
+        sent.push(d);
+      },
+      coopPlayerDead: function () {},
+    };
+    app.coopNative = { applySnakeDelta: function () {} };
+    app.publishCoopState({ forceColors: true });
+    assert.equal(sent.length, 1);
+    app.publishCoopState();
+    assert.equal(sent.length, 1, "fingerprint should skip unchanged pose");
+    app.client.roster.sessionActive = false;
+    app._coopSessionActive = false;
+    global.__remixGame.oa.ka[0].x = 9;
+    app.publishCoopState({ forceColors: true });
+    assert.equal(sent.length, 1, "no publish after session end");
+  });
+
+  it("SNAKE_DELTA self-echo is ignored", async () => {
+    const MultiplayerApp = loadApp();
+    const Client = global.MultiplayerClient;
+    const origConnect = Client.prototype.connect;
+    Client.prototype.connect = function () {
+      this.connected = true;
+      this.clientId = "me";
+      return Promise.resolve();
+    };
+    try {
+      const app = new MultiplayerApp();
+      app.ui = {
+        mountHud: function () {},
+        updateHud: function () {},
+        updateColorIcon: function () {},
+        renderRoster: function () {},
+      };
+      app.ensureFocusCanvas = function () {};
+      app.applyControlLocks = function () {};
+      app.updateStatusIndicator = function () {};
+      await app.connect({});
+      const applied = [];
+      app.coopNative = {
+        applySnakeDelta: function (p) {
+          applied.push(p);
+        },
+      };
+      app.client.emit(Protocol.TYPES.SNAKE_DELTA, {
+        clientId: "me",
+        body: [{ x: 1, y: 1 }],
+      });
+      app.client.emit(Protocol.TYPES.SNAKE_DELTA, {
+        clientId: "other",
+        body: [{ x: 2, y: 2 }],
+      });
+      assert.equal(applied.length, 1);
+      assert.equal(applied[0].clientId, "other");
+
+      // Live session: coalesce many deltas into one apply on flush
+      applied.length = 0;
+      app._coopSessionActive = true;
+      app._pendingCoopSnakeDeltas = Object.create(null);
+      global.__mpCoopFlushPendingDeltas = function () {
+        const pending = app._pendingCoopSnakeDeltas;
+        if (!pending || !app.coopNative) return;
+        app._pendingCoopSnakeDeltas = Object.create(null);
+        Object.keys(pending).forEach(function (id) {
+          app.coopNative.applySnakeDelta(pending[id]);
+        });
+      };
+      app.client.emit(Protocol.TYPES.SNAKE_DELTA, {
+        clientId: "other",
+        body: [{ x: 3, y: 3 }],
+      });
+      app.client.emit(Protocol.TYPES.SNAKE_DELTA, {
+        clientId: "other",
+        body: [{ x: 4, y: 4 }],
+      });
+      assert.equal(applied.length, 0, "queued until flush");
+      global.__mpCoopFlushPendingDeltas();
+      assert.equal(applied.length, 1);
+      assert.equal(applied[0].body[0].x, 4, "latest pose wins");
+    } finally {
+      Client.prototype.connect = origConnect;
+      delete global.__mpCoopFlushPendingDeltas;
+    }
+  });
+
+  it("ERROR not_coop_session is swallowed (no console spam)", () => {
+    const warns = [];
+    const orig = console.warn;
+    console.warn = function () {
+      warns.push(
+        Array.prototype.map
+          .call(arguments, function (a) {
+            return typeof a === "object" && a ? JSON.stringify(a) : String(a);
+          })
+          .join(" ")
+      );
+    };
+    try {
+      function onError(p) {
+        if (p && p.code === "not_coop_session") return;
+        console.warn("Multiplayer ERROR", p);
+      }
+      onError({ code: "not_coop_session", message: "not_coop_session" });
+      onError({ code: "player_cap", message: "player_cap" });
+      assert.equal(
+        warns.filter(function (w) {
+          return /not_coop_session/.test(w);
+        }).length,
+        0
+      );
+      assert.ok(
+        warns.some(function (w) {
+          return /player_cap/.test(w);
+        })
+      );
+    } finally {
+      console.warn = orig;
     }
   });
 });

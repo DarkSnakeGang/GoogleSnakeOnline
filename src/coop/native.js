@@ -15,9 +15,12 @@
     this.remotes = {};
     this.collectables = null;
     this.sessionActive = false;
+    this._seedStickyUntil = 0;
     this.syncBridge();
     this.stopOverlay();
     stopCorpsePaintLoop();
+    root.__mpCoopPlayerRenderer = null;
+    root.__mpCoopRenderArgs = null;
   };
 
   CoopNative.prototype.syncBridge = function () {
@@ -29,11 +32,37 @@
     root.__mpCoopInject = !!this.injectEnabled && !!this.sessionActive;
   };
 
+  CoopNative.prototype.beginSeedSticky = function (ms) {
+    this._seedStickyUntil = Date.now() + (ms != null ? ms : 1500);
+  };
+
   CoopNative.prototype.applySnakeDelta = function (payload) {
     if (!payload || !payload.clientId) return;
     const prev = this.remotes[payload.clientId];
-    // Live deltas win over SESSION_START seeds
+    // Live deltas win over SESSION_START seeds — except empty/short during sticky window
     if (payload._seeded && prev && prev._fromDelta) return;
+    const bodyEmpty = !payload.body || !payload.body.length;
+    const bodyShort = !payload.body || payload.body.length < 3;
+    const sticky =
+      this._seedStickyUntil && Date.now() < this._seedStickyUntil;
+    if (
+      !payload._seeded &&
+      prev &&
+      prev._seeded &&
+      sticky &&
+      (bodyEmpty || bodyShort)
+    ) {
+      // Keep seeded body; merge non-body fields if useful
+      const keep = Object.assign({}, prev);
+      ["dir", "alive", "colorId", "color1", "color2", "Sc", "Yc"].forEach(
+        function (k) {
+          if (payload[k] != null) keep[k] = payload[k];
+        }
+      );
+      this.remotes[payload.clientId] = keep;
+      this.syncBridge();
+      return;
+    }
     const next = Object.assign({}, prev || {}, payload);
     if (!payload._seeded) next._fromDelta = true;
     // Keep prior colors when a delta omits them (scrape sometimes misses Sc/Yc)
@@ -43,14 +72,54 @@
           if (next[k] == null && prev[k] != null) next[k] = prev[k];
         }
       );
+      // Preserve visual/lerp state across merges unless body forces a reseat
+      if (prev._visualBody) next._visualBody = prev._visualBody;
+      if (prev._lerpAt != null) next._lerpAt = prev._lerpAt;
+      if (prev._lerpStepMs != null) next._lerpStepMs = prev._lerpStepMs;
+      if (prev._paintDirty != null) next._paintDirty = prev._paintDirty;
     }
     // Never drop a corpse body when a dead/empty scrape arrives
-    const bodyEmpty = !next.body || !next.body.length;
     if (bodyEmpty && prev && prev.body && prev.body.length) {
       next.body = prev.body;
     }
     if (next.alive === false && bodyEmpty && prev && prev.body && prev.body.length) {
       next.body = prev.body;
+    }
+    // Spectate-style trail: advance visual body when remote head moves
+    if (next.body && next.body.length) {
+      const Gsm = root.MultiplayerGsm;
+      const now =
+        typeof performance !== "undefined" && performance.now
+          ? performance.now()
+          : Date.now();
+      const prevHead = prev && prev.body && prev.body[0];
+      const nextHead = next.body[0];
+      let headMoved = !prevHead || !nextHead;
+      if (prevHead && nextHead) {
+        headMoved =
+          Math.round(Number(prevHead.x)) !== Math.round(Number(nextHead.x)) ||
+          Math.round(Number(prevHead.y)) !== Math.round(Number(nextHead.y)) ||
+          (prev.body && prev.body.length) !== next.body.length;
+      }
+      if (headMoved) {
+        if (Gsm && typeof Gsm.followBodyFromHead === "function") {
+          next._visualBody = Gsm.followBodyFromHead(
+            prev && prev._visualBody,
+            next.body
+          );
+        } else {
+          next._visualBody = snapshotBody(next.body);
+        }
+        if (prev && prev._lerpAt != null) {
+          const dt = now - prev._lerpAt;
+          if (dt > 30 && dt < 250) next._lerpStepMs = dt;
+        }
+        next._lerpAt = now;
+        next._paintDirty = true;
+      } else if (!next._visualBody) {
+        next._visualBody = snapshotBody(next.body);
+        next._paintDirty = true;
+      }
     }
     this.remotes[payload.clientId] = next;
     this.syncBridge();
@@ -72,8 +141,57 @@
       });
   };
 
+  /** Mode key from Remix ModeRegistry (e.g. "peaceful", "cheese", "wall+cheese"). */
+  function coopModeKey() {
+    try {
+      if (
+        root.ModeRegistry &&
+        typeof root.ModeRegistry.getCurrentModeKey === "function"
+      ) {
+        return String(root.ModeRegistry.getCurrentModeKey() || "");
+      }
+    } catch (e) { /* ignore */ }
+    return "";
+  }
+
+  function modeKeyHas(key, part) {
+    if (!key || !part) return false;
+    const parts = String(key).toLowerCase().split(/[+|_]/);
+    return parts.indexOf(String(part).toLowerCase()) >= 0;
+  }
+
+  /** Peaceful mode, cat grace, or dimension/chess peaceful badge. */
+  function coopSkipFriendlyHits() {
+    const key = coopModeKey();
+    if (modeKeyHas(key, "peaceful")) return true;
+    if ((root.cat_peaceful_ticks | 0) > 0) return true;
+    if (typeof root.chess_peaceful_active === "function") {
+      try {
+        if (root.chess_peaceful_active()) return true;
+      } catch (e) { /* ignore */ }
+    }
+    return false;
+  }
+
+  function coopIsCheeseMode() {
+    return modeKeyHas(coopModeKey(), "cheese");
+  }
+
+  /** Board light square parity — matches theme checker (x+y)%2===0. */
+  function isCheeseLightTile(x, y) {
+    return (((x | 0) + (y | 0)) & 1) === 0;
+  }
+
+  /** True when a remote body cell should block (cheese light = hole). */
+  function remoteCellBlocks(x, y) {
+    if (x == null || y == null) return false;
+    if (coopIsCheeseMode() && isCheeseLightTile(x, y)) return false;
+    return true;
+  }
+
   CoopNative.prototype.hitsRemote = function (head, excludeId) {
     if (!head) return false;
+    if (coopSkipFriendlyHits()) return false;
     const remotes = this.remoteList(excludeId);
     for (let i = 0; i < remotes.length; i++) {
       const r = remotes[i];
@@ -81,7 +199,14 @@
       const lim = Math.max(0, body.length - 1);
       for (let j = 0; j < lim; j++) {
         const p = body[j];
-        if (p && p.x === head.x && p.y === head.y) return true;
+        if (
+          p &&
+          p.x === head.x &&
+          p.y === head.y &&
+          remoteCellBlocks(p.x, p.y)
+        ) {
+          return true;
+        }
       }
     }
     return false;
@@ -89,15 +214,16 @@
 
   /**
    * Occupancy for spawn avoidance: every remote body cell (live snakes AND
-   * corpses). Rebuilt on each call so movers vacate cells for new fruit.
+   * corpses). Cheese light tiles are holes — not occupied. Rebuilt each call.
    */
   CoopNative.prototype.occupancyKeys = function (includeLocal) {
     const keys = {};
+    const cheese = coopIsCheeseMode();
     function addBody(body) {
       (body || []).forEach(function (p) {
-        if (p && p.x != null && p.y != null) {
-          keys[(p.x | 0) + "," + (p.y | 0)] = true;
-        }
+        if (!p || p.x == null || p.y == null) return;
+        if (cheese && isCheeseLightTile(p.x, p.y)) return;
+        keys[(p.x | 0) + "," + (p.y | 0)] = true;
       });
     }
     Object.keys(this.remotes).forEach(function (id) {
@@ -125,13 +251,14 @@
       return app.coopNative.occupancyKeys(false);
     }
     const keys = {};
+    const cheese = coopIsCheeseMode();
     const remotes = root.__mpCoopRemotes || {};
     Object.keys(remotes).forEach(function (id) {
       const body = remotes[id] && remotes[id].body;
       (body || []).forEach(function (p) {
-        if (p && p.x != null && p.y != null) {
-          keys[(p.x | 0) + "," + (p.y | 0)] = true;
-        }
+        if (!p || p.x == null || p.y == null) return;
+        if (cheese && isCheeseLightTile(p.x, p.y)) return;
+        keys[(p.x | 0) + "," + (p.y | 0)] = true;
       });
     });
     return keys;
@@ -199,8 +326,10 @@
   function cloneBody(body, template) {
     const Gsm = root.MultiplayerGsm;
     return (body || []).map(function (p) {
-      const x = p && p.x != null ? p.x : 0;
-      const y = p && p.y != null ? p.y : 0;
+      let x = p && p.x != null ? Number(p.x) : 0;
+      let y = p && p.y != null ? Number(p.y) : 0;
+      if (!Number.isFinite(x)) x = 0;
+      if (!Number.isFinite(y)) y = 0;
       if (Gsm && typeof Gsm.makeNativePoint === "function") {
         return Gsm.makeNativePoint(x, y, template);
       }
@@ -214,9 +343,35 @@
     });
   }
 
+  /** True when every segment has finite grid coords (native render NaNs otherwise). */
+  function bodyIsRenderable(body) {
+    if (!body || !body.length) return false;
+    for (let i = 0; i < body.length; i++) {
+      const p = body[i];
+      if (!p) return false;
+      const x = Number(p.x);
+      const y = Number(p.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * PlayerRenderer.render(a,b,c) — `a` is usually lerp progress. NaN progress
+   * throws Closure `Error: yi NaN NaN NaN` and kills companion paints.
+   */
+  function sanitizeRenderArgs(a, b, c) {
+    let prog = a;
+    if (typeof prog === "number" && !Number.isFinite(prog)) prog = 0;
+    if (prog == null) prog = 0;
+    return [prog, b === undefined ? true : b, c == null ? {} : c];
+  }
+
   function snapshotBody(body) {
     return (body || []).map(function (p) {
-      return p ? { x: p.x != null ? p.x : 0, y: p.y != null ? p.y : 0 } : { x: 0, y: 0 };
+      const x = p && Number.isFinite(Number(p.x)) ? Number(p.x) : 0;
+      const y = p && Number.isFinite(Number(p.y)) ? Number(p.y) : 0;
+      return { x: x, y: y };
     });
   }
 
@@ -331,30 +486,97 @@
   }
 
   /**
-   * Capture PlayerRenderer ref only — companions paint once per engine tick
-   * (or corpse rAF), never after every subframe render.
+   * Always capture PlayerRenderer ref. After local draw, re-paint companions so
+   * the next RAF does not wipe remotes (tick-only paint left them invisible).
    */
+  let _paintWarnAt = 0;
   function installCoopRenderHook() {
     if (root.__mpCoopRenderInstalled) return;
     root.__mpCoopRenderInstalled = true;
     root.__mpCoopRenderingCompanions = false;
 
+    function wrapRenderer(renderer) {
+      if (!renderer || renderer.__mpCoopPaintWrapped) return;
+      if (typeof renderer.render !== "function") return;
+      renderer.__mpCoopPaintWrapped = true;
+      const origRender = renderer.render;
+      renderer.render = function (a, b, c) {
+        // Idle tip / Focus puppet frames often pass NaN lerp — Closure throws
+        // `Error: yi NaN NaN NaN` and kills the whole native render loop.
+        const safe = sanitizeRenderArgs(a, b, c);
+        root.__mpCoopPlayerRenderer = renderer;
+        root.__mpCoopRenderArgs = safe;
+        let out;
+        try {
+          out = origRender.call(this, safe[0], safe[1], safe[2]);
+        } catch (e) {
+          try {
+            out = origRender.call(this, 0, true, safe[2]);
+          } catch (e2) {
+            const now = Date.now();
+            if (now - _paintWarnAt > 2000) {
+              _paintWarnAt = now;
+              console.warn("__mp render", e2);
+            }
+            out = undefined;
+          }
+        }
+        // Re-draw remotes after local snake so they stay visible between ticks
+        if (
+          root.__mpCoopInject &&
+          root.__mpCoopSession &&
+          !root.__mpCoopRenderingCompanions
+        ) {
+          try {
+            paintCompanionsOnce(
+              this.wb || this.instance || root.__mpGame || root.__remixGame,
+              safe[0],
+              safe[1],
+              safe[2]
+            );
+          } catch (e3) { /* ignore */ }
+        }
+        return out;
+      };
+    }
+
     root.__mpCoopRenderEnter = function (renderer, a, b, c) {
-      if (!root.__mpCoopInject || !root.__mpCoopSession) return;
       if (!renderer || typeof renderer.render !== "function") return;
       root.__mpCoopPlayerRenderer = renderer;
-      root.__mpCoopRenderArgs = [a, b, c];
+      root.__mpCoopRenderArgs = sanitizeRenderArgs(a, b, c);
+      wrapRenderer(renderer);
     };
 
-    // Kept as no-op so older inject markers / tests still resolve
-    root.__mpCoopAfterSnakeRender = function () {};
+    root.__mpCoopAfterSnakeRender = function () {
+      if (!root.__mpCoopInject || !root.__mpCoopSession) return;
+      try {
+        paintCompanionsOnce(null);
+      } catch (e) { /* ignore */ }
+    };
   }
 
-  /** One native companion pass using the cached PlayerRenderer. */
-  function paintCompanionsOnce(game) {
+  function resolvePlayerRenderer(game) {
+    if (root.__mpCoopPlayerRenderer && typeof root.__mpCoopPlayerRenderer.render === "function") {
+      return root.__mpCoopPlayerRenderer;
+    }
+    const g = game || root.__mpGame || root.__remixGame;
+    if (!g) return null;
+    const candidates = [g.playerRenderer, g.Ja, g.Ia, g.renderer, g.snakeRenderer];
+    for (let i = 0; i < candidates.length; i++) {
+      const r = candidates[i];
+      if (r && typeof r.render === "function") {
+        root.__mpCoopPlayerRenderer = r;
+        return r;
+      }
+    }
+    return null;
+  }
+
+  /** One native companion pass using the cached PlayerRenderer (tick / corpse RAF). */
+  function paintCompanionsOnce(game, arg0, arg1, arg2) {
     if (root.__mpCoopRenderingCompanions) return;
     if (!root.__mpCoopInject || !root.__mpCoopSession) return;
-    const renderer = root.__mpCoopPlayerRenderer;
+    const renderer = resolvePlayerRenderer(game);
     if (!renderer || typeof renderer.render !== "function") return;
     const g =
       game ||
@@ -369,11 +591,20 @@
     const ids = Object.keys(remotes);
     if (!ids.length) return;
 
-    const args = root.__mpCoopRenderArgs || [];
+    const cached = root.__mpCoopRenderArgs || [];
+    // Only reuse local args for the opaque 3rd options bag — never local lerp
+    const optsArg = arg2 !== undefined ? arg2 : cached[2];
     const snake = g.oa;
     const savedKa = snake.ka;
     const savedDir = snake.direction;
     const savedDir2 = snake.dir;
+    const now =
+      typeof performance !== "undefined" && performance.now
+        ? performance.now()
+        : Date.now();
+    const Gsm = root.MultiplayerGsm;
+    // Snapshot local coords once — restore via writeNativeBody (reuses point objects)
+    const localSnap = snapshotBody(savedKa);
 
     root.__mpCoopRenderingCompanions = true;
     try {
@@ -381,22 +612,63 @@
         const id = ids[i];
         if (myId && id === myId) continue;
         const r = remotes[id];
-        if (!r || !r.body || !r.body.length) continue;
+        if (!r || !bodyIsRenderable(r.body)) continue;
+        let vis = r._visualBody;
+        if (!bodyIsRenderable(vis)) {
+          if (Gsm && typeof Gsm.followBodyFromHead === "function") {
+            vis = Gsm.followBodyFromHead(null, r.body);
+          } else {
+            vis = snapshotBody(r.body);
+          }
+          r._visualBody = vis;
+          if (r._lerpAt == null) r._lerpAt = now;
+          r._paintDirty = true;
+        }
+        if (!bodyIsRenderable(vis)) continue;
+        const stepMs =
+          r._lerpStepMs != null && r._lerpStepMs > 0
+            ? r._lerpStepMs
+            : 90;
+        const start = r._lerpAt != null ? r._lerpAt : now;
+        let t = stepMs > 0 ? (now - start) / stepMs : 1;
+        if (!Number.isFinite(t)) t = 0;
+        if (t < 0) t = 0;
+        if (t > 1) t = 1;
+        // Always paint remotes (local RAF otherwise wipes them). writeNativeBody
+        // reuses point objects so this stays cheaper than the old cloneBody path.
         const prevColors = applyRemoteColors(g, r);
-        snake.ka = cloneBody(r.body, savedKa && savedKa[0]);
+        if (Gsm && typeof Gsm.writeNativeBody === "function") {
+          Gsm.writeNativeBody(snake, vis);
+        } else {
+          snake.ka = cloneBody(vis, savedKa && savedKa[0]);
+        }
         if (r.dir) {
           snake.direction = r.dir;
           if (snake.dir != null) snake.dir = r.dir;
         }
         try {
-          renderer.render(args[0], args[1], args[2]);
+          // Per-remote crawl phase — never local __mpCoopRenderArgs[0]
+          renderer.render(t, true, optsArg == null ? {} : optsArg);
         } catch (e) {
-          console.warn("__mpCoop paintCompanions", e);
+          const tnow = Date.now();
+          if (tnow - _paintWarnAt > 2000) {
+            _paintWarnAt = tnow;
+            console.warn("__mpCoop paintCompanions", e);
+          }
         }
         restoreColors(g, prevColors);
+        if (t >= 1) r._paintDirty = false;
       }
     } finally {
-      snake.ka = savedKa;
+      if (Gsm && typeof Gsm.writeNativeBody === "function" && localSnap) {
+        try {
+          Gsm.writeNativeBody(snake, localSnap);
+        } catch (e) {
+          snake.ka = savedKa;
+        }
+      } else {
+        snake.ka = savedKa;
+      }
       snake.direction = savedDir;
       if (savedDir2 !== undefined) snake.dir = savedDir2;
       root.__mpCoopRenderingCompanions = false;
@@ -404,14 +676,16 @@
   }
 
   let _corpsePaintRaf = 0;
+  let _corpsePaintSkip = 0;
   function stopCorpsePaintLoop() {
     if (_corpsePaintRaf) {
       cancelAnimationFrame(_corpsePaintRaf);
       _corpsePaintRaf = 0;
     }
+    _corpsePaintSkip = 0;
   }
 
-  /** After local death, tick may stop — keep one companion pass per frame. */
+  /** After local death, tick may stop — keep companion paint (throttled). */
   function startCorpsePaintLoop() {
     if (_corpsePaintRaf) return;
     if (typeof requestAnimationFrame !== "function") return;
@@ -419,9 +693,13 @@
       _corpsePaintRaf = 0;
       if (!root.__mpCoopSession || !root.__mpCoopInject) return;
       if (!root.__mpCoopLocalDead && !root.__mpCoopSpectator) return;
-      try {
-        paintCompanionsOnce(null);
-      } catch (e) { /* ignore */ }
+      // Every other frame — corpse RAF was a major dual-player lag source
+      _corpsePaintSkip = (_corpsePaintSkip + 1) & 1;
+      if (!_corpsePaintSkip) {
+        try {
+          paintCompanionsOnce(null);
+        } catch (e) { /* ignore */ }
+      }
       if (typeof requestAnimationFrame === "function") {
         _corpsePaintRaf = requestAnimationFrame(frame);
       }
@@ -526,6 +804,14 @@
     root.__mpCoopOnTick = function (game) {
       if (!root.__mpCoopInject || !root.__mpCoopSession) return;
       try {
+        // Apply coalesced peer poses before collide/paint
+        if (typeof root.__mpCoopFlushPendingDeltas === "function") {
+          try {
+            root.__mpCoopFlushPendingDeltas();
+          } catch (e) {
+            console.warn("__mpCoopFlushPendingDeltas", e);
+          }
+        }
         wrapFreePos(game);
         installRemixSpawnOccupancyHooks();
         const myId = root.__mpCoopMyId;
@@ -539,7 +825,7 @@
           startCorpsePaintLoop();
         }
 
-        if (!root.__mpCoopSpectator) {
+        if (!root.__mpCoopSpectator && !coopSkipFriendlyHits()) {
           const snake = game && game.oa;
           const body = snake && snake.ka;
           const head = body && body[0];
@@ -552,7 +838,12 @@
               const lim = Math.max(0, segs.length - 1);
               for (let j = 0; j < lim; j++) {
                 const p = segs[j];
-                if (p && p.x === head.x && p.y === head.y) {
+                if (
+                  p &&
+                  p.x === head.x &&
+                  p.y === head.y &&
+                  remoteCellBlocks(p.x, p.y)
+                ) {
                   hit = true;
                   break;
                 }
@@ -582,7 +873,8 @@
           }
         }
 
-        // One native companion pass per engine tick (not every render frame)
+        // Companions also re-paint after local PlayerRenderer each frame;
+        // tick paint covers the first frames before wrap captures renderer.
         if (!root.__mpCoopLocalDead || root.__mpCoopSpectator) {
           paintCompanionsOnce(game);
         }

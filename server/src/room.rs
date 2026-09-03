@@ -1,15 +1,15 @@
 //! Room state machine: roster, roles, modes, Versus relay, Co-op sim.
 
-use crate::colors::{color_name, is_claimable};
+use crate::colors::{color_name, first_free_claimable, is_claimable};
 use crate::coop::CoopGame;
 use crate::protocol::{error_envelope, Envelope};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 pub const MAX_CONNECTIONS: usize = 30;
-pub const MAX_VERSUS_PLAYERS: usize = 10;
+pub const MAX_VERSUS_PLAYERS: usize = 9;
 pub const MAX_COOP_PLAYERS: usize = 4;
 pub const DEFAULT_DURATION_MIN: u32 = 30;
 
@@ -163,6 +163,8 @@ pub struct Room {
     pub coop_collectables: Option<Value>,
     pub collectables_owner: Option<String>,
     pub coop_alive: HashMap<String, bool>,
+    /// Wall-clock when any co-op player first moved (shared timer epoch).
+    pub coop_timer_started_at_ms: Option<u64>,
     pub outbox: Vec<(Option<String>, Envelope)>, // None = broadcast
     pub server_seq: u64,
 }
@@ -190,6 +192,7 @@ impl Room {
             coop_collectables: None,
             collectables_owner: None,
             coop_alive: HashMap::new(),
+            coop_timer_started_at_ms: None,
             outbox: Vec::new(),
             server_seq: 0,
         }
@@ -203,6 +206,19 @@ impl Room {
     fn push_broadcast(&mut self, mut env: Envelope) {
         env.seq = self.next_seq();
         self.outbox.push((None, env));
+    }
+
+    fn push_broadcast_except(&mut self, except: &str, mut env: Envelope) {
+        env.seq = self.next_seq();
+        let targets: Vec<String> = self
+            .clients
+            .keys()
+            .filter(|id| id.as_str() != except)
+            .cloned()
+            .collect();
+        for tid in targets {
+            self.outbox.push((Some(tid), env.clone()));
+        }
     }
 
     fn push_to(&mut self, client_id: &str, mut env: Envelope) {
@@ -432,10 +448,16 @@ impl Room {
             }
             self.promote_seq += 1;
             let po = self.promote_seq;
-            let client = self.clients.get_mut(&target).unwrap();
-            client.promote_order = Some(po);
-            client.role = Role::Player;
-            client.ready = false;
+            {
+                let client = self.clients.get_mut(&target).unwrap();
+                client.promote_order = Some(po);
+                client.role = Role::Player;
+                client.ready = false;
+            }
+            // Co-op: assign a free color if none / colliding with another player
+            if self.mode == Mode::Coop {
+                self.ensure_unique_coop_color(&target);
+            }
         } else if role == Role::Spectator {
             let client = self.clients.get_mut(&target).unwrap();
             client.role = Role::Spectator;
@@ -564,6 +586,7 @@ impl Room {
         self.coop_collectables = None;
         self.collectables_owner = None;
         self.coop_alive.clear();
+        self.coop_timer_started_at_ms = None;
         // Do not clear versus_scores / versus_boards here — SESSION_START resets them.
         for c in self.clients.values_mut() {
             c.ready = false;
@@ -585,6 +608,63 @@ impl Room {
             .filter(|c| c.role == Role::Player)
             .min_by_key(|c| c.promote_order.unwrap_or(u64::MAX))
             .map(|c| c.client_id.clone())
+    }
+
+    /// Ensure `client_id` has a claimable color unique among co-op players.
+    fn ensure_unique_coop_color(&mut self, client_id: &str) {
+        let current = self.clients.get(client_id).and_then(|c| c.color_id);
+        let taken: Vec<u8> = self
+            .clients
+            .values()
+            .filter(|c| c.client_id != client_id && c.role == Role::Player)
+            .filter_map(|c| c.color_id)
+            .collect();
+        let needs = match current {
+            None => true,
+            Some(id) if !is_claimable(id) => true,
+            Some(id) if taken.contains(&id) => true,
+            Some(_) => false,
+        };
+        if !needs {
+            return;
+        }
+        if let Some(free) = first_free_claimable(&taken) {
+            if let Some(c) = self.clients.get_mut(client_id) {
+                c.color_id = Some(free);
+            }
+        }
+    }
+
+    /// After Versus→Coop or demotion: rematch any duplicate player colors.
+    fn rematch_coop_colors(&mut self) {
+        let mut player_ids: Vec<String> = self
+            .clients
+            .values()
+            .filter(|c| c.role == Role::Player)
+            .map(|c| c.client_id.clone())
+            .collect();
+        player_ids.sort();
+        let mut seen: Vec<u8> = Vec::new();
+        for id in player_ids {
+            let cur = self.clients.get(&id).and_then(|c| c.color_id);
+            let clash = match cur {
+                None => true,
+                Some(cid) if !is_claimable(cid) => true,
+                Some(cid) if seen.contains(&cid) => true,
+                Some(cid) => {
+                    seen.push(cid);
+                    false
+                }
+            };
+            if clash {
+                if let Some(free) = first_free_claimable(&seen) {
+                    if let Some(c) = self.clients.get_mut(&id) {
+                        c.color_id = Some(free);
+                    }
+                    seen.push(free);
+                }
+            }
+        }
     }
 
     fn cmd_mode_change(&mut self, from: &str, payload: &Value) -> Result<(), String> {
@@ -618,6 +698,7 @@ impl Room {
                     info!(roomId = %self.code, clientId = %id, event = "auto_demote");
                 }
             }
+            self.rematch_coop_colors();
         }
         info!(roomId = %self.code, mode = mode.as_str(), event = "mode_change");
         self.push_broadcast(Envelope::new(
@@ -672,6 +753,7 @@ impl Room {
         self.coop_snakes.clear();
         self.coop_collectables = None;
         self.coop_alive.clear();
+        self.coop_timer_started_at_ms = None;
         if self.mode == Mode::Versus {
             self.attempt_deadline =
                 Some(Instant::now() + Duration::from_secs(self.duration_min as u64 * 60));
@@ -721,6 +803,7 @@ impl Room {
                 }));
             }
             start_payload["slots"] = json!(slots);
+            // Timer starts when any player first moves (COOP_TIMER_START), not at Start
         }
         self.push_broadcast(Envelope::new("SESSION_START", start_payload));
         // Start match → Play for every ready player (Versus and Co-op).
@@ -739,8 +822,9 @@ impl Room {
     }
 
     fn cmd_snake_delta(&mut self, from: &str, payload: &Value) -> Result<(), String> {
+        // Late packets after ALL_DEAD / SESSION_END — ignore quietly (no ERROR spam)
         if self.mode != Mode::Coop || !self.session_active {
-            return Err("not_coop_session".into());
+            return Ok(());
         }
         let client = self.clients.get(from).ok_or("unknown_client")?;
         if client.role != Role::Player {
@@ -756,7 +840,30 @@ impl Room {
             .unwrap_or(true);
         self.coop_alive.insert(from.to_string(), alive);
         self.coop_snakes.insert(from.to_string(), body.clone());
-        self.push_broadcast(Envelope::new("SNAKE_DELTA", body));
+        // First player move arms the shared run timer for everyone
+        let wants_timer = payload
+            .get("timerArm")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            || payload.get("timerStartedAtMs").and_then(|v| v.as_u64()).is_some();
+        if wants_timer && self.coop_timer_started_at_ms.is_none() {
+            let ms = payload
+                .get("timerStartedAtMs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or_else(|| {
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0)
+                });
+            self.coop_timer_started_at_ms = Some(ms);
+            self.push_broadcast(Envelope::new(
+                "COOP_TIMER_START",
+                json!({"timerStartedAtMs": ms, "clientId": from}),
+            ));
+        }
+        // Skip sender echo — publisher already has local pose (cuts WS backlog)
+        self.push_broadcast_except(from, Envelope::new("SNAKE_DELTA", body));
         if !alive {
             self.maybe_end_coop_all_dead();
         }
@@ -765,7 +872,7 @@ impl Room {
 
     fn cmd_collectables_delta(&mut self, from: &str, payload: &Value) -> Result<(), String> {
         if self.mode != Mode::Coop || !self.session_active {
-            return Err("not_coop_session".into());
+            return Ok(());
         }
         let client = self.clients.get(from).ok_or("unknown_client")?;
         if client.role != Role::Player {
@@ -783,7 +890,7 @@ impl Room {
 
     fn cmd_coop_player_dead(&mut self, from: &str, payload: &Value) -> Result<(), String> {
         if self.mode != Mode::Coop || !self.session_active {
-            return Err("not_coop_session".into());
+            return Ok(());
         }
         let client = self.clients.get(from).ok_or("unknown_client")?;
         if client.role != Role::Player {
@@ -811,7 +918,7 @@ impl Room {
 
     fn cmd_coop_goal(&mut self, from: &str, _payload: &Value) -> Result<(), String> {
         if self.mode != Mode::Coop || !self.session_active {
-            return Err("not_coop_session".into());
+            return Ok(());
         }
         let client = self.clients.get(from).ok_or("unknown_client")?;
         if client.role != Role::Player {
@@ -1300,7 +1407,7 @@ mod tests {
     fn set_role_caps() {
         let mut r = room();
         r.join("admin".into(), None, None).unwrap();
-        for i in 0..10 {
+        for i in 0..9 {
             r.join(format!("p{i}"), None, None).unwrap();
             r.cmd_set_role(
                 "admin",
@@ -1468,6 +1575,37 @@ mod tests {
         assert!(r.versus_scores.is_empty());
         assert!(!r.attempt_expired);
         assert!(r.allow_new_runs);
+    }
+
+    #[test]
+    fn snake_delta_skips_sender_echo() {
+        let mut r = room();
+        r.join("a".into(), None, None).unwrap();
+        r.join("b".into(), None, None).unwrap();
+        r.cmd_mode_change("a", &json!({"mode": "coop"})).unwrap();
+        r.cmd_set_role("a", &json!({"clientId": "a", "role": "player"}))
+            .unwrap();
+        r.cmd_set_role("a", &json!({"clientId": "b", "role": "player"}))
+            .unwrap();
+        r.cmd_ready("a", &json!({"ready": true})).unwrap();
+        r.cmd_ready("b", &json!({"ready": true})).unwrap();
+        r.cmd_session_start("a", &json!({})).unwrap();
+        r.take_outbox();
+        r.cmd_snake_delta(
+            "a",
+            &json!({"body": [{"x": 1, "y": 1}], "alive": true}),
+        )
+        .unwrap();
+        let out = r.take_outbox();
+        let deltas: Vec<_> = out
+            .iter()
+            .filter(|(_, e)| e.msg_type == "SNAKE_DELTA")
+            .collect();
+        assert!(!deltas.is_empty());
+        assert!(
+            deltas.iter().all(|(tid, _)| tid.as_deref() == Some("b")),
+            "SNAKE_DELTA must not echo to sender"
+        );
     }
 
     #[test]

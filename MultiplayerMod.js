@@ -1,6 +1,6 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-03T01:17:46.447Z */
+/* Built: 2026-09-03T10:36:56.138Z */
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -24250,7 +24250,7 @@ window.DiceCounts.alterSnakeCode = function (code) {
       "if($1 > 6 && $1 <= 12) {"
     );
   } else {
-    console.error("DiceCounts: failed to narrow MoreMenu count > 6 gate");
+    console.debug("DiceCounts: skipped (narrow MoreMenu count > 6 gate)");
   }
 
   // Native reset: a = key/sokoban/portal/poison (or chess), b = one/dice/bomb.
@@ -24266,7 +24266,7 @@ window.DiceCounts.alterSnakeCode = function (code) {
       "b=this.settings.ka===0||this.settings.ka===4||this.settings.ka===5||(window.remixIsColoredDice&&window.remixIsColoredDice(this.settings.ka))||(window.remixIsClusterCount&&window.remixIsClusterCount(this.settings.ka))"
     );
   } else {
-    console.error("DiceCounts: failed to extend reset b (one/dice/bomb) for colored dice");
+    console.debug("DiceCounts: skipped (extend reset b (one/dice/bomb) for colored dice)");
   }
 
   // Cluster-count state reset on play start — must run after the full
@@ -24281,7 +24281,7 @@ window.DiceCounts.alterSnakeCode = function (code) {
       ",c=this.settings.ka===2||this.settings.ka===3||this.settings.ka===6;window.remixIsClusterCount&&window.remixIsClusterCount(this.settings.ka)&&window.remixClusterCountReset&&window.remixClusterCountReset();if(a)"
     );
   } else {
-    console.error("DiceCounts: failed to inject cluster-count reset on play start");
+    console.debug("DiceCounts: skipped (inject cluster-count reset on play start)");
   }
 
   // After MoreMenu's `} else if(a)` — classic cluster count uses +0,+0 (one apple).
@@ -24306,7 +24306,7 @@ window.DiceCounts.alterSnakeCode = function (code) {
         } else if(a)`
     );
   } else {
-    console.error("DiceCounts: failed to inject colored-dice start placement");
+    console.debug("DiceCounts: skipped (inject colored-dice start placement)");
   }
 
   // Native last-apple refill for Dice is NOT Mn — Mn early-returns for dice-like
@@ -24327,7 +24327,7 @@ window.DiceCounts.alterSnakeCode = function (code) {
       `(window.remixIsDiceLike&&window.remixIsDiceLike(a.settings.ka))?r7E(a)===0&&(a.settings.ka===4?s7E(a):u7E(a,window.remixDiceSpawnCount(a.settings.ka,1)))`
     );
   } else {
-    console.error("DiceCounts: failed to find native dice tdF/s7E refill path");
+    console.debug("DiceCounts: skipped (find native dice tdF/s7E refill path)");
   }
 
   // Mn still early-returns for dice-like; keep spawn-count wrap for safety on
@@ -24364,7 +24364,7 @@ window.DiceCounts.alterSnakeCode = function (code) {
       "if(__img.className.indexOf('WwRsj')<0){__img.style.position='relative';__img.style.left='50px';}"
     );
   } else {
-    console.error("DiceCounts: failed to patch MoreMenu scoreboard count icon");
+    console.debug("DiceCounts: skipped (patch MoreMenu scoreboard count icon)");
   }
 
   // TopBar fruit icon uses count_img_arr snapshotted before async hue-tint.
@@ -24412,7 +24412,7 @@ window.DiceCounts.alterSnakeCode = function (code) {
         `if(window.isCatActive&&window.isCatActive()){try{window.cat_reset_state();}catch(_cat){}}if(window.isMexicoActive&&window.isMexicoActive()){try{window.mexico_reset_state();}catch(_mx){}}${clusterRunReset}`
       );
     } else {
-      console.error("DiceCounts: failed to inject cluster-count reset on run reset");
+      console.debug("DiceCounts: skipped (inject cluster-count reset on run reset)");
     }
   }
 
@@ -30399,6 +30399,19 @@ window.RemixMod.runCodeAfter = function () {
     return id !== 46 && !!BY_ID[id] && BY_ID[id].kind !== "random";
   }
 
+  /** First claimable id not in takenIds (numbers). */
+  function firstFreeClaimable(takenIds) {
+    const taken = {};
+    (takenIds || []).forEach(function (id) {
+      if (id != null) taken[Number(id)] = true;
+    });
+    for (let i = 0; i < CLAIMABLE_IDS.length; i++) {
+      const id = CLAIMABLE_IDS[i];
+      if (!taken[id]) return id;
+    }
+    return null;
+  }
+
   /** Disambiguate duplicate color names in Versus: Blue, Blue 2, … */
   function displayNameFor(client, roster) {
     if (client.displayName && String(client.displayName).trim()) {
@@ -30434,6 +30447,7 @@ window.RemixMod.runCodeAfter = function () {
     getColor,
     colorName,
     isClaimable,
+    firstFreeClaimable,
     displayNameFor,
   };
 
@@ -30482,6 +30496,8 @@ window.RemixMod.runCodeAfter = function () {
     COOP_PLAYER_DEAD: "COOP_PLAYER_DEAD",
     /** Native co-op: native goal hit (e.g. ALL apples). */
     COOP_GOAL: "COOP_GOAL",
+    /** Native co-op: shared run timer armed (first player moved). */
+    COOP_TIMER_START: "COOP_TIMER_START",
     ERROR: "ERROR",
     PING: "PING",
     PONG: "PONG",
@@ -31409,9 +31425,12 @@ window.RemixMod.runCodeAfter = function () {
     this.remotes = {};
     this.collectables = null;
     this.sessionActive = false;
+    this._seedStickyUntil = 0;
     this.syncBridge();
     this.stopOverlay();
     stopCorpsePaintLoop();
+    root.__mpCoopPlayerRenderer = null;
+    root.__mpCoopRenderArgs = null;
   };
 
   CoopNative.prototype.syncBridge = function () {
@@ -31423,11 +31442,37 @@ window.RemixMod.runCodeAfter = function () {
     root.__mpCoopInject = !!this.injectEnabled && !!this.sessionActive;
   };
 
+  CoopNative.prototype.beginSeedSticky = function (ms) {
+    this._seedStickyUntil = Date.now() + (ms != null ? ms : 1500);
+  };
+
   CoopNative.prototype.applySnakeDelta = function (payload) {
     if (!payload || !payload.clientId) return;
     const prev = this.remotes[payload.clientId];
-    // Live deltas win over SESSION_START seeds
+    // Live deltas win over SESSION_START seeds — except empty/short during sticky window
     if (payload._seeded && prev && prev._fromDelta) return;
+    const bodyEmpty = !payload.body || !payload.body.length;
+    const bodyShort = !payload.body || payload.body.length < 3;
+    const sticky =
+      this._seedStickyUntil && Date.now() < this._seedStickyUntil;
+    if (
+      !payload._seeded &&
+      prev &&
+      prev._seeded &&
+      sticky &&
+      (bodyEmpty || bodyShort)
+    ) {
+      // Keep seeded body; merge non-body fields if useful
+      const keep = Object.assign({}, prev);
+      ["dir", "alive", "colorId", "color1", "color2", "Sc", "Yc"].forEach(
+        function (k) {
+          if (payload[k] != null) keep[k] = payload[k];
+        }
+      );
+      this.remotes[payload.clientId] = keep;
+      this.syncBridge();
+      return;
+    }
     const next = Object.assign({}, prev || {}, payload);
     if (!payload._seeded) next._fromDelta = true;
     // Keep prior colors when a delta omits them (scrape sometimes misses Sc/Yc)
@@ -31437,14 +31482,54 @@ window.RemixMod.runCodeAfter = function () {
           if (next[k] == null && prev[k] != null) next[k] = prev[k];
         }
       );
+      // Preserve visual/lerp state across merges unless body forces a reseat
+      if (prev._visualBody) next._visualBody = prev._visualBody;
+      if (prev._lerpAt != null) next._lerpAt = prev._lerpAt;
+      if (prev._lerpStepMs != null) next._lerpStepMs = prev._lerpStepMs;
+      if (prev._paintDirty != null) next._paintDirty = prev._paintDirty;
     }
     // Never drop a corpse body when a dead/empty scrape arrives
-    const bodyEmpty = !next.body || !next.body.length;
     if (bodyEmpty && prev && prev.body && prev.body.length) {
       next.body = prev.body;
     }
     if (next.alive === false && bodyEmpty && prev && prev.body && prev.body.length) {
       next.body = prev.body;
+    }
+    // Spectate-style trail: advance visual body when remote head moves
+    if (next.body && next.body.length) {
+      const Gsm = root.MultiplayerGsm;
+      const now =
+        typeof performance !== "undefined" && performance.now
+          ? performance.now()
+          : Date.now();
+      const prevHead = prev && prev.body && prev.body[0];
+      const nextHead = next.body[0];
+      let headMoved = !prevHead || !nextHead;
+      if (prevHead && nextHead) {
+        headMoved =
+          Math.round(Number(prevHead.x)) !== Math.round(Number(nextHead.x)) ||
+          Math.round(Number(prevHead.y)) !== Math.round(Number(nextHead.y)) ||
+          (prev.body && prev.body.length) !== next.body.length;
+      }
+      if (headMoved) {
+        if (Gsm && typeof Gsm.followBodyFromHead === "function") {
+          next._visualBody = Gsm.followBodyFromHead(
+            prev && prev._visualBody,
+            next.body
+          );
+        } else {
+          next._visualBody = snapshotBody(next.body);
+        }
+        if (prev && prev._lerpAt != null) {
+          const dt = now - prev._lerpAt;
+          if (dt > 30 && dt < 250) next._lerpStepMs = dt;
+        }
+        next._lerpAt = now;
+        next._paintDirty = true;
+      } else if (!next._visualBody) {
+        next._visualBody = snapshotBody(next.body);
+        next._paintDirty = true;
+      }
     }
     this.remotes[payload.clientId] = next;
     this.syncBridge();
@@ -31466,8 +31551,57 @@ window.RemixMod.runCodeAfter = function () {
       });
   };
 
+  /** Mode key from Remix ModeRegistry (e.g. "peaceful", "cheese", "wall+cheese"). */
+  function coopModeKey() {
+    try {
+      if (
+        root.ModeRegistry &&
+        typeof root.ModeRegistry.getCurrentModeKey === "function"
+      ) {
+        return String(root.ModeRegistry.getCurrentModeKey() || "");
+      }
+    } catch (e) { /* ignore */ }
+    return "";
+  }
+
+  function modeKeyHas(key, part) {
+    if (!key || !part) return false;
+    const parts = String(key).toLowerCase().split(/[+|_]/);
+    return parts.indexOf(String(part).toLowerCase()) >= 0;
+  }
+
+  /** Peaceful mode, cat grace, or dimension/chess peaceful badge. */
+  function coopSkipFriendlyHits() {
+    const key = coopModeKey();
+    if (modeKeyHas(key, "peaceful")) return true;
+    if ((root.cat_peaceful_ticks | 0) > 0) return true;
+    if (typeof root.chess_peaceful_active === "function") {
+      try {
+        if (root.chess_peaceful_active()) return true;
+      } catch (e) { /* ignore */ }
+    }
+    return false;
+  }
+
+  function coopIsCheeseMode() {
+    return modeKeyHas(coopModeKey(), "cheese");
+  }
+
+  /** Board light square parity — matches theme checker (x+y)%2===0. */
+  function isCheeseLightTile(x, y) {
+    return (((x | 0) + (y | 0)) & 1) === 0;
+  }
+
+  /** True when a remote body cell should block (cheese light = hole). */
+  function remoteCellBlocks(x, y) {
+    if (x == null || y == null) return false;
+    if (coopIsCheeseMode() && isCheeseLightTile(x, y)) return false;
+    return true;
+  }
+
   CoopNative.prototype.hitsRemote = function (head, excludeId) {
     if (!head) return false;
+    if (coopSkipFriendlyHits()) return false;
     const remotes = this.remoteList(excludeId);
     for (let i = 0; i < remotes.length; i++) {
       const r = remotes[i];
@@ -31475,7 +31609,14 @@ window.RemixMod.runCodeAfter = function () {
       const lim = Math.max(0, body.length - 1);
       for (let j = 0; j < lim; j++) {
         const p = body[j];
-        if (p && p.x === head.x && p.y === head.y) return true;
+        if (
+          p &&
+          p.x === head.x &&
+          p.y === head.y &&
+          remoteCellBlocks(p.x, p.y)
+        ) {
+          return true;
+        }
       }
     }
     return false;
@@ -31483,15 +31624,16 @@ window.RemixMod.runCodeAfter = function () {
 
   /**
    * Occupancy for spawn avoidance: every remote body cell (live snakes AND
-   * corpses). Rebuilt on each call so movers vacate cells for new fruit.
+   * corpses). Cheese light tiles are holes — not occupied. Rebuilt each call.
    */
   CoopNative.prototype.occupancyKeys = function (includeLocal) {
     const keys = {};
+    const cheese = coopIsCheeseMode();
     function addBody(body) {
       (body || []).forEach(function (p) {
-        if (p && p.x != null && p.y != null) {
-          keys[(p.x | 0) + "," + (p.y | 0)] = true;
-        }
+        if (!p || p.x == null || p.y == null) return;
+        if (cheese && isCheeseLightTile(p.x, p.y)) return;
+        keys[(p.x | 0) + "," + (p.y | 0)] = true;
       });
     }
     Object.keys(this.remotes).forEach(function (id) {
@@ -31519,13 +31661,14 @@ window.RemixMod.runCodeAfter = function () {
       return app.coopNative.occupancyKeys(false);
     }
     const keys = {};
+    const cheese = coopIsCheeseMode();
     const remotes = root.__mpCoopRemotes || {};
     Object.keys(remotes).forEach(function (id) {
       const body = remotes[id] && remotes[id].body;
       (body || []).forEach(function (p) {
-        if (p && p.x != null && p.y != null) {
-          keys[(p.x | 0) + "," + (p.y | 0)] = true;
-        }
+        if (!p || p.x == null || p.y == null) return;
+        if (cheese && isCheeseLightTile(p.x, p.y)) return;
+        keys[(p.x | 0) + "," + (p.y | 0)] = true;
       });
     });
     return keys;
@@ -31593,8 +31736,10 @@ window.RemixMod.runCodeAfter = function () {
   function cloneBody(body, template) {
     const Gsm = root.MultiplayerGsm;
     return (body || []).map(function (p) {
-      const x = p && p.x != null ? p.x : 0;
-      const y = p && p.y != null ? p.y : 0;
+      let x = p && p.x != null ? Number(p.x) : 0;
+      let y = p && p.y != null ? Number(p.y) : 0;
+      if (!Number.isFinite(x)) x = 0;
+      if (!Number.isFinite(y)) y = 0;
       if (Gsm && typeof Gsm.makeNativePoint === "function") {
         return Gsm.makeNativePoint(x, y, template);
       }
@@ -31608,9 +31753,35 @@ window.RemixMod.runCodeAfter = function () {
     });
   }
 
+  /** True when every segment has finite grid coords (native render NaNs otherwise). */
+  function bodyIsRenderable(body) {
+    if (!body || !body.length) return false;
+    for (let i = 0; i < body.length; i++) {
+      const p = body[i];
+      if (!p) return false;
+      const x = Number(p.x);
+      const y = Number(p.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * PlayerRenderer.render(a,b,c) — `a` is usually lerp progress. NaN progress
+   * throws Closure `Error: yi NaN NaN NaN` and kills companion paints.
+   */
+  function sanitizeRenderArgs(a, b, c) {
+    let prog = a;
+    if (typeof prog === "number" && !Number.isFinite(prog)) prog = 0;
+    if (prog == null) prog = 0;
+    return [prog, b === undefined ? true : b, c == null ? {} : c];
+  }
+
   function snapshotBody(body) {
     return (body || []).map(function (p) {
-      return p ? { x: p.x != null ? p.x : 0, y: p.y != null ? p.y : 0 } : { x: 0, y: 0 };
+      const x = p && Number.isFinite(Number(p.x)) ? Number(p.x) : 0;
+      const y = p && Number.isFinite(Number(p.y)) ? Number(p.y) : 0;
+      return { x: x, y: y };
     });
   }
 
@@ -31725,30 +31896,97 @@ window.RemixMod.runCodeAfter = function () {
   }
 
   /**
-   * Capture PlayerRenderer ref only — companions paint once per engine tick
-   * (or corpse rAF), never after every subframe render.
+   * Always capture PlayerRenderer ref. After local draw, re-paint companions so
+   * the next RAF does not wipe remotes (tick-only paint left them invisible).
    */
+  let _paintWarnAt = 0;
   function installCoopRenderHook() {
     if (root.__mpCoopRenderInstalled) return;
     root.__mpCoopRenderInstalled = true;
     root.__mpCoopRenderingCompanions = false;
 
+    function wrapRenderer(renderer) {
+      if (!renderer || renderer.__mpCoopPaintWrapped) return;
+      if (typeof renderer.render !== "function") return;
+      renderer.__mpCoopPaintWrapped = true;
+      const origRender = renderer.render;
+      renderer.render = function (a, b, c) {
+        // Idle tip / Focus puppet frames often pass NaN lerp — Closure throws
+        // `Error: yi NaN NaN NaN` and kills the whole native render loop.
+        const safe = sanitizeRenderArgs(a, b, c);
+        root.__mpCoopPlayerRenderer = renderer;
+        root.__mpCoopRenderArgs = safe;
+        let out;
+        try {
+          out = origRender.call(this, safe[0], safe[1], safe[2]);
+        } catch (e) {
+          try {
+            out = origRender.call(this, 0, true, safe[2]);
+          } catch (e2) {
+            const now = Date.now();
+            if (now - _paintWarnAt > 2000) {
+              _paintWarnAt = now;
+              console.warn("__mp render", e2);
+            }
+            out = undefined;
+          }
+        }
+        // Re-draw remotes after local snake so they stay visible between ticks
+        if (
+          root.__mpCoopInject &&
+          root.__mpCoopSession &&
+          !root.__mpCoopRenderingCompanions
+        ) {
+          try {
+            paintCompanionsOnce(
+              this.wb || this.instance || root.__mpGame || root.__remixGame,
+              safe[0],
+              safe[1],
+              safe[2]
+            );
+          } catch (e3) { /* ignore */ }
+        }
+        return out;
+      };
+    }
+
     root.__mpCoopRenderEnter = function (renderer, a, b, c) {
-      if (!root.__mpCoopInject || !root.__mpCoopSession) return;
       if (!renderer || typeof renderer.render !== "function") return;
       root.__mpCoopPlayerRenderer = renderer;
-      root.__mpCoopRenderArgs = [a, b, c];
+      root.__mpCoopRenderArgs = sanitizeRenderArgs(a, b, c);
+      wrapRenderer(renderer);
     };
 
-    // Kept as no-op so older inject markers / tests still resolve
-    root.__mpCoopAfterSnakeRender = function () {};
+    root.__mpCoopAfterSnakeRender = function () {
+      if (!root.__mpCoopInject || !root.__mpCoopSession) return;
+      try {
+        paintCompanionsOnce(null);
+      } catch (e) { /* ignore */ }
+    };
   }
 
-  /** One native companion pass using the cached PlayerRenderer. */
-  function paintCompanionsOnce(game) {
+  function resolvePlayerRenderer(game) {
+    if (root.__mpCoopPlayerRenderer && typeof root.__mpCoopPlayerRenderer.render === "function") {
+      return root.__mpCoopPlayerRenderer;
+    }
+    const g = game || root.__mpGame || root.__remixGame;
+    if (!g) return null;
+    const candidates = [g.playerRenderer, g.Ja, g.Ia, g.renderer, g.snakeRenderer];
+    for (let i = 0; i < candidates.length; i++) {
+      const r = candidates[i];
+      if (r && typeof r.render === "function") {
+        root.__mpCoopPlayerRenderer = r;
+        return r;
+      }
+    }
+    return null;
+  }
+
+  /** One native companion pass using the cached PlayerRenderer (tick / corpse RAF). */
+  function paintCompanionsOnce(game, arg0, arg1, arg2) {
     if (root.__mpCoopRenderingCompanions) return;
     if (!root.__mpCoopInject || !root.__mpCoopSession) return;
-    const renderer = root.__mpCoopPlayerRenderer;
+    const renderer = resolvePlayerRenderer(game);
     if (!renderer || typeof renderer.render !== "function") return;
     const g =
       game ||
@@ -31763,11 +32001,20 @@ window.RemixMod.runCodeAfter = function () {
     const ids = Object.keys(remotes);
     if (!ids.length) return;
 
-    const args = root.__mpCoopRenderArgs || [];
+    const cached = root.__mpCoopRenderArgs || [];
+    // Only reuse local args for the opaque 3rd options bag — never local lerp
+    const optsArg = arg2 !== undefined ? arg2 : cached[2];
     const snake = g.oa;
     const savedKa = snake.ka;
     const savedDir = snake.direction;
     const savedDir2 = snake.dir;
+    const now =
+      typeof performance !== "undefined" && performance.now
+        ? performance.now()
+        : Date.now();
+    const Gsm = root.MultiplayerGsm;
+    // Snapshot local coords once — restore via writeNativeBody (reuses point objects)
+    const localSnap = snapshotBody(savedKa);
 
     root.__mpCoopRenderingCompanions = true;
     try {
@@ -31775,22 +32022,63 @@ window.RemixMod.runCodeAfter = function () {
         const id = ids[i];
         if (myId && id === myId) continue;
         const r = remotes[id];
-        if (!r || !r.body || !r.body.length) continue;
+        if (!r || !bodyIsRenderable(r.body)) continue;
+        let vis = r._visualBody;
+        if (!bodyIsRenderable(vis)) {
+          if (Gsm && typeof Gsm.followBodyFromHead === "function") {
+            vis = Gsm.followBodyFromHead(null, r.body);
+          } else {
+            vis = snapshotBody(r.body);
+          }
+          r._visualBody = vis;
+          if (r._lerpAt == null) r._lerpAt = now;
+          r._paintDirty = true;
+        }
+        if (!bodyIsRenderable(vis)) continue;
+        const stepMs =
+          r._lerpStepMs != null && r._lerpStepMs > 0
+            ? r._lerpStepMs
+            : 90;
+        const start = r._lerpAt != null ? r._lerpAt : now;
+        let t = stepMs > 0 ? (now - start) / stepMs : 1;
+        if (!Number.isFinite(t)) t = 0;
+        if (t < 0) t = 0;
+        if (t > 1) t = 1;
+        // Always paint remotes (local RAF otherwise wipes them). writeNativeBody
+        // reuses point objects so this stays cheaper than the old cloneBody path.
         const prevColors = applyRemoteColors(g, r);
-        snake.ka = cloneBody(r.body, savedKa && savedKa[0]);
+        if (Gsm && typeof Gsm.writeNativeBody === "function") {
+          Gsm.writeNativeBody(snake, vis);
+        } else {
+          snake.ka = cloneBody(vis, savedKa && savedKa[0]);
+        }
         if (r.dir) {
           snake.direction = r.dir;
           if (snake.dir != null) snake.dir = r.dir;
         }
         try {
-          renderer.render(args[0], args[1], args[2]);
+          // Per-remote crawl phase — never local __mpCoopRenderArgs[0]
+          renderer.render(t, true, optsArg == null ? {} : optsArg);
         } catch (e) {
-          console.warn("__mpCoop paintCompanions", e);
+          const tnow = Date.now();
+          if (tnow - _paintWarnAt > 2000) {
+            _paintWarnAt = tnow;
+            console.warn("__mpCoop paintCompanions", e);
+          }
         }
         restoreColors(g, prevColors);
+        if (t >= 1) r._paintDirty = false;
       }
     } finally {
-      snake.ka = savedKa;
+      if (Gsm && typeof Gsm.writeNativeBody === "function" && localSnap) {
+        try {
+          Gsm.writeNativeBody(snake, localSnap);
+        } catch (e) {
+          snake.ka = savedKa;
+        }
+      } else {
+        snake.ka = savedKa;
+      }
       snake.direction = savedDir;
       if (savedDir2 !== undefined) snake.dir = savedDir2;
       root.__mpCoopRenderingCompanions = false;
@@ -31798,14 +32086,16 @@ window.RemixMod.runCodeAfter = function () {
   }
 
   let _corpsePaintRaf = 0;
+  let _corpsePaintSkip = 0;
   function stopCorpsePaintLoop() {
     if (_corpsePaintRaf) {
       cancelAnimationFrame(_corpsePaintRaf);
       _corpsePaintRaf = 0;
     }
+    _corpsePaintSkip = 0;
   }
 
-  /** After local death, tick may stop — keep one companion pass per frame. */
+  /** After local death, tick may stop — keep companion paint (throttled). */
   function startCorpsePaintLoop() {
     if (_corpsePaintRaf) return;
     if (typeof requestAnimationFrame !== "function") return;
@@ -31813,9 +32103,13 @@ window.RemixMod.runCodeAfter = function () {
       _corpsePaintRaf = 0;
       if (!root.__mpCoopSession || !root.__mpCoopInject) return;
       if (!root.__mpCoopLocalDead && !root.__mpCoopSpectator) return;
-      try {
-        paintCompanionsOnce(null);
-      } catch (e) { /* ignore */ }
+      // Every other frame — corpse RAF was a major dual-player lag source
+      _corpsePaintSkip = (_corpsePaintSkip + 1) & 1;
+      if (!_corpsePaintSkip) {
+        try {
+          paintCompanionsOnce(null);
+        } catch (e) { /* ignore */ }
+      }
       if (typeof requestAnimationFrame === "function") {
         _corpsePaintRaf = requestAnimationFrame(frame);
       }
@@ -31920,6 +32214,14 @@ window.RemixMod.runCodeAfter = function () {
     root.__mpCoopOnTick = function (game) {
       if (!root.__mpCoopInject || !root.__mpCoopSession) return;
       try {
+        // Apply coalesced peer poses before collide/paint
+        if (typeof root.__mpCoopFlushPendingDeltas === "function") {
+          try {
+            root.__mpCoopFlushPendingDeltas();
+          } catch (e) {
+            console.warn("__mpCoopFlushPendingDeltas", e);
+          }
+        }
         wrapFreePos(game);
         installRemixSpawnOccupancyHooks();
         const myId = root.__mpCoopMyId;
@@ -31933,7 +32235,7 @@ window.RemixMod.runCodeAfter = function () {
           startCorpsePaintLoop();
         }
 
-        if (!root.__mpCoopSpectator) {
+        if (!root.__mpCoopSpectator && !coopSkipFriendlyHits()) {
           const snake = game && game.oa;
           const body = snake && snake.ka;
           const head = body && body[0];
@@ -31946,7 +32248,12 @@ window.RemixMod.runCodeAfter = function () {
               const lim = Math.max(0, segs.length - 1);
               for (let j = 0; j < lim; j++) {
                 const p = segs[j];
-                if (p && p.x === head.x && p.y === head.y) {
+                if (
+                  p &&
+                  p.x === head.x &&
+                  p.y === head.y &&
+                  remoteCellBlocks(p.x, p.y)
+                ) {
                   hit = true;
                   break;
                 }
@@ -31976,7 +32283,8 @@ window.RemixMod.runCodeAfter = function () {
           }
         }
 
-        // One native companion pass per engine tick (not every render frame)
+        // Companions also re-paint after local PlayerRenderer each frame;
+        // tick paint covers the first frames before wrap captures renderer.
         if (!root.__mpCoopLocalDead || root.__mpCoopSpectator) {
           paintCompanionsOnce(game);
         }
@@ -32357,19 +32665,32 @@ window.RemixMod.runCodeAfter = function () {
   /**
    * True only when a real in-progress run is on the canvas.
    * A leftover GameInstance after death still has oa — that alone is NOT live.
+   * Focus may hide the death overlay before Play — require a real Play click then.
    */
   function isNativeRunLive() {
     const g = gameInstance();
     if (!g || !g.oa) return false;
+    if (!Array.isArray(g.oa.ka) || !g.oa.ka.length) return false;
     if (g.nj || g.dead || g.isDead) return false;
     if (root.timeKeeper && root.timeKeeper._dead) return false;
-    if (!isDeathOverlayVisible()) return true;
-    // Engine alive but our sticky inline styles left the endscreen up — dismiss
-    if (root.__mpStartingMatch) {
-      dismissDeathOverlayForRun();
-      return !isDeathOverlayVisible();
+    if (isDeathOverlayVisible()) {
+      // Engine alive but our sticky inline styles left the endscreen up — dismiss
+      if (root.__mpStartingMatch) {
+        dismissDeathOverlayForRun();
+        // Still require a real Play if the engine was quit/paused behind menus
+        const g2 = gameInstance();
+        if (g2 && (g2.nj || g2.dead || g2.isDead)) return false;
+        if (root.timeKeeper && root.timeKeeper._dead) return false;
+        return !isDeathOverlayVisible();
+      }
+      return false;
     }
-    return false;
+    // Focus seats hide the overlay early; without this non-admin never clicks Play
+    if (root.__mpFocusRequirePlay) {
+      const at = root.__mpLastPlayClickAt;
+      if (!at || Date.now() - at > 20000) return false;
+    }
+    return true;
   }
 
   /** Close menus; do NOT force-show death (inline styles trap the endscreen). */
@@ -32382,29 +32703,41 @@ window.RemixMod.runCodeAfter = function () {
   /**
    * Keep clicking Play until a live run starts (or attempts exhausted).
    * Used by Start match so non-admins leave the endscreen.
-   * @param {{maxAttempts?:number,intervalMs?:number,onDone?:function(boolean)}} opts
+   * @param {{maxAttempts?:number,intervalMs?:number,onDone?:function(boolean),requirePlayClick?:boolean,deferTimer?:boolean}} opts
    */
   function startNativeRun(opts) {
     opts = opts || {};
     const maxAttempts = opts.maxAttempts != null ? opts.maxAttempts : 50;
     const intervalMs = opts.intervalMs != null ? opts.intervalMs : 40;
     const onDone = typeof opts.onDone === "function" ? opts.onDone : null;
+    const requirePlayClick = opts.requirePlayClick === true;
+    const deferTimer = opts.deferTimer === true;
     root.__mpStartingMatch = true;
     root.__mpApplySettingsGen = (root.__mpApplySettingsGen || 0) + 1;
+    if (requirePlayClick) root.__mpFocusRequirePlay = true;
     prepareNativePlay();
+    if (typeof installFirstRunControlTipGuard === "function") {
+      installFirstRunControlTipGuard();
+    } else {
+      hideControlHelper();
+    }
     let attempts = 0;
+    let playClicks = 0;
     function tick() {
       attempts++;
       try {
-        if (!isNativeRunLive()) {
+        const needClick =
+          !isNativeRunLive() || (requirePlayClick && playClicks < 1);
+        if (needClick) {
           closeSettingsPanel();
           // Undo spectate/hideDeathScreen so the Play control is hittable
           clearDeathOverlayOverrides();
-          triggerPlay();
+          if (triggerPlay()) playClicks++;
           // After several clicks, force-clear dead flag if Play didn't (some skins)
           if (attempts >= 8 && root.timeKeeper && root.timeKeeper._dead) {
             root.timeKeeper._dead = false;
-            if (typeof root.timeKeeper.start === "function") {
+            // Focus: do not start the run clock until the remote player moves
+            if (!deferTimer && typeof root.timeKeeper.start === "function") {
               try {
                 root.timeKeeper.start();
               } catch (e2) { /* ignore */ }
@@ -32416,9 +32749,21 @@ window.RemixMod.runCodeAfter = function () {
           dismissDeathOverlayForRun();
         }
       } catch (e) { /* ignore */ }
-      if (isNativeRunLive() || attempts >= maxAttempts) {
-        const ok = isNativeRunLive();
-        if (ok) dismissDeathOverlayForRun();
+      const live =
+        isNativeRunLive() && (!requirePlayClick || playClicks >= 1);
+      if (live || attempts >= maxAttempts) {
+        const ok = live;
+        if (ok) {
+          dismissDeathOverlayForRun();
+          if (requirePlayClick) root.__mpFocusRequirePlay = false;
+          // Focus seats: keep clock stopped until remote actually moves
+          if (deferTimer && root.timeKeeper) {
+            try {
+              root.timeKeeper.playing = false;
+              root.timeKeeper._lastTimeMs = 0;
+            } catch (e3) { /* ignore */ }
+          }
+        }
         if (typeof setTimeout === "function") {
           setTimeout(function () {
             root.__mpStartingMatch = false;
@@ -32474,12 +32819,15 @@ window.RemixMod.runCodeAfter = function () {
   }
 
   /**
-   * Native PlayerRenderer calls seg.clone() on body points. Plain {x,y} from
-   * BOARD_DELTA / spectate inject crash spectators — always keep a clone fn.
+   * Native PlayerRenderer / fruit renderers call .clone() on body points and
+   * apple.pos (Closure _.Od). Plain {x,y} from BOARD_DELTA / spectate inject
+   * throws `b.pos.clone is not a function` — always keep a clone fn.
    */
   function makeNativePoint(x, y, template) {
-    const nx = x != null ? Number(x) : 0;
-    const ny = y != null ? Number(y) : 0;
+    let nx = x != null ? Number(x) : 0;
+    let ny = y != null ? Number(y) : 0;
+    if (!Number.isFinite(nx)) nx = 0;
+    if (!Number.isFinite(ny)) ny = 0;
     if (template && typeof template.clone === "function") {
       try {
         const c = template.clone();
@@ -32500,6 +32848,18 @@ window.RemixMod.runCodeAfter = function () {
     return seg;
   }
 
+  /** Ensure a coordinate object used as apple/entity `.pos` has .clone(). */
+  function ensureNativePos(pos, x, y, template) {
+    const nx = x != null ? Number(x) : 0;
+    const ny = y != null ? Number(y) : 0;
+    if (pos && typeof pos.clone === "function") {
+      pos.x = nx;
+      pos.y = ny;
+      return pos;
+    }
+    return makeNativePoint(nx, ny, template || pos || null);
+  }
+
   /** Write board.body into game.oa.ka without stripping native point methods. */
   function writeNativeBody(snake, body) {
     if (!snake || !Array.isArray(body)) return false;
@@ -32516,19 +32876,96 @@ window.RemixMod.runCodeAfter = function () {
     for (let i = 0; i < nextLen; i++) {
       const p = body[i] || { x: 0, y: 0 };
       const cur = snake.ka[i];
+      const x = Math.round(Number(p.x != null ? p.x : 0));
+      const y = Math.round(Number(p.y != null ? p.y : 0));
       if (cur && typeof cur.clone === "function") {
-        cur.x = p.x != null ? p.x : 0;
-        cur.y = p.y != null ? p.y : 0;
+        cur.x = Number.isFinite(x) ? x : 0;
+        cur.y = Number.isFinite(y) ? y : 0;
       } else {
         snake.ka[i] = makeNativePoint(
-          p.x != null ? p.x : 0,
-          p.y != null ? p.y : 0,
+          Number.isFinite(x) ? x : 0,
+          Number.isFinite(y) ? y : 0,
           template || cur
         );
         if (!template) template = snake.ka[i];
       }
     }
     return true;
+  }
+
+  /** Correct only the head cell — native body-follow owns the rest. */
+  function writeNativeHead(snake, head, dir) {
+    if (!snake || !head) return false;
+    if (!Array.isArray(snake.ka) || !snake.ka.length) return false;
+    const hx = Math.round(Number(head.x));
+    const hy = Math.round(Number(head.y));
+    if (!Number.isFinite(hx) || !Number.isFinite(hy)) return false;
+    const cur = snake.ka[0];
+    if (cur && typeof cur.clone === "function") {
+      cur.x = hx;
+      cur.y = hy;
+    } else {
+      snake.ka[0] = makeNativePoint(hx, hy, cur);
+    }
+    if (dir) {
+      snake.direction = dir;
+      if (snake.dir != null) snake.dir = dir;
+    }
+    return true;
+  }
+
+  /**
+   * Classic follow: new head, previous segments shift forward.
+   * Used for Focus head-sync and co-op companion visuals.
+   */
+  function followBodyFromHead(prevBody, nextBody) {
+    if (!nextBody || !nextBody.length) return prevBody || [];
+    const head = nextBody[0];
+    const hx = Math.round(Number(head.x));
+    const hy = Math.round(Number(head.y));
+    if (!Number.isFinite(hx) || !Number.isFinite(hy)) {
+      return nextBody.map(function (p) {
+        return {
+          x: Math.round(Number(p.x)) || 0,
+          y: Math.round(Number(p.y)) || 0,
+        };
+      });
+    }
+    const wantLen = nextBody.length;
+    if (!prevBody || !prevBody.length || prevBody.length !== wantLen) {
+      return nextBody.map(function (p) {
+        return {
+          x: Math.round(Number(p.x)) || 0,
+          y: Math.round(Number(p.y)) || 0,
+        };
+      });
+    }
+    const ph = prevBody[0];
+    const px = Math.round(Number(ph.x));
+    const py = Math.round(Number(ph.y));
+    const jump = Math.abs(hx - px) + Math.abs(hy - py);
+    if (jump === 0) {
+      // Unchanged head — reuse prior visual body (no per-tick alloc)
+      return prevBody;
+    }
+    if (jump > 1) {
+      // Teleport / corner cut — seat full remote body
+      return nextBody.map(function (p) {
+        return {
+          x: Math.round(Number(p.x)) || 0,
+          y: Math.round(Number(p.y)) || 0,
+        };
+      });
+    }
+    const out = [{ x: hx, y: hy }];
+    for (let i = 0; i < wantLen - 1; i++) {
+      const s = prevBody[i];
+      out.push({
+        x: Math.round(Number(s.x)) || 0,
+        y: Math.round(Number(s.y)) || 0,
+      });
+    }
+    return out;
   }
 
   function mapApples(arr) {
@@ -32639,19 +33076,33 @@ window.RemixMod.runCodeAfter = function () {
     let applied = false;
     function writeList(hostArr, list) {
       if (!Array.isArray(hostArr) || !Array.isArray(list)) return;
+      let templatePos = null;
+      for (let t = 0; t < hostArr.length; t++) {
+        const p = hostArr[t] && hostArr[t].pos;
+        if (p && typeof p.clone === "function") {
+          templatePos = p;
+          break;
+        }
+      }
       while (hostArr.length > list.length) hostArr.pop();
       for (let i = 0; i < list.length; i++) {
         const src = list[i];
         let dst = hostArr[i];
         if (!dst) {
-          dst = { x: src.x, y: src.y };
+          dst = { pos: makeNativePoint(src.x, src.y, templatePos) };
           hostArr[i] = dst;
-        } else if (dst.pos) {
-          dst.pos.x = src.x;
-          dst.pos.y = src.y;
+        } else if (dst.pos || templatePos) {
+          dst.pos = ensureNativePos(dst.pos, src.x, src.y, templatePos);
+          if (!templatePos && dst.pos) templatePos = dst.pos;
+        } else if (typeof dst.clone === "function") {
+          dst.x = src.x;
+          dst.y = src.y;
         } else {
           dst.x = src.x;
           dst.y = src.y;
+          if (typeof dst.clone !== "function") {
+            hostArr[i] = makeNativePoint(src.x, src.y, null);
+          }
         }
       }
       applied = true;
@@ -32720,6 +33171,38 @@ window.RemixMod.runCodeAfter = function () {
       colorId = readSettingIndex("color");
     }
 
+    // Live engine colors (what the player actually looks like right now)
+    let Sc = null;
+    let Yc = null;
+    try {
+      if (typeof snake.Sc === "string" && snake.Sc) Sc = snake.Sc;
+      if (typeof snake.Yc === "string" && snake.Yc) Yc = snake.Yc;
+    } catch (e) { /* ignore */ }
+    try {
+      const cfg = g && (g.snakeBodyConfig || snake);
+      if (cfg) {
+        if (!Sc && (cfg.color2 || cfg.primary)) Sc = cfg.color2 || cfg.primary;
+        if (!Yc && (cfg.color1 || cfg.secondary)) Yc = cfg.color1 || cfg.secondary;
+      }
+    } catch (e2) { /* ignore */ }
+
+    const Colors = root.MultiplayerColors;
+    let colorSet = null;
+    if (Colors && Colors.getColor && colorId != null) {
+      const c = Colors.getColor(Number(colorId));
+      if (c) {
+        if (c.set && c.set.length) colorSet = c.set.slice();
+        // Engine may not expose Sc/Yc yet — resolve from the player's color id
+        if (c.kind === "rainbow" && c.set && c.set.length) {
+          if (!Sc) Sc = c.set[0];
+          if (!Yc) Yc = c.set[c.set.length - 1] || c.set[0];
+        } else if (c.primary) {
+          if (!Sc) Sc = c.primary;
+          if (!Yc) Yc = c.secondary || c.primary;
+        }
+      }
+    }
+
     const board = {
       body: body,
       dir: snake.direction || snake.dir || root.head_dir || "RIGHT",
@@ -32732,6 +33215,9 @@ window.RemixMod.runCodeAfter = function () {
       themeIndex: themeIndex,
       themeColors: themeColors,
       colorId: colorId != null ? Number(colorId) : null,
+      Sc: Sc,
+      Yc: Yc,
+      colorSet: colorSet,
       // Cosmetics + match rules so Focus spectators can mirror the run natively
       appleIndex: readSettingIndex("apple"),
       graphicsIndex: readSettingIndex("graphics"),
@@ -32748,6 +33234,375 @@ window.RemixMod.runCodeAfter = function () {
     if (themeOverride && themeOverride.light) return themeOverride;
     if (board && board.themeColors && board.themeColors.light) return board.themeColors;
     return getBoardThemeColors();
+  }
+
+  function hexToRgb(hex) {
+    const s = String(hex || "").replace(/^#/, "");
+    if (!/^[0-9a-fA-F]{6}$/.test(s)) return null;
+    const n = parseInt(s, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  function rgbToHex(rgb) {
+    return (
+      "#" +
+      rgb
+        .map(function (x) {
+          return Math.max(0, Math.min(255, x | 0))
+            .toString(16)
+            .padStart(2, "0");
+        })
+        .join("")
+    );
+  }
+
+  /**
+   * WallSolver-style snake: tapered tip→head stroke + googly eyes (canvas).
+   * Body list is head-first (native / BOARD_DELTA); reversed to tip→head for draw.
+   */
+  function drawWallSolverStyleSnake(ctx, body, ox, oy, cell, colorInfo, dir) {
+    if (!ctx || !body || !body.length) return;
+    const pts = [];
+    for (let i = body.length - 1; i >= 0; i--) {
+      const p = body[i];
+      if (!p) continue;
+      const x = Number(p.x);
+      const y = Number(p.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      pts.push([ox + (x + 0.5) * cell, oy + (y + 0.5) * cell]);
+    }
+    const n = pts.length;
+    if (!n) return;
+    const headI = n - 1;
+    const neckI = n > 1 ? n - 2 : 0;
+    let ux = 1;
+    let uy = 0;
+    if (n > 1) {
+      const dx = pts[headI][0] - pts[neckI][0];
+      const dy = pts[headI][1] - pts[neckI][1];
+      const len = Math.hypot(dx, dy) || 1;
+      ux = dx / len;
+      uy = dy / len;
+    } else if (dir) {
+      const d = String(dir).toUpperCase();
+      if (d === "UP") {
+        ux = 0;
+        uy = -1;
+      } else if (d === "DOWN") {
+        ux = 0;
+        uy = 1;
+      } else if (d === "LEFT") {
+        ux = -1;
+        uy = 0;
+      } else {
+        ux = 1;
+        uy = 0;
+      }
+    }
+    let tipPull = 0;
+    let headPull = 0;
+    if (n > 1) {
+      const gapPx = Math.hypot(
+        pts[0][0] - pts[headI][0],
+        pts[0][1] - pts[headI][1]
+      );
+      if (gapPx < cell * 1.25) {
+        tipPull = cell * 0.45;
+        headPull = cell * 0.2;
+      }
+    }
+    let tipX = pts[0][0];
+    let tipY = pts[0][1];
+    if (n > 1 && tipPull) {
+      const dx = pts[1][0] - pts[0][0];
+      const dy = pts[1][1] - pts[0][1];
+      const len = Math.hypot(dx, dy) || 1;
+      tipX += (dx / len) * tipPull;
+      tipY += (dy / len) * tipPull;
+    }
+    const headX = pts[headI][0] - ux * headPull;
+    const headY = pts[headI][1] - uy * headPull;
+    const angle = Math.atan2(uy, ux);
+    const headW = cell * 0.7;
+    const tipW = cell * 0.32;
+
+    let headCol = [0x5b, 0x8d, 0xef];
+    let tipCol = [0x2a, 0x4a, 0xb8];
+    let rainbowSet = null;
+    if (colorInfo) {
+      if (colorInfo.set && colorInfo.set.length) {
+        rainbowSet = colorInfo.set;
+      }
+      const headHex =
+        colorInfo.primary ||
+        colorInfo.Sc ||
+        (rainbowSet && rainbowSet[0]) ||
+        null;
+      const tipHex =
+        colorInfo.secondary ||
+        colorInfo.Yc ||
+        (rainbowSet && rainbowSet[rainbowSet.length - 1]) ||
+        colorInfo.primary ||
+        colorInfo.Sc ||
+        null;
+      const hRgb = hexToRgb(headHex);
+      const tRgb = hexToRgb(tipHex);
+      if (hRgb) headCol = hRgb;
+      if (tRgb) tipCol = tRgb;
+    }
+    function mix(t) {
+      // t=0 at head, t=1 at tip — rainbow samples the player's set along the body
+      if (rainbowSet && rainbowSet.length > 1) {
+        const f = Math.max(0, Math.min(1, t)) * (rainbowSet.length - 1);
+        const i0 = Math.floor(f);
+        const i1 = Math.min(rainbowSet.length - 1, i0 + 1);
+        const u = f - i0;
+        const c0 = hexToRgb(rainbowSet[i0]) || headCol;
+        const c1 = hexToRgb(rainbowSet[i1]) || tipCol;
+        return rgbToHex(
+          c0.map(function (v, i) {
+            return Math.round(v + (c1[i] - v) * u);
+          })
+        );
+      }
+      const c = headCol.map(function (v, i) {
+        return Math.round(v + (tipCol[i] - v) * t);
+      });
+      return rgbToHex(c);
+    }
+    function tAt(i) {
+      return n <= 1 ? 0 : (headI - i) / headI;
+    }
+    function widthAt(t) {
+      return headW * (1 - t) + tipW * t;
+    }
+
+    const poly = [];
+    poly.push([tipX, tipY, 1]);
+    for (let i = 1; i < headI; i++) {
+      poly.push([pts[i][0], pts[i][1], tAt(i)]);
+    }
+    poly.push([headX, headY, 0]);
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.shadowColor = "rgba(0,0,0,0.4)";
+    ctx.shadowBlur = Math.max(1, cell * 0.045);
+    ctx.shadowOffsetY = Math.max(1, cell * 0.05);
+    for (let i = 0; i < poly.length - 1; i++) {
+      const x0 = poly[i][0];
+      const y0 = poly[i][1];
+      const t0 = poly[i][2];
+      const x1 = poly[i + 1][0];
+      const y1 = poly[i + 1][1];
+      const t1 = poly[i + 1][2];
+      const steps = 4;
+      for (let s = 0; s < steps; s++) {
+        const u0 = s / steps;
+        const u1 = (s + 1) / steps;
+        const xa = x0 + (x1 - x0) * u0;
+        const ya = y0 + (y1 - y0) * u0;
+        const xb = x0 + (x1 - x0) * u1;
+        const yb = y0 + (y1 - y0) * u1;
+        const t = t0 * (1 - (u0 + u1) / 2) + t1 * ((u0 + u1) / 2);
+        ctx.strokeStyle = mix(t);
+        ctx.lineWidth = widthAt(t);
+        ctx.beginPath();
+        ctx.moveTo(xa, ya);
+        ctx.lineTo(xb, yb);
+        ctx.stroke();
+      }
+    }
+
+    const col = mix(0);
+    const neckR = headW / 2;
+    const bulgeR = neckR * 0.82;
+    const bulgeX = neckR * 0.12;
+    const bulgeY = neckR * 0.92;
+    const snoutR = neckR * 1.02;
+    const snoutX = neckR * 0.78;
+    const eyeR = Math.max(2.6, bulgeR * 0.72);
+    const eyeX = bulgeX + bulgeR * 0.02;
+    const eyeY = bulgeY;
+    const pupilR = Math.max(1.3, eyeR * 0.4);
+    const pupilFwd = eyeR * 0.38;
+    const pupilIn = eyeR * 0.1;
+    const nostrilR = Math.max(0.7, neckR * 0.08);
+    const nostrilX = snoutX + snoutR * 0.58;
+    const nostrilY = neckR * 0.14;
+    const pupilCol = tipCol
+      ? rgbToHex(
+          tipCol.map(function (v) {
+            return Math.round(v * 0.55);
+          })
+        )
+      : "#1a3a8a";
+    const nostrilCol = tipCol ? rgbToHex(tipCol) : "#2a4a9a";
+
+    ctx.fillStyle = col;
+    ctx.translate(headX, headY);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.arc(0, 0, neckR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(bulgeX, -bulgeY, bulgeR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(bulgeX, bulgeY, bulgeR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(snoutX, 0, snoutR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(eyeX, -eyeY, eyeR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(eyeX, eyeY, eyeR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = pupilCol;
+    ctx.beginPath();
+    ctx.arc(eyeX + pupilFwd, -eyeY + pupilIn, pupilR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(eyeX + pupilFwd, eyeY - pupilIn, pupilR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = nostrilCol;
+    ctx.globalAlpha = 0.75;
+    ctx.beginPath();
+    ctx.arc(nostrilX, -nostrilY, nostrilR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(nostrilX, nostrilY, nostrilR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  /** Cache of fruit sprite Images keyed by URL. */
+  const _appleImgCache = Object.create(null);
+  let _mosaicFruitRepaintTimer = 0;
+
+  function scheduleMosaicFruitRepaint() {
+    if (_mosaicFruitRepaintTimer) return;
+    _mosaicFruitRepaintTimer = setTimeout(function () {
+      _mosaicFruitRepaintTimer = 0;
+      if (typeof root.__mpMosaicRepaint === "function") {
+        try {
+          root.__mpMosaicRepaint();
+        } catch (e) { /* ignore */ }
+      }
+    }, 40);
+  }
+
+  /**
+   * Resolve fruit sprite URL from apple.type (or board appleIndex fallback).
+   * Prefers live #apple / apple_img_arr (includes Remix custom fruit).
+   */
+  function resolveAppleImageUrl(type, appleIndex) {
+    let idx = type;
+    if (idx == null || idx === "" || Number(idx) < 0 || Number.isNaN(Number(idx))) {
+      idx = appleIndex;
+    }
+    idx = Number(idx);
+    if (!Number.isFinite(idx) || idx < 0) idx = 0;
+    idx = idx | 0;
+
+    try {
+      if (root.apple_img_arr && root.apple_img_arr[idx]) {
+        return String(root.apple_img_arr[idx]);
+      }
+    } catch (e) { /* ignore */ }
+    try {
+      const el =
+        typeof document !== "undefined" ? document.getElementById("apple") : null;
+      if (el && el.children && el.children[idx] && el.children[idx].src) {
+        return String(el.children[idx].src);
+      }
+    } catch (e2) { /* ignore */ }
+
+    // Stock Google Snake fruit CDN (custom pudding fruit only via menu above)
+    const pad = idx < 10 ? "0" + idx : String(Math.min(idx, 99));
+    return (
+      "https://www.google.com/logos/fnbx/snake_arcade/v3/apple_" + pad + ".png"
+    );
+  }
+
+  function getAppleImage(url) {
+    if (!url) return null;
+    let img = _appleImgCache[url];
+    if (img) return img;
+    const ImgCtor =
+      typeof root.Image === "function"
+        ? root.Image
+        : typeof Image === "function"
+          ? Image
+          : null;
+    if (!ImgCtor) return null;
+    img = new ImgCtor();
+    img.decoding = "async";
+    img.onload = function () {
+      scheduleMosaicFruitRepaint();
+    };
+    img.onerror = function () {
+      /* keep fallback circle */
+    };
+    try {
+      img.src = url;
+    } catch (e) {
+      return null;
+    }
+    _appleImgCache[url] = img;
+    return img;
+  }
+
+  function drawBoardApples(ctx, board, ox, oy, cell, theme) {
+    const apples = board && board.apples;
+    if (!apples || !apples.length) return;
+    const appleIndex = board.appleIndex;
+    for (let i = 0; i < apples.length; i++) {
+      const a = apples[i];
+      if (!a || a.x == null || a.y == null) continue;
+      // Skip parked off-grid Focus placeholders
+      if (Number(a.x) < 0 || Number(a.y) < 0) continue;
+      const cx = ox + Number(a.x) * cell + cell / 2;
+      const cy = oy + Number(a.y) * cell + cell / 2;
+      const size = cell * 0.88;
+      const url = resolveAppleImageUrl(a.type, appleIndex);
+      const img = getAppleImage(url);
+      let drew = false;
+      if (
+        img &&
+        img.complete &&
+        img.naturalWidth > 0 &&
+        typeof ctx.drawImage === "function"
+      ) {
+        try {
+          ctx.drawImage(img, cx - size / 2, cy - size / 2, size, size);
+          drew = true;
+        } catch (e) { /* cross-origin / incomplete */ }
+      }
+      if (!drew) {
+        ctx.fillStyle = a.poison
+          ? "#8e24aa"
+          : theme.apple || "#e7471d";
+        ctx.beginPath();
+        ctx.arc(cx, cy, cell * 0.35, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (a.poison) {
+        ctx.fillStyle = "rgba(142,36,170,0.35)";
+        ctx.beginPath();
+        ctx.arc(cx, cy, size * 0.42, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
   function drawBoardOnCanvas(canvas, board, colorInfo, themeOverride) {
@@ -32770,118 +33625,449 @@ window.RemixMod.runCodeAfter = function () {
         ctx.fillRect(ox + x * cell, oy + y * cell, cell, cell);
       }
     }
-    (board.apples || []).forEach(function (a) {
-      ctx.fillStyle = theme.apple || "#e7471d";
-      ctx.beginPath();
-      ctx.arc(
-        ox + a.x * cell + cell / 2,
-        oy + a.y * cell + cell / 2,
-        cell * 0.35,
-        0,
-        Math.PI * 2
-      );
-      ctx.fill();
-    });
-    let head = "#17439F";
-    let body = "#4E7CF6";
-    if (colorInfo) {
-      if (colorInfo.primary) {
-        body = colorInfo.primary;
-        head = colorInfo.secondary || colorInfo.primary;
+    drawBoardApples(ctx, board, ox, oy, cell, theme);
+    drawWallSolverStyleSnake(
+      ctx,
+      board.body || [],
+      ox,
+      oy,
+      cell,
+      colorInfo,
+      board.dir
+    );
+  }
+
+  /**
+   * Versus Focus: local GameInstance still simulates between injects and can
+   * call die() even when the remote player is alive. Swallow those false deaths.
+   */
+  function installFocusDieGuard(g) {
+    if (!g || g.__mpFocusDieGuarded) return;
+    g.__mpFocusDieGuarded = true;
+    const origDie = typeof g.die === "function" ? g.die : null;
+    g.die = function () {
+      if (root.__mpVersusFocusSpectate) {
+        const b = root.__mpVersusFocusBoard;
+        // Only honor die when the focused board says the remote is dead
+        if (!b || b.alive !== false) {
+          try {
+            this.nj = false;
+            if (this.dead) this.dead = false;
+            if (root.timeKeeper) root.timeKeeper._dead = false;
+            if (!root.__mpSpectateAllowMenus) hideDeathScreen();
+          } catch (e) { /* ignore */ }
+          return;
+        }
       }
-      if (colorInfo.set && colorInfo.set.length) {
-        body = colorInfo.set[0];
-        head = colorInfo.set[0];
+      if (origDie) return origDie.apply(this, arguments);
+    };
+  }
+
+  /** Grow local ka when remote is longer — never rewrite existing tail segments. */
+  function extendNativeBodyLength(snake, cleanBody) {
+    if (!snake || !Array.isArray(cleanBody) || !cleanBody.length) return false;
+    if (!Array.isArray(snake.ka)) snake.ka = [];
+    const have = snake.ka.length;
+    const want = cleanBody.length;
+    if (have >= want) return false;
+    let template = null;
+    for (let t = 0; t < snake.ka.length; t++) {
+      if (snake.ka[t] && typeof snake.ka[t].clone === "function") {
+        template = snake.ka[t];
+        break;
       }
     }
-    const segments = board.body || [];
-    segments.forEach(function (p, i) {
-      if (colorInfo && colorInfo.set && colorInfo.set.length) {
-        ctx.fillStyle = colorInfo.set[i % colorInfo.set.length];
-      } else {
-        ctx.fillStyle = i === 0 ? head : body;
-      }
-      const pad = Math.max(1, cell * 0.08);
-      ctx.fillRect(
-        ox + p.x * cell + pad,
-        oy + p.y * cell + pad,
-        cell - pad * 2,
-        cell - pad * 2
+    for (let i = have; i < want; i++) {
+      const p = cleanBody[i] || cleanBody[want - 1];
+      snake.ka.push(
+        makeNativePoint(
+          Math.round(Number(p.x)) || 0,
+          Math.round(Number(p.y)) || 0,
+          template
+        )
       );
-    });
+      if (!template) template = snake.ka[i];
+    }
+    return true;
+  }
+
+  /** True when remote head jumped >1 cell (respawn / teleport) — needs full seat. */
+  function focusHeadTeleported(localKa, remoteHead) {
+    if (!remoteHead) return false;
+    if (!localKa || !localKa[0]) return true;
+    const lx = Math.round(Number(localKa[0].x));
+    const ly = Math.round(Number(localKa[0].y));
+    const rx = Math.round(Number(remoteHead.x));
+    const ry = Math.round(Number(remoteHead.y));
+    if (!Number.isFinite(lx) || !Number.isFinite(ly)) return true;
+    if (!Number.isFinite(rx) || !Number.isFinite(ry)) return false;
+    return Math.abs(rx - lx) + Math.abs(ry - ly) > 1;
+  }
+
+  /** Pose key for remote board body + dir (drives Focus head-sync). */
+  function focusPoseFingerprint(board) {
+    if (!board) return "";
+    const body = board.body || [];
+    let s = (board.alive === false ? "0" : "1") + "|" + (board.dir || "") + "|" + body.length;
+    for (let i = 0; i < body.length; i++) {
+      const p = body[i];
+      s += "|" + (p && p.x) + "," + (p && p.y);
+    }
+    return s;
+  }
+
+  /**
+   * After each native tick, keep the Focus puppet on the remote pose.
+   * Head-only re-pin left neck/tail stranded (fragmented body). Snap the
+   * full remote body when local physics drifts or the trail disconnects;
+   * leave a matching connected trail alone so PlayerRenderer can crawl.
+   */
+  function installFocusTickGuard(g) {
+    if (!g || g.__mpFocusTickGuarded) return;
+    if (typeof g.tick !== "function") return;
+    g.__mpFocusTickGuarded = true;
+    const origTick = g.tick;
+    g.tick = function () {
+      const ret = origTick.apply(this, arguments);
+      if (root.__mpVersusFocusSpectate) {
+        try {
+          reapplyFocusBody(this);
+        } catch (e) { /* ignore */ }
+      }
+      return ret;
+    };
+  }
+
+  /** True when consecutive segments are adjacent (manhattan ≤ 1). */
+  function bodyTrailConnected(body) {
+    if (!body || body.length < 2) return true;
+    for (let i = 1; i < body.length; i++) {
+      const a = body[i - 1];
+      const b = body[i];
+      if (!a || !b) return false;
+      const d =
+        Math.abs(Math.round(Number(a.x)) - Math.round(Number(b.x))) +
+        Math.abs(Math.round(Number(a.y)) - Math.round(Number(b.y)));
+      if (d > 1) return false;
+    }
+    return true;
+  }
+
+  function reapplyFocusBody(g) {
+    g = g || gameInstance();
+    if (!g || !g.oa) return false;
+    const remote = root.__mpFocusRemoteBody;
+    if (!remote || !remote.length) {
+      const head = root.__mpFocusRemoteHead;
+      if (!head) return false;
+      return writeNativeHead(g.oa, head, root.__mpFocusRemoteDir);
+    }
+    const local = g.oa.ka;
+    const lh = local && local[0];
+    const rh = remote[0];
+    const headMatch =
+      lh &&
+      rh &&
+      Math.round(Number(lh.x)) === Math.round(Number(rh.x)) &&
+      Math.round(Number(lh.y)) === Math.round(Number(rh.y));
+    if (
+      headMatch &&
+      local.length === remote.length &&
+      bodyTrailConnected(local)
+    ) {
+      if (root.__mpFocusRemoteDir) {
+        g.oa.direction = root.__mpFocusRemoteDir;
+        if (g.oa.dir != null) g.oa.dir = root.__mpFocusRemoteDir;
+      }
+      return true;
+    }
+    const ok = writeNativeBody(g.oa, remote);
+    if (root.__mpFocusRemoteDir) {
+      g.oa.direction = root.__mpFocusRemoteDir;
+      if (g.oa.dir != null) g.oa.dir = root.__mpFocusRemoteDir;
+    }
+    return ok;
+  }
+
+  /** @deprecated use reapplyFocusBody — kept for callers/tests */
+  function reapplyFocusHead(g) {
+    return reapplyFocusBody(g);
   }
 
   /**
    * Versus Focus: inject focused player's state into the live GameInstance so
    * native snake/fruit renderers draw the spectated run. Paint is opt-in only
-   * (opts.paint === true) — product Focus must stay native.
-   * Returns { ok, injected, painted }.
+   * (opts.paint === true) — product Focus must stay native for admin and
+   * non-admin alike (never canvas-square fallback).
+   * After the initial seat, each remote pose change writes the full body list
+   * so the trail stays connected (head-only inject fragmented the body).
+   * Returns { ok, injected, painted, menusSynced }.
    */
   function applySpectateState(canvas, board, colorInfo, opts) {
     opts = opts || {};
-    if (!board) return { ok: false, injected: false, painted: false };
+    if (!board) return { ok: false, injected: false, painted: false, menusSynced: false };
 
     function syncMenu(key, idx) {
-      if (idx == null || typeof idx !== "number" || Number.isNaN(Number(idx))) return;
+      if (idx == null || typeof idx !== "number" || Number.isNaN(Number(idx))) return false;
       const cur = readSettingIndex(key);
       if (cur == null || Number(cur) !== Number(idx)) {
         selectMenu(key, Number(idx));
+        return true;
       }
+      return false;
     }
 
-    // Match rules (board size / fruit count) — critical for native chrome
-    syncMenu("size", board.sizeIndex);
-    syncMenu("count", board.countIndex);
-    syncMenu("speed", board.speedIndex);
-    syncMenu("trophy", board.trophyIndex);
-    // Focused player's cosmetics so fruit sprites + snake skin match
-    if (board.themeIndex != null) syncMenu("theme", board.themeIndex);
-    if (board.appleIndex != null) syncMenu("apple", board.appleIndex);
-    if (board.graphicsIndex != null) syncMenu("graphics", board.graphicsIndex);
-
-    const colorId =
+    const menuFp = [
+      board.sizeIndex,
+      board.countIndex,
+      board.speedIndex,
+      board.trophyIndex,
+      board.themeIndex,
+      board.appleIndex,
+      board.graphicsIndex,
       board.colorId != null
         ? board.colorId
         : colorInfo && colorInfo.id != null
           ? colorInfo.id
-          : null;
-    if (colorId != null && applySnakeColor) {
-      const curColor = readSettingIndex("color");
-      if (curColor == null || Number(curColor) !== Number(colorId)) {
-        applySnakeColor(Number(colorId));
+          : "",
+    ].join("|");
+    let menusSynced = false;
+    const forceMenus = opts.forceMenus === true;
+    if (forceMenus || menuFp !== root.__mpSpectateMenuFp) {
+      root.__mpApplyingSettings = true;
+      try {
+        syncMenu("size", board.sizeIndex);
+        syncMenu("count", board.countIndex);
+        syncMenu("speed", board.speedIndex);
+        syncMenu("trophy", board.trophyIndex);
+        if (board.themeIndex != null) syncMenu("theme", board.themeIndex);
+        if (board.appleIndex != null) syncMenu("apple", board.appleIndex);
+        if (board.graphicsIndex != null) syncMenu("graphics", board.graphicsIndex);
+
+        const colorId =
+          board.colorId != null
+            ? board.colorId
+            : colorInfo && colorInfo.id != null
+              ? colorInfo.id
+              : null;
+        if (colorId != null && applySnakeColor) {
+          const curColor = readSettingIndex("color");
+          if (curColor == null || Number(curColor) !== Number(colorId)) {
+            applySnakeColor(Number(colorId));
+          }
+        }
+        root.__mpSpectateMenuFp = menuFp;
+        menusSynced = true;
+      } finally {
+        root.__mpApplyingSettings = false;
       }
     }
 
     let injected = false;
     try {
       const g = gameInstance();
-      if (g && g.oa && Array.isArray(board.body)) {
-        // Must keep .clone() on segments — plain {x,y} crashes PlayerRenderer
-        injected = writeNativeBody(g.oa, board.body);
-        if (board.dir) {
-          g.oa.direction = board.dir;
-          if (g.oa.dir != null) g.oa.dir = board.dir;
+      const cleanBody = [];
+      if (Array.isArray(board.body)) {
+        for (let bi = 0; bi < board.body.length; bi++) {
+          const p = board.body[bi];
+          if (!p) continue;
+          const x = Math.round(Number(p.x));
+          const y = Math.round(Number(p.y));
+          if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+          cleanBody.push({ x: x, y: y });
+        }
+      }
+
+      if (g && g.oa && cleanBody.length) {
+        if (root.__mpVersusFocusSpectate) {
+          const poseFp = focusPoseFingerprint(board);
+          const localLen = Array.isArray(g.oa.ka) ? g.oa.ka.length : 0;
+          const forceFull = root.__mpFocusForceFullBody === true;
+          const teleported =
+            root.__mpFocusSeated &&
+            focusHeadTeleported(g.oa.ka, cleanBody[0]);
+          // Full body on first seat / revive / teleport
+          const needFull =
+            forceFull ||
+            !root.__mpFocusSeated ||
+            !localLen ||
+            teleported ||
+            opts.forceFullBody === true;
+          const poseChanged = poseFp !== root.__mpFocusPoseFp;
+          if (needFull) {
+            injected = writeNativeBody(g.oa, cleanBody);
+            // Only mark a live seat when remote is alive — death inject must not
+            // consume ForceFullBody / flip Seated (breaks second-run reseat).
+            if (board.alive !== false) {
+              root.__mpFocusSeated = true;
+              root.__mpFocusForceFullBody = false;
+              root.__mpFocusSeatPoseFp = poseFp;
+              root.__mpFocusRemoteStarted = false;
+            }
+          } else if (poseChanged) {
+            // Write the full remote body list together. Head-only left gaps;
+            // follow-from-corrupt-local could keep bad segments. BOARD_DELTA
+            // already sends the complete trail — seat it and let PlayerRenderer
+            // crawl between cells. Skip writes when pose is unchanged (no flicker).
+            injected = writeNativeBody(g.oa, cleanBody);
+            if (
+              !root.__mpFocusRemoteStarted &&
+              root.__mpFocusSeatPoseFp &&
+              poseFp !== root.__mpFocusSeatPoseFp
+            ) {
+              root.__mpFocusRemoteStarted = true;
+            }
+          } else {
+            // Same remote pose — leave ka so native crawl/lerp can run
+            injected = true;
+          }
+          root.__mpFocusPoseFp = poseFp;
+          root.__mpFocusRemoteHead = cleanBody[0];
+          root.__mpFocusRemoteBody = cleanBody;
+          root.__mpFocusRemoteDir = board.dir || null;
+          if (board.dir) {
+            g.oa.direction = board.dir;
+            if (g.oa.dir != null) g.oa.dir = board.dir;
+          }
+        } else {
+          injected = writeNativeBody(g.oa, cleanBody);
+          if (board.dir) {
+            g.oa.direction = board.dir;
+            if (g.oa.dir != null) g.oa.dir = board.dir;
+          }
         }
       }
       if (g && g.wa && Array.isArray(board.apples)) {
-        applyCollectables({ apples: board.apples });
+        if (
+          root.__mpVersusFocusSpectate &&
+          board.alive !== false &&
+          board.apples.length === 0
+        ) {
+          // Empty fruit + alive remote → native ALL/nj death loop.
+          // Park one off-grid apple (clears on-board fruit so local can't eat).
+          applyCollectables({ apples: [{ x: -9, y: -9 }] });
+        } else {
+          applyCollectables({ apples: board.apples });
+        }
+      }
+      if (g && root.__mpVersusFocusSpectate) {
+        try {
+          installFocusDieGuard(g);
+          installFocusTickGuard(g);
+          const remoteAlive = board.alive !== false;
+          if (remoteAlive) {
+            g.nj = false;
+            if (g.dead) g.dead = false;
+            if (g.isDead) g.isDead = false;
+            if (root.timeKeeper) {
+              root.timeKeeper._dead = false;
+              if (root.__mpFocusRemoteStarted) {
+                if (root.timeKeeper.playing === false) {
+                  root.timeKeeper.playing = true;
+                  if (typeof root.timeKeeper.start === "function") {
+                    try {
+                      root.timeKeeper.start();
+                    } catch (eStart) { /* ignore */ }
+                  }
+                }
+              } else {
+                root.timeKeeper.playing = false;
+                root.timeKeeper._lastTimeMs = 0;
+              }
+            }
+            if (typeof root.pauseGame !== "undefined") root.pauseGame = false;
+            if (
+              !root.__mpFocusRequirePlay &&
+              !root.__mpStartingMatch &&
+              !root.__mpSpectateAllowMenus
+            ) {
+              hideDeathScreen();
+            }
+          } else {
+            // Remote actually died — keep dead; do not hide death chrome
+            g.nj = true;
+            if (g.dead != null) g.dead = true;
+            if (root.timeKeeper) {
+              root.timeKeeper._dead = true;
+              root.timeKeeper.playing = false;
+            }
+          }
+          root.__mpVersusFocusRemoteAlive = remoteAlive;
+        } catch (eAlive) { /* ignore */ }
       }
     } catch (e) {
       console.warn("applySpectateState inject", e);
     }
 
     let painted = false;
+    // Product Focus is native-only. Canvas paint is explicit opts.paint (mosaic/debug).
     if (opts.paint === true && canvas) {
       drawBoardOnCanvas(canvas, board, colorInfo, board.themeColors);
       painted = true;
     }
-    return { ok: true, injected: injected, painted: painted };
+    return {
+      ok: true,
+      injected: injected,
+      painted: painted,
+      menusSynced: menusSynced,
+    };
+  }
+
+  const CONTROL_TIP_CLASSES = [
+    // Current GSM (keys.svg tip)
+    "ahZmw",
+    "rNjvu",
+    // Historical class names
+    "Dg7Yne",
+    "X5KmMd",
+    "FL0X2d",
+    "cL8wbc",
+    "oN3vdf",
+    "SMkkBb",
+    "UfY0Tc",
+  ];
+
+  const CONTROL_TIP_CSS =
+    CONTROL_TIP_CLASSES.map(function (c) {
+      return "." + c;
+    }).join(",") +
+    ',[jsname="IoE5Ec"],[data-mp-helper-hidden="1"]{' +
+    "visibility:hidden!important;opacity:0!important;" +
+    "pointer-events:none!important;display:none!important;}";
+
+  function hideControlTipNodes() {
+    if (typeof document === "undefined") return;
+    CONTROL_TIP_CLASSES.forEach(function (cls) {
+      const nodes = document.getElementsByClassName(cls);
+      for (let i = 0; i < nodes.length; i++) {
+        const el = nodes[i];
+        el.style.visibility = "hidden";
+        el.style.opacity = "0";
+        el.style.pointerEvents = "none";
+        el.style.display = "none";
+        el.dataset.mpHelperHidden = "1";
+      }
+    });
+    try {
+      const byJs = document.querySelectorAll('[jsname="IoE5Ec"]');
+      for (let j = 0; j < byJs.length; j++) {
+        const el = byJs[j];
+        el.style.visibility = "hidden";
+        el.style.opacity = "0";
+        el.style.pointerEvents = "none";
+        el.style.display = "none";
+        el.dataset.mpHelperHidden = "1";
+      }
+    } catch (e) { /* ignore */ }
   }
 
   /**
    * Hide Google's first-move keyboard / hand tip (stays up if spectator keys are blocked).
    */
   function hideControlHelper() {
+    // Always hit current tip nodes first (full-bleed .ahZmw fails size heuristics)
+    hideControlTipNodes();
+
     // Walk near-canvas chrome only — NEVER the top bar shell (EjCLSb) or we
     // hide score / Multiplayer status / counters on non-admin spectators.
     const canvas = gameCanvas();
@@ -32977,27 +34163,72 @@ window.RemixMod.runCodeAfter = function () {
         Array.prototype.forEach.call(child.children, maybeHide);
       });
     });
+  }
 
-    // Known / historical class names for the keys tip
-    [
-      "Dg7Yne",
-      "X5KmMd",
-      "FL0X2d",
-      "cL8wbc",
-      "oN3vdf",
-      "SMkkBb",
-      "UfY0Tc",
-    ].forEach(function (cls) {
-      const nodes = document.getElementsByClassName(cls);
-      for (let i = 0; i < nodes.length; i++) maybeHide(nodes[i]);
+  /**
+   * Treat the page as if the player already took a first run: keep the
+   * arrow+hand tip permanently dismissed (no ArrowRight — that moves the snake).
+   */
+  function installFirstRunControlTipGuard() {
+    if (typeof document === "undefined") return false;
+    root.__mpControlTipDismissed = true;
+
+    // Always refresh CSS (class list evolves; old installs had stale selectors)
+    try {
+      let style = document.getElementById("mp-control-tip-guard");
+      if (!style) {
+        style = document.createElement("style");
+        style.id = "mp-control-tip-guard";
+        (document.head || document.documentElement).appendChild(style);
+      }
+      style.textContent = CONTROL_TIP_CSS;
+    } catch (e) { /* ignore */ }
+
+    hideControlHelper();
+
+    if (root.__mpControlTipGuardInstalled) {
+      return true;
+    }
+    root.__mpControlTipGuardInstalled = true;
+
+    // Tip is injected on first Play after refresh — re-hide when it appears
+    try {
+      if (typeof MutationObserver === "function" && document.body) {
+        let scheduled = 0;
+        const obs = new MutationObserver(function () {
+          if (scheduled) return;
+          scheduled = root.setTimeout
+            ? root.setTimeout(function () {
+                scheduled = 0;
+                hideControlHelper();
+              }, 0)
+            : (hideControlHelper(), 0);
+        });
+        obs.observe(document.body, { childList: true, subtree: true });
+        root.__mpControlTipObserver = obs;
+      }
+    } catch (e2) { /* ignore */ }
+
+    // Short burst after load / Play (tip often mounts a few frames late)
+    [0, 50, 150, 400, 1000, 2000].forEach(function (ms) {
+      try {
+        setTimeout(hideControlHelper, ms);
+      } catch (e3) { /* ignore */ }
     });
+    return true;
   }
 
   function restoreControlHelper() {
+    // Do not resurrect the first-run tip once the MP guard is active
+    if (root.__mpControlTipDismissed) {
+      hideControlHelper();
+      return;
+    }
     document.querySelectorAll("[data-mp-helper-hidden='1']").forEach(function (el) {
       el.style.visibility = "";
       el.style.opacity = "";
       el.style.pointerEvents = "";
+      el.style.display = "";
       delete el.dataset.mpHelperHidden;
     });
   }
@@ -33016,14 +34247,42 @@ window.RemixMod.runCodeAfter = function () {
     }
   }
 
+  /** Co-op / versus Focus spectate — never persist TimeKeeper PBs or attempts. */
+  function isSpectatingForTimeKeeper() {
+    return !!(root.__mpCoopSpectator || root.__mpVersusFocusSpectate);
+  }
+
+  /**
+   * Patch shouldTrack so Remix savePB / saveScore / addAttempt / gotAll never
+   * write while spectating. Handlers in mod.js already skip MP side-effects;
+   * without this, orig.gotAll still flushed impossible times (e.g. 135ms ALL).
+   */
+  function installSpectatorTimeKeeperGuard() {
+    const tk = root.timeKeeper;
+    if (!tk) return false;
+    if (tk.__mpSpectateTkGuard) return true;
+    tk.__mpSpectateTkGuard = true;
+    const origShouldTrack =
+      typeof tk.shouldTrack === "function" ? tk.shouldTrack.bind(tk) : null;
+    tk.shouldTrack = function (ctx) {
+      if (isSpectatingForTimeKeeper()) return false;
+      return origShouldTrack ? origShouldTrack(ctx) : true;
+    };
+    return true;
+  }
+
   function wrapTimeKeeper(handlers) {
     handlers = handlers || {};
     const tk = root.timeKeeper;
-    if (!tk || tk.__mpWrapped) return false;
+    if (!tk || tk.__mpWrapped) {
+      installSpectatorTimeKeeperGuard();
+      return false;
+    }
     tk.__mpWrapped = true;
     tk._lastScore = 0;
     tk._lastTimeMs = 0;
     tk._dead = false;
+    installSpectatorTimeKeeperGuard();
 
     function wrap(name, after) {
       const orig = tk[name];
@@ -33037,6 +34296,16 @@ window.RemixMod.runCodeAfter = function () {
           after && after(timeMs, score, name);
         } catch (e) {
           console.warn("mp timeKeeper hook", e);
+        }
+        // Belt-and-suspenders: never invoke Remix save path while spectating
+        if (
+          isSpectatingForTimeKeeper() &&
+          (name === "gotApple" || name === "gotAll" || name === "death")
+        ) {
+          if (name === "death" || name === "gotAll") {
+            tk.playing = false;
+          }
+          return undefined;
         }
         return orig.apply(this, arguments);
       };
@@ -33273,7 +34542,22 @@ window.RemixMod.runCodeAfter = function () {
 
   /** Reveal native death/end overlay so settings + Play are usable. */
   function showDeathScreen(opts) {
-    root.pauseGame = false;
+    opts = opts || {};
+    // Keep Focus menu-peek ticking; otherwise STOP the run behind the chrome.
+    if (!opts.keepRunning) {
+      root.pauseGame = 1;
+      try {
+        const g = gameInstance();
+        if (g) {
+          g.nj = true;
+          if (g.dead != null) g.dead = true;
+        }
+        if (root.timeKeeper) {
+          root.timeKeeper._dead = true;
+          root.timeKeeper.playing = false;
+        }
+      } catch (e) { /* ignore */ }
+    }
     const overlay = document.getElementsByClassName("wjOYOd")[0];
     if (overlay) {
       overlay.style.visibility = "visible";
@@ -33283,7 +34567,7 @@ window.RemixMod.runCodeAfter = function () {
     }
     // Sync engine quit state (same signal Remix reset uses), unless caller
     // already came from an Escape keydown (avoids re-entrancy).
-    if (opts && opts.skipEscapeDispatch) return;
+    if (opts.skipEscapeDispatch) return;
     if (root.__mpEscHandling) return;
     try {
       root.__mpEscHandling = true;
@@ -33321,24 +34605,8 @@ window.RemixMod.runCodeAfter = function () {
       const alive = s.alive !== false;
       const colorId = s.color_id != null ? s.color_id : s.colorId;
       const c = Colors && Colors.getColor ? Colors.getColor(colorId) : null;
-      body.forEach(function (p, i) {
-        // Corpses stay visible but faded — still drawn as obstacles
-        ctx.globalAlpha = alive ? 1 : 0.5;
-        if (c && c.set && c.set.length) {
-          ctx.fillStyle = c.set[i % c.set.length];
-        } else if (c && c.primary) {
-          ctx.fillStyle = i === 0 ? c.secondary || c.primary : c.primary;
-        } else {
-          ctx.fillStyle = i === 0 ? "#17439F" : "#4E7CF6";
-        }
-        const pad = Math.max(1, cell * 0.08);
-        ctx.fillRect(
-          ox + p.x * cell + pad,
-          oy + p.y * cell + pad,
-          cell - pad * 2,
-          cell - pad * 2
-        );
-      });
+      ctx.globalAlpha = alive ? 1 : 0.5;
+      drawWallSolverStyleSnake(ctx, body, ox, oy, cell, c, s.dir);
       ctx.globalAlpha = 1;
     });
   }
@@ -33348,9 +34616,12 @@ window.RemixMod.runCodeAfter = function () {
   }
 
   /**
-   * Slim co-op pose scrape: body + dir + alive + colors only (no menu walks).
+   * Slim co-op pose scrape: body + dir + alive (+ colors when includeColors).
+   * No width/height/score on the pose channel (reduces lag).
    */
-  function scrapeCoopSnakeDelta(colorId) {
+  function scrapeCoopSnakeDelta(colorId, opts) {
+    opts = opts || {};
+    const includeColors = opts.includeColors !== false;
     const g = gameInstance();
     const bodySrc =
       (g && g.oa && g.oa.ka) ||
@@ -33360,6 +34631,13 @@ window.RemixMod.runCodeAfter = function () {
     const snake = (g && g.oa) || {};
     const body = mapBody(bodySrc);
     const scoreInfo = readScoreAndAlive();
+    const out = {
+      body: body,
+      dir: snake.direction || snake.dir || root.head_dir || null,
+      alive: scoreInfo.alive !== false,
+    };
+    if (!includeColors) return out;
+
     const Colors = root.MultiplayerColors;
     let color1 = null;
     let color2 = null;
@@ -33392,62 +34670,53 @@ window.RemixMod.runCodeAfter = function () {
         if (!color1) color1 = Yc;
       }
     }
-    const meta =
-      (g && g.wa && g.wa.oa && g.wa.oa.oa) ||
-      (snake && snake.oa) ||
-      (g && g.settings && g.settings.grid) ||
-      {};
-    return {
-      body: body,
-      dir: snake.direction || snake.dir || root.head_dir || null,
-      width: firstNumber(meta.width, meta.W, 17) || 17,
-      height: firstNumber(meta.height, meta.H, 15) || 15,
-      score: scoreInfo.score,
-      alive: scoreInfo.alive !== false,
-      colorId: colorId != null ? colorId : null,
-      color1: color1,
-      color2: color2,
-      Sc: Sc,
-      Yc: Yc,
-    };
+    out.colorId = colorId != null ? colorId : null;
+    out.color1 = color1;
+    out.color2 = color2;
+    out.Sc = Sc;
+    out.Yc = Yc;
+    return out;
   }
 
   function snakeDeltaFingerprint(delta) {
     if (!delta) return "";
+    // Pose identity is head + length + dir (+ alive) — avoid O(n) string growth
     const body = delta.body || [];
-    let s =
+    const h = body[0];
+    return (
       (delta.alive === false ? "0" : "1") +
       "|" +
       (delta.dir || "") +
       "|" +
-      body.length;
-    for (let i = 0; i < body.length; i++) {
-      const p = body[i];
-      s += "|" + (p && p.x) + "," + (p && p.y);
-    }
-    if (delta.Sc) s += "|" + delta.Sc;
-    if (delta.Yc) s += "|" + delta.Yc;
-    return s;
+      body.length +
+      "|" +
+      (h ? h.x + "," + h.y : "")
+    );
   }
 
-  function scrapeCollectables() {
+  function scrapeCollectables(opts) {
+    opts = opts || {};
     const board = scrapeBoard();
     if (!board) return null;
-    const entities = scrapeBoardEntities();
-    return {
+    const out = {
       apples: board.apples || [],
       width: board.width,
       height: board.height,
-      score: board.score,
-      walls: entities.walls,
-      keys: entities.keys,
-      boxes: entities.boxes,
-      goals: entities.goals,
-      mines: entities.mines,
-      statues: entities.statues,
-      bridges: entities.bridges,
-      gates: entities.gates,
     };
+    // Heavy board entities only when requested (trophy modes) — default fruit-only
+    if (opts.includeEntities) {
+      const entities = scrapeBoardEntities();
+      out.walls = entities.walls;
+      out.keys = entities.keys;
+      out.boxes = entities.boxes;
+      out.goals = entities.goals;
+      out.mines = entities.mines;
+      out.statues = entities.statues;
+      out.bridges = entities.bridges;
+      out.gates = entities.gates;
+      out.score = board.score;
+    }
+    return out;
   }
 
   /**
@@ -33527,6 +34796,19 @@ window.RemixMod.runCodeAfter = function () {
     try {
       apples = nudgeCoopApplesOffSnakes(apples, g);
       if (g && g.wa && Array.isArray(g.wa.ka)) {
+        // Native fruit render does `apple.pos.clone()` — keep a template Od/point.
+        let templateApple = null;
+        let templatePos = null;
+        for (let t = 0; t < g.wa.ka.length; t++) {
+          const a = g.wa.ka[t];
+          if (!a) continue;
+          if (!templateApple) templateApple = a;
+          if (a.pos && typeof a.pos.clone === "function") {
+            templatePos = a.pos;
+            templateApple = a;
+            break;
+          }
+        }
         while (g.wa.ka.length > apples.length) {
           g.wa.ka.pop();
         }
@@ -33534,15 +34816,30 @@ window.RemixMod.runCodeAfter = function () {
           const src = apples[i];
           let dst = g.wa.ka[i];
           if (!dst) {
-            dst = { pos: { x: src.x, y: src.y }, type: src.type != null ? src.type : 0 };
+            dst = {};
+            if (templateApple) {
+              try {
+                Object.keys(templateApple).forEach(function (k) {
+                  if (k === "pos") return;
+                  dst[k] = templateApple[k];
+                });
+              } catch (e) { /* ignore */ }
+            }
+            dst.pos = makeNativePoint(src.x, src.y, templatePos);
+            dst.type = src.type != null ? src.type : dst.type != null ? dst.type : 0;
             g.wa.ka[i] = dst;
-          }
-          if (dst.pos) {
-            dst.pos.x = src.x;
-            dst.pos.y = src.y;
+            if (!templatePos && dst.pos) templatePos = dst.pos;
+            if (!templateApple) templateApple = dst;
+          } else if (dst.pos || templatePos) {
+            dst.pos = ensureNativePos(dst.pos, src.x, src.y, templatePos);
+            if (!templatePos && dst.pos) templatePos = dst.pos;
           } else {
+            // Rare: apple stored as a bare point
             dst.x = src.x;
             dst.y = src.y;
+            if (typeof dst.clone !== "function") {
+              dst.pos = makeNativePoint(src.x, src.y, templatePos);
+            }
           }
           if (src.type != null) dst.type = src.type;
           if (src.poison) {
@@ -33559,19 +34856,43 @@ window.RemixMod.runCodeAfter = function () {
     return false;
   }
 
-  /** Start native run clock for co-op (everyone on PLAY_SYNC). */
-  function startCoopRunTimer() {
-    const tk = root.timeKeeper;
-    if (!tk) return false;
-    try {
-      tk._dead = false;
-      if (typeof tk.start === "function") tk.start();
-      else tk.playing = true;
-      return true;
-    } catch (e) {
-      console.warn("startCoopRunTimer", e);
-      return false;
+  /** Start native run clock for co-op players (not spectators). */
+  function startCoopRunTimer(opts) {
+    opts = opts || {};
+    if (opts.spectator || isSpectatingForTimeKeeper()) return false;
+    installSpectatorTimeKeeperGuard();
+    const startedAt = opts.timerStartedAtMs != null ? Number(opts.timerStartedAtMs) : null;
+    function applyOnce() {
+      const tk = root.timeKeeper;
+      if (!tk) return false;
+      if (isSpectatingForTimeKeeper()) return true;
+      try {
+        tk._dead = false;
+        if (typeof tk.start === "function") tk.start();
+        else tk.playing = true;
+        if (startedAt && Number.isFinite(startedAt)) {
+          const elapsed = Math.max(0, Date.now() - startedAt);
+          tk._lastTimeMs = elapsed;
+          if (typeof tk.lastAppleTime === "number") tk.lastAppleTime = elapsed;
+          // Hint engines that expose a wall-clock anchor
+          tk.__mpCoopStartedAtMs = startedAt;
+        }
+        return true;
+      } catch (e) {
+        console.warn("startCoopRunTimer", e);
+        return false;
+      }
     }
+    if (applyOnce()) return true;
+    // Retry until timeKeeper exists (cold first Start)
+    let tries = 0;
+    const max = opts.maxAttempts != null ? opts.maxAttempts : 40;
+    const iv = opts.intervalMs != null ? opts.intervalMs : 50;
+    const timer = setInterval(function () {
+      tries++;
+      if (applyOnce() || tries >= max) clearInterval(timer);
+    }, iv);
+    return false;
   }
 
   /** Freeze native run clock (all-dead / ALL apples) — leave last time visible. */
@@ -33590,6 +34911,80 @@ window.RemixMod.runCodeAfter = function () {
       console.warn("stopCoopRunTimer", e);
       return false;
     }
+  }
+
+  function slugFromModeName(name) {
+    return String(name || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_|_$/g, "");
+  }
+
+  /**
+   * SpeedInfo ModeRegistry: never show unknown_N when modeToTxt has a name.
+   * Covers all trophy indices (Peaceful 21 and every other mode).
+   */
+  function installModeLabelPatch() {
+    const MR = root.ModeRegistry;
+    if (!MR || MR.__mpModeLabelPatched) return false;
+    MR.__mpModeLabelPatched = true;
+
+    function labelFromIndex(index) {
+      const mt = root.modeToTxt && root.modeToTxt[index];
+      if (mt && mt.name) {
+        return { id: slugFromModeName(mt.name) || "mode_" + index, label: mt.name };
+      }
+      return null;
+    }
+
+    function resolveUnknownKey(key) {
+      if (!key || typeof key !== "string") return null;
+      let m = key.match(/^unknown_(\d+)$/);
+      if (!m) m = key.match(/^trophy_(\d+)$/);
+      if (!m) return null;
+      return labelFromIndex(Number(m[1]));
+    }
+
+    if (typeof MR.labelModeKey === "function") {
+      const origLabel = MR.labelModeKey.bind(MR);
+      MR.labelModeKey = function (key) {
+        const resolved = resolveUnknownKey(key);
+        if (resolved) return resolved.label;
+        const out = origLabel(key);
+        if (out && /^unknown_/.test(String(out))) {
+          const again = resolveUnknownKey(String(out));
+          if (again) return again.label;
+        }
+        return out;
+      };
+    }
+
+    if (typeof MR.listActiveModes === "function") {
+      const origList = MR.listActiveModes.bind(MR);
+      MR.listActiveModes = function () {
+        const list = origList();
+        if (!Array.isArray(list)) return list;
+        return list.map(function (m) {
+          if (!m) return m;
+          const idx = m.index != null ? m.index : null;
+          if (m.id && !/^unknown_/.test(m.id) && m.label && !/^unknown_/.test(m.label)) {
+            return m;
+          }
+          const fromIdx = idx != null ? labelFromIndex(idx) : null;
+          const fromId = resolveUnknownKey(m.id);
+          const hit = fromIdx || fromId;
+          if (!hit) return m;
+          return {
+            id: hit.id,
+            label: hit.label,
+            index: m.index,
+          };
+        });
+      };
+      // Preserve remix marker if present
+      if (origList.__remix) MR.listActiveModes.__remix = true;
+    }
+    return true;
   }
 
   /** Force local death so cross-snake collision ends the native run. */
@@ -33650,15 +35045,29 @@ window.RemixMod.runCodeAfter = function () {
     emptyLocalSnakeBody: emptyLocalSnakeBody,
     applySpectateState: applySpectateState,
     makeNativePoint: makeNativePoint,
+    ensureNativePos: ensureNativePos,
     writeNativeBody: writeNativeBody,
+    writeNativeHead: writeNativeHead,
+    followBodyFromHead: followBodyFromHead,
+    bodyTrailConnected: bodyTrailConnected,
+    reapplyFocusBody: reapplyFocusBody,
     hideControlHelper: hideControlHelper,
     restoreControlHelper: restoreControlHelper,
+    installFirstRunControlTipGuard: installFirstRunControlTipGuard,
     forceLocalDeath: forceLocalDeath,
+    installFocusDieGuard: installFocusDieGuard,
+    installFocusTickGuard: installFocusTickGuard,
+    focusPoseFingerprint: focusPoseFingerprint,
     startCoopRunTimer: startCoopRunTimer,
     stopCoopRunTimer: stopCoopRunTimer,
+    installModeLabelPatch: installModeLabelPatch,
+    isSpectatingForTimeKeeper: isSpectatingForTimeKeeper,
+    installSpectatorTimeKeeperGuard: installSpectatorTimeKeeperGuard,
     wrapTimeKeeper: wrapTimeKeeper,
     alterSnakeCodeExposeGame: alterSnakeCodeExposeGame,
     drawBoardOnCanvas: drawBoardOnCanvas,
+    drawWallSolverStyleSnake: drawWallSolverStyleSnake,
+    resolveAppleImageUrl: resolveAppleImageUrl,
     resolveThemeColors: resolveThemeColors,
     drawCoopSnapshot: drawCoopSnapshot,
     setNativeMenusLocked: setNativeMenusLocked,
@@ -33776,6 +35185,8 @@ window.RemixMod.runCodeAfter = function () {
 
   root.MultiplayerVisibilityFix = {
     fix: fixVisibilityUi,
+    /** Alias — remixOrganizeSettings / older hooks call install(). */
+    install: fixVisibilityUi,
     close: closeVisibility,
   };
 
@@ -34017,9 +35428,11 @@ window.RemixMod.runCodeAfter = function () {
 .mp-hud h4{margin:0 0 6px;font-size:13px}
 .mp-color-icon{width:28px;height:28px;border-radius:6px;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.3)}
 #mp-mosaic{
-  position:fixed;left:8px;bottom:8px;z-index:9996;display:none;
-  gap:8px;padding:8px;background:rgba(0,0,0,.45);border-radius:8px;
-  max-width:min(96vw,920px);max-height:42vh;overflow:auto;
+  position:fixed;left:50%;top:12px;transform:translateX(-50%);
+  z-index:9996;display:none;
+  gap:10px;padding:10px;background:rgba(0,0,0,.45);border-radius:10px;
+  max-width:min(96vw,1100px);max-height:58vh;overflow:auto;
+  box-sizing:border-box;
 }
 #mp-mosaic .mp-mosaic-cell{
   position:relative;cursor:pointer;
@@ -34375,11 +35788,6 @@ window.RemixMod.runCodeAfter = function () {
     endBtn.style.display = "none";
     adminBox.appendChild(endBtn);
 
-    const passAdminSel = el("select");
-    passAdminSel.id = "mp-pass-admin";
-    const passAdminBtn = themedBtn("Pass admin");
-    adminBox.appendChild(field("Pass admin to", passAdminSel));
-    adminBox.appendChild(passAdminBtn);
     panelMatch.appendChild(adminBox);
 
     const playerBox = el("div", "mp-player-only hidden");
@@ -34572,10 +35980,6 @@ window.RemixMod.runCodeAfter = function () {
       if (self.app.abortMatchAsAdmin) self.app.abortMatchAsAdmin("ui");
       else if (self.app.client.sessionEnd) self.app.client.sessionEnd("aborted");
     };
-    passAdminBtn.onclick = function () {
-      const id = passAdminSel.value;
-      if (id && self.app.client) self.app.client.transferAdmin(id);
-    };
     readyBtn.onclick = function () {
       if (!self.app.client || !self.app.client.connected) return;
       const me = self.app.client.me();
@@ -34618,6 +36022,10 @@ window.RemixMod.runCodeAfter = function () {
         if (!self.app.client.isAdmin()) return;
         if (act === "kick") {
           self.app.client.kick(id);
+          return;
+        }
+        if (act === "admin") {
+          if (self.app.client.transferAdmin) self.app.client.transferAdmin(id);
           return;
         }
         if (act !== "role") return;
@@ -34871,19 +36279,6 @@ window.RemixMod.runCodeAfter = function () {
         : "Not connected";
 
       const myId = self.app.client && self.app.client.clientId;
-      const nextPassVal = passAdminSel.value;
-      passAdminSel.innerHTML = "";
-      clients.forEach(function (c) {
-        if (c.clientId === myId) return;
-        const o = el(
-          "option",
-          null,
-          (c.resolvedName || c.clientId.slice(0, 8)) + " (" + c.role + ")"
-        );
-        o.value = c.clientId;
-        passAdminSel.appendChild(o);
-      });
-      if (nextPassVal) passAdminSel.value = nextPassVal;
 
       const focusId =
         (self.app.versus && self.app.versus.focusClientId) || null;
@@ -35006,6 +36401,13 @@ window.RemixMod.runCodeAfter = function () {
           kick.setAttribute("data-mp-id", c.clientId);
           actions.appendChild(promo);
           actions.appendChild(kick);
+          if (c.clientId !== myId) {
+            const pass = themedBtn("Pass admin", "mp-mini");
+            pass.setAttribute("data-mp-act", "admin");
+            pass.setAttribute("data-mp-id", c.clientId);
+            pass.title = "Make this player the room admin";
+            actions.appendChild(pass);
+          }
           hasActions = true;
         }
         if (hasActions) row.appendChild(actions);
@@ -35632,6 +37034,10 @@ window.RemixMod.runCodeAfter = function () {
       self.ui.updateHud(self);
       self.applyControlLocks();
       self.updateStatusIndicator();
+      // Mode load: dismiss first-run arrow/hand tip as if already played once
+      if (Gsm.installFirstRunControlTipGuard) {
+        Gsm.installFirstRunControlTipGuard();
+      }
       // Admin: push current trophy/count/speed/size so co-op/versus peers match
       if (self.client && self.client.isAdmin()) {
         setTimeout(function () {
@@ -35677,6 +37083,32 @@ window.RemixMod.runCodeAfter = function () {
     });
     this.client.on(P.TYPES.SNAKE_DELTA, function (p) {
       if (!self.coopNative) return;
+      // Ignore self-echo — local already applied at publishCoopState
+      if (
+        p &&
+        p.clientId &&
+        self.client &&
+        p.clientId === self.client.clientId
+      ) {
+        return;
+      }
+      if (!p || !p.clientId) return;
+      // Peer may arm the shared timer before pose coalesce
+      if (p.timerArm || p.timerStartedAtMs != null) {
+        self.armCoopRunTimer(p.timerStartedAtMs);
+      }
+      // During a live co-op session, coalesce latest pose per peer (apply on tick)
+      if (
+        self._coopSessionActive &&
+        typeof window !== "undefined" &&
+        typeof window.__mpCoopFlushPendingDeltas === "function"
+      ) {
+        if (!self._pendingCoopSnakeDeltas) {
+          self._pendingCoopSnakeDeltas = Object.create(null);
+        }
+        self._pendingCoopSnakeDeltas[p.clientId] = p;
+        return;
+      }
       self.coopNative.applySnakeDelta(p);
     });
     this.client.on(P.TYPES.COLLECTABLES_DELTA, function (p) {
@@ -35707,6 +37139,9 @@ window.RemixMod.runCodeAfter = function () {
         self.coopNative.syncBridge();
       }
     });
+    this.client.on(P.TYPES.COOP_TIMER_START, function (p) {
+      self.armCoopRunTimer(p && p.timerStartedAtMs);
+    });
     this.client.on(P.TYPES.SETTINGS_SYNC, function (settings) {
       self._log("SETTINGS_SYNC");
       if (self.client && self.client.roster && settings) {
@@ -35731,7 +37166,28 @@ window.RemixMod.runCodeAfter = function () {
       if (me.role === "player") {
         // Prefer ready, but if SESSION_START already flipped sessionActive, start anyway
         if (!me.ready && !roster.sessionActive) return;
-      } else if (!(isCoop && me.role === "spectator")) {
+      } else if (me.role === "spectator") {
+        if (isCoop) {
+          self.startMatchLocalPlay({
+            coop: true,
+            spectator: true,
+          });
+          return;
+        }
+        // Versus Focus: every spectator (admin + non-admin) seats native Play
+        // the same way. If Focus is already mounted from run 1, force a fresh
+        // seat so run 2 matches the working first-run path.
+        if (typeof window !== "undefined") {
+          window.__mpStartingMatch = true;
+        }
+        const focusAlreadyMounted = !!self._versusFocusSpectate;
+        self.ensureAutoFocus();
+        self.renderFocusBoard();
+        if (focusAlreadyMounted) {
+          self._reseatVersusFocusForNewRun("play_sync");
+        }
+        return;
+      } else {
         return;
       }
       if (isCoop) {
@@ -35745,13 +37201,15 @@ window.RemixMod.runCodeAfter = function () {
       }
     });
     this.client.on(P.TYPES.ERROR, function (p) {
+      // Late SNAKE_DELTA / COLLECTABLES after ALL_DEAD — expected, not a UI error
+      if (p && p.code === "not_coop_session") return;
       console.warn("Multiplayer ERROR", p);
       const st = document.getElementById("mp-status");
       if (st) st.textContent = "Error: " + (p.message || p.code);
       if (p && p.code === "player_cap") {
         if (st) {
           st.textContent =
-            "Player cap reached (Versus ≤10, Co-op ≤4) — promote failed";
+            "Player cap reached (Versus ≤9, Co-op ≤4) — promote failed";
         }
       }
       if (p && (p.code === "color_taken" || p.code === "color_not_claimable")) {
@@ -35811,6 +37269,17 @@ window.RemixMod.runCodeAfter = function () {
     });
     this.client.on(P.TYPES.SESSION_END, function (p) {
       self._log("SESSION_END", p && p.reason);
+      // Stop co-op publishes immediately so late ticks don't hit not_coop_session
+      if (self.client && self.client.roster) {
+        self.client.roster.sessionActive = false;
+      }
+      self._coopSessionActive = false;
+      if (typeof window !== "undefined") {
+        window.__mpCoopAfterTick = null;
+        window.__mpCoopFlushPendingDeltas = null;
+        window.__mpCoopSession = false;
+        window.__mpCoopInject = false;
+      }
       self.versus.attemptRemainingMs = null;
       // Co-op: freeze native run clock for everyone (ALL_DEAD / ALL_APPLES)
       if (Gsm.stopCoopRunTimer) Gsm.stopCoopRunTimer();
@@ -35831,7 +37300,7 @@ window.RemixMod.runCodeAfter = function () {
       self.endCoopNativeSession();
       self.returnToMenus({ fromRemote: true });
       if (self.client && self.client.roster && self.ui.renderRoster) {
-        self.client.roster.sessionActive = false;
+        // sessionActive already cleared at handler start
         if (hasScores) self.client.roster.attemptExpired = true;
         self.ui.renderRoster(self.client.roster);
       }
@@ -35878,6 +37347,10 @@ window.RemixMod.runCodeAfter = function () {
         self.setCoopAuthorityMode(true);
         self._coopSlots = (p.slots || []).slice();
         self._coopSpawnApplied = false;
+        self._coopPlayerMoved = false;
+        self._coopTimerArmed = false;
+        // Timer arms on first move (COOP_TIMER_START), not at SESSION_START
+        self._coopTimerStartedAtMs = null;
         if (typeof window !== "undefined") {
           window.__mpCoopLocalDead = false;
         }
@@ -35889,6 +37362,7 @@ window.RemixMod.runCodeAfter = function () {
             p.collectablesOwnerId ||
             (self.client.roster && self.client.roster.collectablesOwnerId) ||
             null;
+          if (self.coopNative.beginSeedSticky) self.coopNative.beginSeedSticky(1500);
           self.coopNative.syncBridge();
         }
         self._coopDeadSent = false;
@@ -35923,6 +37397,9 @@ window.RemixMod.runCodeAfter = function () {
       self.ensureFocusCanvas();
       self.applyControlLocks();
       self.updateStatusIndicator();
+      if (Gsm.installFirstRunControlTipGuard) {
+        Gsm.installFirstRunControlTipGuard();
+      }
     });
   };
 
@@ -36088,7 +37565,7 @@ window.RemixMod.runCodeAfter = function () {
     if (Gsm.applySnakeColor) Gsm.applySnakeColor(id);
   };
 
-  MultiplayerApp.prototype.onLocalColorPicked = function () {
+    MultiplayerApp.prototype.onLocalColorPicked = function () {
     if (root.__mpApplyingColor) return;
     if (!this.client || !this.client.connected) return;
     const me = this.client.me();
@@ -36109,6 +37586,26 @@ window.RemixMod.runCodeAfter = function () {
 
     // Same as already claimed — nothing to do
     if (me.colorId != null && Number(me.colorId) === colorId) return;
+
+    // Co-op: refuse colors already taken by another player
+    if (this.client.roster && this.client.roster.mode === "coop") {
+      const clients = (this.client.roster.clients || []);
+      const taken = clients.some(function (c) {
+        return (
+          c &&
+          c.role === "player" &&
+          c.clientId !== me.clientId &&
+          c.colorId != null &&
+          Number(c.colorId) === colorId
+        );
+      });
+      if (taken) {
+        this.revertLocalColor(me.colorId != null ? me.colorId : 0);
+        const st = document.getElementById("mp-status");
+        if (st) st.textContent = "That color is taken — pick another";
+        return;
+      }
+    }
 
     this._pendingColorId = colorId;
     this._colorBeforeClaim = me.colorId != null ? me.colorId : null;
@@ -36170,22 +37667,38 @@ window.RemixMod.runCodeAfter = function () {
   };
 
   MultiplayerApp.prototype._colorForClient = function (clientId) {
+    const board =
+      this.versus && this.versus.boards && this.versus.boards[clientId];
+
+    // Prefer live scraped engine colors from that player's BOARD_DELTA
+    if (board && (board.Sc || board.Yc || (board.colorSet && board.colorSet.length))) {
+      const info = {
+        primary: board.Sc || board.Yc || null,
+        secondary: board.Yc || board.Sc || null,
+        Sc: board.Sc || null,
+        Yc: board.Yc || null,
+      };
+      if (board.colorSet && board.colorSet.length) {
+        info.set = board.colorSet;
+      } else if (Colors && board.colorId != null) {
+        const c = Colors.getColor(board.colorId);
+        if (c && c.set && c.set.length) info.set = c.set;
+        if (!info.primary && c && c.primary) {
+          info.primary = c.primary;
+          info.secondary = c.secondary || c.primary;
+        }
+      }
+      if (info.primary || info.set) return info;
+    }
+
     if (!Colors) return null;
     let colorId = null;
-    if (this.client && this.client.roster) {
+    if (board && board.colorId != null) colorId = board.colorId;
+    if (colorId == null && this.client && this.client.roster) {
       const c = (this.client.roster.clients || []).find(function (x) {
         return x.clientId === clientId;
       });
       if (c && c.colorId != null) colorId = c.colorId;
-    }
-    if (
-      colorId == null &&
-      this.versus &&
-      this.versus.boards &&
-      this.versus.boards[clientId] &&
-      this.versus.boards[clientId].colorId != null
-    ) {
-      colorId = this.versus.boards[clientId].colorId;
     }
     if (colorId == null) return null;
     return Colors.getColor(colorId);
@@ -36213,19 +37726,165 @@ window.RemixMod.runCodeAfter = function () {
     return c;
   };
 
+  /**
+   * Clear Focus seat leftovers so the next spectated life matches a clean first enter.
+   * Without this, a mounted Focus keeps Seated/NativeOk/RemoteStarted from run 1 and
+   * run 2 goes head-only / skips startNativeRun (esp. bad for non-admin Play gating).
+   */
+  MultiplayerApp.prototype._clearVersusFocusSeatFlags = function (opts) {
+    opts = opts || {};
+    if (typeof window === "undefined") return;
+    window.__mpFocusSeated = false;
+    window.__mpFocusForceFullBody = true;
+    window.__mpFocusSeatPoseFp = null;
+    window.__mpFocusRemoteStarted = false;
+    window.__mpFocusRemoteHead = null;
+    window.__mpFocusRemoteBody = null;
+    window.__mpFocusPoseFp = null;
+    window.__mpFocusNativeOk = false;
+    if (opts.requirePlay !== false) {
+      window.__mpFocusRequirePlay = true;
+    }
+  };
+
+  /**
+   * Versus Focus: keep local death UI / engine seat matched to remote board.alive.
+   * false→true means the focused player reset — re-seat Play so we are not stuck dead.
+   */
+  MultiplayerApp.prototype._syncVersusFocusAlive = function (board) {
+    if (!board || typeof window === "undefined") return;
+    const remoteAlive = board.alive !== false;
+    const prev = window.__mpVersusFocusRemoteAlive;
+    // Detect revive BEFORE flipping the flag so applySpectateState can full-seat
+    if (prev === false && remoteAlive) {
+      this._clearVersusFocusSeatFlags({ requirePlay: true });
+    }
+    window.__mpVersusFocusRemoteAlive = remoteAlive;
+    if (!remoteAlive) {
+      // Real remote death — drop first-run seat flags so the next life reseats cleanly
+      // even if a dead BOARD_DELTA frame is skipped (alive→alive after auto-restart).
+      this._clearVersusFocusSeatFlags({ requirePlay: true });
+      return;
+    }
+    if (
+      typeof window === "undefined" ||
+      !window.__mpSpectateAllowMenus
+    ) {
+      if (
+        !window.__mpFocusRequirePlay &&
+        (Gsm.dismissDeathOverlayForRun || Gsm.hideDeathScreen)
+      ) {
+        if (Gsm.dismissDeathOverlayForRun) Gsm.dismissDeathOverlayForRun();
+        else Gsm.hideDeathScreen();
+      }
+    }
+    // Player restarted after a death — local puppet often stays nj/dead until Play
+    if (prev === false && !this._versusFocusRevivePending) {
+      this._versusFocusRevivePending = true;
+      const self = this;
+      setTimeout(function () {
+        self._versusFocusRevivePending = false;
+        if (!self._versusFocusSpectate) return;
+        self._seatVersusFocusNative({ reason: "revive", force: true });
+      }, 0);
+    }
+  };
+
+  /**
+   * One native Play seat for every Focus spectator (admin + non-admin identical).
+   * force: retry even if a prior attempt claimed success.
+   */
+  MultiplayerApp.prototype._seatVersusFocusNative = function (opts) {
+    opts = opts || {};
+    if (!this._versusFocusSpectate) {
+      this._enterVersusFocusSpectate();
+    }
+    if (!this._versusFocusSpectate) return false;
+    if (this._versusFocusNativeRetrying && !opts.force) return false;
+    if (
+      !opts.force &&
+      typeof window !== "undefined" &&
+      window.__mpFocusNativeOk &&
+      Gsm.isNativeRunLive &&
+      Gsm.isNativeRunLive()
+    ) {
+      return true;
+    }
+    if (!Gsm.startNativeRun) return false;
+    this._versusFocusNativeRetrying = true;
+    if (typeof window !== "undefined") {
+      window.__mpFocusRequirePlay = true;
+      window.__mpFocusNativeOk = false;
+      window.__mpFocusSeated = false;
+      window.__mpFocusForceFullBody = true;
+    }
+    const self = this;
+    const attempt = (this._versusFocusSeatAttempts =
+      (this._versusFocusSeatAttempts || 0) + 1);
+    Gsm.startNativeRun({
+      maxAttempts: opts.maxAttempts != null ? opts.maxAttempts : 50,
+      intervalMs: opts.intervalMs != null ? opts.intervalMs : 40,
+      requirePlayClick: true,
+      deferTimer: true,
+      onDone: function (ok) {
+        self._versusFocusNativeRetrying = false;
+        if (typeof window !== "undefined") {
+          // Only clear the Play gate on success — failed seats must keep retrying
+          if (ok) {
+            window.__mpFocusRequirePlay = false;
+            window.__mpFocusNativeOk = true;
+            window.__mpFocusSeated = false;
+            window.__mpFocusForceFullBody = true;
+            self._versusFocusSeatAttempts = 0;
+          } else {
+            window.__mpFocusRequirePlay = true;
+            window.__mpFocusNativeOk = false;
+          }
+        }
+        const board = self.versus && self.versus.focusBoard();
+        if (board) self._paintVersusFocus(board);
+        if (
+          ok &&
+          (typeof window === "undefined" || !window.__mpSpectateAllowMenus) &&
+          Gsm.hideDeathScreen
+        ) {
+          Gsm.hideDeathScreen();
+        }
+        if (!ok && opts.retry !== false && attempt < 6) {
+          setTimeout(function () {
+            if (!self._versusFocusSpectate) return;
+            if (typeof window !== "undefined" && window.__mpFocusNativeOk) return;
+            self._seatVersusFocusNative({ reason: "retry", force: true });
+          }, 250);
+        }
+      },
+    });
+    return true;
+  };
+
   /** Push latest focus board into the live GameInstance each native tick. */
   MultiplayerApp.prototype._installVersusFocusTick = function () {
     const self = this;
     if (typeof window === "undefined") return;
     window.__mpVersusFocusOnTick = function () {
       if (!window.__mpVersusFocusSpectate) return;
-      const board = window.__mpVersusFocusBoard || (self.versus && self.versus.focusBoard());
+      const board =
+        (self.versus && self.versus.focusBoard()) ||
+        window.__mpVersusFocusBoard;
       if (!board || !Gsm.applySpectateState) return;
+      if (typeof window !== "undefined") window.__mpVersusFocusBoard = board;
+      self._syncVersusFocusAlive(board);
       const colorInfo = self._colorForClient(self.versus && self.versus.focusClientId);
-      // Native inject only — never fillRect over the real renderer
       Gsm.applySpectateState(null, board, colorInfo, { paint: false });
       if (Gsm.hideControlHelper) Gsm.hideControlHelper();
-      if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
+      if (
+        board.alive !== false &&
+        !window.__mpFocusRequirePlay &&
+        !window.__mpSpectateAllowMenus &&
+        Gsm.hideDeathScreen
+      ) {
+        Gsm.hideDeathScreen();
+      }
     };
   };
 
@@ -36234,11 +37893,49 @@ window.RemixMod.runCodeAfter = function () {
     if (typeof window !== "undefined") {
       window.__mpVersusFocusBoard = board;
     }
+    this._syncVersusFocusAlive(board);
     const colorInfo = this._colorForClient(this.versus.focusClientId);
     if (!Gsm.applySpectateState) return false;
-    // Product path: native inject only (eyes + fruit sprites + board chrome)
-    const result = Gsm.applySpectateState(null, board, colorInfo, { paint: false });
-    return !!(result && result.ok);
+    const result = Gsm.applySpectateState(null, board, colorInfo, {
+      paint: false,
+    });
+    return !!(result && result.ok && result.injected);
+  };
+
+  /** Keep retrying Play until Focus has a live native GameInstance (all seats). */
+  MultiplayerApp.prototype._ensureVersusFocusNative = function () {
+    // Do not hammer Play while the focused player is dead — wait for revive/PLAY_SYNC
+    if (
+      typeof window !== "undefined" &&
+      window.__mpVersusFocusRemoteAlive === false
+    ) {
+      return;
+    }
+    this._seatVersusFocusNative({ reason: "ensure", force: false });
+  };
+
+  /**
+   * New versus run while Focus is already mounted (PLAY_SYNC / Start match).
+   * First enter seats once; without this, run 2 keeps stale NativeOk/Seated flags.
+   */
+  MultiplayerApp.prototype._reseatVersusFocusForNewRun = function (reason) {
+    if (!this._versusFocusSpectate) {
+      this._enterVersusFocusSpectate();
+      return !!this._versusFocusSpectate;
+    }
+    this._clearVersusFocusSeatFlags({ requirePlay: true });
+    this._versusFocusPlayStarted = true;
+    this._versusFocusRevivePending = false;
+    this._versusFocusNativeRetrying = false;
+    this._versusFocusSeatAttempts = 0;
+    if (typeof window !== "undefined") {
+      window.__mpVersusFocusRemoteAlive = undefined;
+      window.__mpSpectateMenuFp = null;
+    }
+    return this._seatVersusFocusNative({
+      reason: reason || "new_run",
+      force: true,
+    });
   };
 
   MultiplayerApp.prototype._enterVersusFocusSpectate = function () {
@@ -36247,65 +37944,61 @@ window.RemixMod.runCodeAfter = function () {
     this._installVersusFocusTick();
     if (typeof window !== "undefined") {
       window.__mpVersusFocusSpectate = true;
-      // Fresh focus seat — menus hidden until Escape peek
       window.__mpSpectateAllowMenus = false;
+      window.__mpVersusFocusPaintFallback = false;
+      window.__mpSpectateMenuFp = null;
+      window.__mpVersusFocusRemoteAlive = undefined;
+      window.__mpFocusSeated = false;
+      window.__mpFocusSeatPoseFp = null;
+      window.__mpFocusRemoteStarted = false;
+      window.__mpFocusRemoteHead = null;
+      window.__mpFocusRemoteBody = null;
+      window.__mpFocusPoseFp = null;
+      window.__mpFocusRequirePlay = true;
+      window.__mpFocusNativeOk = false;
+      window.__mpFocusForceFullBody = true;
     }
-    // Live GameInstance — must NOT pause or native snake/fruit won't render
+    this._versusFocusRevivePending = false;
+    this._versusFocusNativeRetrying = false;
+    if (Gsm.installSpectatorTimeKeeperGuard) Gsm.installSpectatorTimeKeeperGuard();
     if (Gsm.setLocalPaused) Gsm.setLocalPaused(false);
-    if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
+    if (Gsm.clearDeathOverlayOverrides) Gsm.clearDeathOverlayOverrides();
     if (Gsm.hideControlHelper) Gsm.hideControlHelper();
     this.hideNativeBoard(false);
+    this.ensureAutoFocus();
     if (!this._versusFocusPlayStarted) {
       this._versusFocusPlayStarted = true;
-      try {
-        Gsm.triggerPlay();
-      } catch (e) { /* ignore */ }
-      if (Gsm.setLocalPaused) Gsm.setLocalPaused(false);
-      // Dismiss Google's first-move tip (our key blocker otherwise keeps it forever)
-      try {
-        if (typeof window !== "undefined") window.__mpAllowSpectateKeyDismiss = true;
-        document.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key: "ArrowRight",
-            code: "ArrowRight",
-            keyCode: 39,
-            which: 39,
-            bubbles: true,
-            cancelable: true,
-          })
-        );
-      } catch (e2) { /* ignore */ }
-      finally {
-        if (typeof window !== "undefined") window.__mpAllowSpectateKeyDismiss = false;
-      }
-      const self = this;
-      // Tip appears right after Play; hide repeatedly for a short window
-      let hides = 0;
-      function hideTip() {
-        if (Gsm.hideControlHelper) Gsm.hideControlHelper();
-        hides++;
-        if (hides < 20 && self._versusFocusSpectate) {
-          setTimeout(hideTip, 100);
-        }
-      }
-      setTimeout(hideTip, 0);
+      this._seatVersusFocusNative({ reason: "enter", force: true });
     }
     this.startVersusFocusLoop();
   };
 
   MultiplayerApp.prototype._leaveVersusFocusSpectate = function () {
     if (!this._versusFocusSpectate) {
-      // Still restore menus if a prior hide stuck after lobby gate
       if (Gsm.restoreDeathScreen) Gsm.restoreDeathScreen();
       if (Gsm.unlockPersonalMenus) Gsm.unlockPersonalMenus();
       return;
     }
     this._versusFocusSpectate = false;
     this._versusFocusPlayStarted = false;
+    this._versusFocusRevivePending = false;
+    this._versusFocusNativeRetrying = false;
     if (typeof window !== "undefined") {
       window.__mpVersusFocusSpectate = false;
       window.__mpVersusFocusBoard = null;
       window.__mpSpectateAllowMenus = false;
+      window.__mpVersusFocusPaintFallback = false;
+      window.__mpSpectateMenuFp = null;
+      window.__mpVersusFocusRemoteAlive = undefined;
+      window.__mpFocusRequirePlay = false;
+      window.__mpFocusNativeOk = false;
+      window.__mpFocusSeated = false;
+      window.__mpFocusSeatPoseFp = null;
+      window.__mpFocusRemoteStarted = false;
+      window.__mpFocusRemoteHead = null;
+      window.__mpFocusRemoteBody = null;
+      window.__mpFocusPoseFp = null;
+      window.__mpFocusForceFullBody = false;
     }
     this.stopVersusFocusLoop();
     if (Gsm.restoreControlHelper) Gsm.restoreControlHelper();
@@ -36317,19 +38010,23 @@ window.RemixMod.runCodeAfter = function () {
   MultiplayerApp.prototype.startVersusFocusLoop = function () {
     const self = this;
     if (this._versusFocusRaf) return;
+    let frames = 0;
     function frame() {
       self._versusFocusRaf = 0;
       if (!self._versusFocusSpectate) return;
+      frames++;
+      if (frames % 45 === 0) self._ensureVersusFocusNative();
       const board = self.versus && self.versus.focusBoard();
       if (board) {
         if (typeof window !== "undefined") window.__mpVersusFocusBoard = board;
         self._paintVersusFocus(board);
       }
       if (Gsm.hideControlHelper) Gsm.hideControlHelper();
-      // Do not re-hide death every frame — Escape peek must stick for cosmetics
       if (
-        typeof window === "undefined" ||
-        !window.__mpSpectateAllowMenus
+        board &&
+        board.alive !== false &&
+        (typeof window === "undefined" || !window.__mpSpectateAllowMenus) &&
+        (typeof window === "undefined" || !window.__mpFocusRequirePlay)
       ) {
         if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
       }
@@ -36376,7 +38073,12 @@ window.RemixMod.runCodeAfter = function () {
     if (board) {
       this._paintVersusFocus(board);
     }
-    if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
+    if (
+      typeof window === "undefined" ||
+      (!window.__mpFocusRequirePlay && !window.__mpSpectateAllowMenus)
+    ) {
+      if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
+    }
   };
 
   MultiplayerApp.prototype.ensureMosaic = function () {
@@ -36387,6 +38089,14 @@ window.RemixMod.runCodeAfter = function () {
     document.body.appendChild(el);
     this._mosaicEl = el;
     this._mosaicCells = {};
+    const self = this;
+    if (typeof window !== "undefined") {
+      window.__mpMosaicRepaint = function () {
+        if (self.versus && self.versus.spectateMode === "mosaic") {
+          self.renderMosaic();
+        }
+      };
+    }
     return el;
   };
 
@@ -36415,7 +38125,7 @@ window.RemixMod.runCodeAfter = function () {
     }
     const cols = Math.min(players.length, players.length <= 4 ? 2 : 3);
     el.style.display = "grid";
-    el.style.gridTemplateColumns = "repeat(" + cols + ", minmax(120px, 1fr))";
+    el.style.gridTemplateColumns = "repeat(" + cols + ", minmax(180px, 1fr))";
 
     // Mosaic chrome: prefer focused/selected player's border, else first board with theme
     let chromeBorder = null;
@@ -36444,8 +38154,9 @@ window.RemixMod.runCodeAfter = function () {
         const label = document.createElement("div");
         label.className = "mp-mosaic-label";
         const canvas = document.createElement("canvas");
-        canvas.width = 170;
-        canvas.height = 150;
+        // ~1.4× prior 170×150 — readable 3×3 without dominating the screen
+        canvas.width = 240;
+        canvas.height = 212;
         canvas.className = "mp-mosaic-canvas";
         // Name sits above the mini-board
         cell.appendChild(label);
@@ -36504,19 +38215,45 @@ window.RemixMod.runCodeAfter = function () {
   MultiplayerApp.prototype.startMatchLocalPlay = function (opts) {
     opts = opts || {};
     const self = this;
-    // Drop any leftover Focus/helper hides that trap the endscreen / top bar
-    if (Gsm.restoreControlHelper) Gsm.restoreControlHelper();
+    // Drop sticky death hides that trap the endscreen; tip guard stays active
     if (Gsm.clearDeathOverlayOverrides) Gsm.clearDeathOverlayOverrides();
+    if (Gsm.installFirstRunControlTipGuard) {
+      Gsm.installFirstRunControlTipGuard();
+    } else if (Gsm.hideControlHelper) {
+      Gsm.hideControlHelper();
+    }
     if (Gsm.startNativeRun) {
       Gsm.startNativeRun({
         maxAttempts: 50,
         intervalMs: 40,
-        onDone: function () {
-          if (opts.coop) {
-            self.beginCoopNativeSession({
-              spectator: !!opts.spectator,
-            });
+        onDone: function (ok) {
+          if (!opts.coop) return;
+          if (!ok) {
+            // Retry Play briefly rather than seating a dead GameInstance
+            setTimeout(function () {
+              Gsm.startNativeRun({
+                maxAttempts: 30,
+                intervalMs: 40,
+                onDone: function (ok2) {
+                  if (ok2) {
+                    self.beginCoopNativeSession({
+                      spectator: !!opts.spectator,
+                    });
+                    return;
+                  }
+                  // Last chance: seat anyway and let spawn reassert catch up
+                  console.debug("[Multiplayer] co-op Play cold-start; seating with reassert");
+                  self.beginCoopNativeSession({
+                    spectator: !!opts.spectator,
+                  });
+                },
+              });
+            }, 100);
+            return;
           }
+          self.beginCoopNativeSession({
+            spectator: !!opts.spectator,
+          });
         },
       });
       return;
@@ -36570,6 +38307,11 @@ window.RemixMod.runCodeAfter = function () {
     opts = opts || {};
     this._coopSessionActive = true;
     this._coopLastPoseFp = null;
+    this._coopColorsSent = false;
+    this._coopSeatedPublish = false;
+    this._coopTimerArmed = false;
+    this._coopTimerStartedAtMs = null;
+    this._coopPlayerMoved = false;
     if (typeof window !== "undefined") {
       window.__mpCoopSpectator = !!opts.spectator;
       if (opts.spectator) {
@@ -36582,17 +38324,43 @@ window.RemixMod.runCodeAfter = function () {
       this.coopNative.sessionActive = true;
       this.coopNative.myClientId = this.client && this.client.clientId;
       this.coopNative.injectEnabled = true;
+      if (this.coopNative.beginSeedSticky) this.coopNative.beginSeedSticky(1500);
       this.coopNative.syncBridge();
     }
-    // Native run clock starts with Play for every co-op client
-    if (Gsm.startCoopRunTimer) Gsm.startCoopRunTimer();
+    // Native run clock starts when any player first moves (see armCoopRunTimer)
+    if (opts.spectator && Gsm.installSpectatorTimeKeeperGuard) {
+      Gsm.installSpectatorTimeKeeperGuard();
+    } else if (Gsm.installSpectatorTimeKeeperGuard) {
+      Gsm.installSpectatorTimeKeeperGuard();
+    }
 
     const self = this;
     this._coopSpawnApplied = false;
-    // Pose publish on engine tick (fingerprint skip) — no 100ms heavy scrape
+    this._coopSpawnOy = null;
+    // Pose publish on engine tick only after seated (or spectator)
     if (typeof window !== "undefined") {
+      window.__mpCoopFlushPendingDeltas = function () {
+        const pending = self._pendingCoopSnakeDeltas;
+        if (!pending || !self.coopNative) return;
+        self._pendingCoopSnakeDeltas = Object.create(null);
+        const ids = Object.keys(pending);
+        for (let i = 0; i < ids.length; i++) {
+          try {
+            self.coopNative.applySnakeDelta(pending[ids[i]]);
+          } catch (e) {
+            console.warn("__mpCoopFlushPendingDeltas", e);
+          }
+        }
+      };
       window.__mpCoopAfterTick = function () {
-        if (!opts.spectator) self.publishCoopState();
+        if (opts.spectator) return;
+        if (!self._coopSeatedPublish && !self._coopSpawnApplied) {
+          // Still re-asserting spawn — don't flood center poses
+          self._reassertCoopSpawnIfNeeded();
+          return;
+        }
+        self._reassertCoopSpawnIfNeeded();
+        self.publishCoopState();
       };
       window.__mpCoopOnFriendlyDeath = function (bodySnap) {
         if (!bodySnap || !bodySnap.length) return;
@@ -36609,25 +38377,89 @@ window.RemixMod.runCodeAfter = function () {
         }
       };
     }
-    // Seat once when GameInstance is live — do not sticky-teleport (that auto-moved snakes)
+    // Seat when run is live; re-assert until body matches oy (native may clobber)
     let tries = 0;
-    function trySpawnOnce() {
-      if (self._coopSpawnApplied) return;
-      const g = Gsm.gameInstance && Gsm.gameInstance();
-      if (g && g.oa) {
-        self.applyCoopSpawnOrPark(opts.spectator);
-        // Seed every player at their slot so remotes are visible immediately
-        // (before the first SNAKE_DELTA round-trip).
+    function trySpawnLoop() {
+      if (opts.spectator) {
+        self.applyCoopSpawnOrPark(true);
         self.seedCoopRemotesFromSlots();
-        if (!opts.spectator) {
-          self.publishCoopState();
+        return;
+      }
+      const live = Gsm.isNativeRunLive ? Gsm.isNativeRunLive() : false;
+      const g = Gsm.gameInstance && Gsm.gameInstance();
+      if (live && g && g.oa) {
+        self.applyCoopSpawnOrPark(false);
+        self.seedCoopRemotesFromSlots();
+        if (self._bodyMatchesSpawnOy()) {
+          self._coopSpawnApplied = true;
+          self._coopSeatedPublish = true;
+          self.publishCoopState({ forceColors: true });
+          return;
         }
-        if (self._coopSpawnApplied || opts.spectator) return;
       }
       tries++;
-      if (tries < 25) setTimeout(trySpawnOnce, 40);
+      if (tries < 40) setTimeout(trySpawnLoop, 40);
+      else {
+        // Give up waiting — publish whatever we have so peers see something
+        self._coopSeatedPublish = true;
+        self.seedCoopRemotesFromSlots();
+        if (!opts.spectator) self.publishCoopState({ forceColors: true });
+      }
     }
-    setTimeout(trySpawnOnce, 20);
+    setTimeout(trySpawnLoop, 20);
+  };
+
+  MultiplayerApp.prototype._myCoopSpawnOy = function () {
+    if (this._coopSpawnOy != null) return this._coopSpawnOy;
+    const myId = this.client && this.client.clientId;
+    const slots = this._coopSlots || [];
+    for (let i = 0; i < slots.length; i++) {
+      if (slots[i] && slots[i].clientId === myId) {
+        this._coopSpawnOy = slots[i].oy != null ? Number(slots[i].oy) : 0;
+        return this._coopSpawnOy;
+      }
+    }
+    this._coopSpawnOy = 0;
+    return 0;
+  };
+
+  MultiplayerApp.prototype._bodyMatchesSpawnOy = function () {
+    const g = Gsm.gameInstance && Gsm.gameInstance();
+    const body = g && g.oa && g.oa.ka;
+    if (!body || !body.length) return false;
+    // Player already moved — stop reasserting
+    const dir = g.oa.direction || g.oa.dir;
+    if (dir && this._coopPlayerMoved) return true;
+    const expected = this._coopSpawnBody(this._myCoopSpawnOy());
+    const head = body[0];
+    return (
+      head &&
+      expected[0] &&
+      Number(head.x) === expected[0].x &&
+      Number(head.y) === expected[0].y
+    );
+  };
+
+  MultiplayerApp.prototype._reassertCoopSpawnIfNeeded = function () {
+    if (this._coopSpawnApplied) return;
+    if (typeof window !== "undefined" && window.__mpCoopSpectator) return;
+    const g = Gsm.gameInstance && Gsm.gameInstance();
+    if (!g || !g.oa) return;
+    const dir = g.oa.direction || g.oa.dir;
+    if (dir) {
+      // Native assigned a facing → player/input engaged; lock seat
+      this._coopPlayerMoved = true;
+      this._coopSpawnApplied = true;
+      this._coopSeatedPublish = true;
+      return;
+    }
+    if (!this._bodyMatchesSpawnOy()) {
+      const oy = this._myCoopSpawnOy();
+      if (Gsm.applyCoopSpawnOffset) Gsm.applyCoopSpawnOffset(oy);
+    } else {
+      this._coopSpawnApplied = true;
+      this._coopSeatedPublish = true;
+    }
   };
 
   /**
@@ -36734,62 +38566,39 @@ window.RemixMod.runCodeAfter = function () {
       }
       if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
       this._coopSpawnApplied = true;
+      this._coopSeatedPublish = true;
       return;
     }
-    if (this._coopSpawnApplied) return;
-    const myId = this.client && this.client.clientId;
-    const slots = this._coopSlots || [];
-    let oy = 0;
-    let found = false;
-    for (let i = 0; i < slots.length; i++) {
-      if (slots[i] && slots[i].clientId === myId) {
-        oy = slots[i].oy != null ? slots[i].oy : 0;
-        found = true;
-        break;
-      }
-    }
-    // Fallback to promote-order index if slots missing
-    if (!found && this.client && this.client.roster) {
-      const players = (this.client.roster.clients || [])
-        .filter(function (c) {
-          return c.role === "player";
-        })
-        .slice()
-        .sort(function (a, b) {
-          const ao = a.promoteOrder != null ? a.promoteOrder : 1e15;
-          const bo = b.promoteOrder != null ? b.promoteOrder : 1e15;
-          return ao - bo;
-        });
-      const idx = players.findIndex(function (c) {
-        return c.clientId === myId;
-      });
-      const Session = root.MultiplayerSession;
-      const OFFSETS =
-        Session && Session.coopSpawnOffsets
-          ? Session.coopSpawnOffsets(players.length)
-          : [0];
-      if (idx >= 0) oy = OFFSETS[idx] != null ? OFFSETS[idx] : 0;
-    }
-    if (Gsm.applyCoopSpawnOffset && Gsm.applyCoopSpawnOffset(oy)) {
-      this._coopSpawnApplied = true;
-    }
+    const oy = this._myCoopSpawnOy();
+    if (Gsm.applyCoopSpawnOffset) Gsm.applyCoopSpawnOffset(oy);
+    // Do not lock _coopSpawnApplied yet — beginCoopNativeSession reasserts until match
   };
 
   MultiplayerApp.prototype.endCoopNativeSession = function () {
     this._coopSessionActive = false;
     this._coopDeadSent = false;
     this._coopSpawnApplied = false;
+    this._coopSeatedPublish = false;
     this._coopSlots = [];
     this._coopLastPoseFp = null;
+    this._coopColorsSent = false;
+    this._coopSpawnOy = null;
+    this._coopPlayerMoved = false;
+    this._coopTimerStartedAtMs = null;
+    this._coopTimerArmed = false;
     if (typeof window !== "undefined") {
       window.__mpCoopLocalDead = false;
       window.__mpCoopInject = false;
       window.__mpCoopSession = false;
       window.__mpCoopSpectator = false;
       window.__mpCoopAfterTick = null;
+      window.__mpCoopFlushPendingDeltas = null;
       window.__mpCoopOnFriendlyDeath = null;
+      window.__mpCoopPlayerRenderer = null;
+      window.__mpCoopRenderArgs = null;
       if (window.__mpCoopStopCorpsePaint) window.__mpCoopStopCorpsePaint();
     }
+    this._pendingCoopSnakeDeltas = null;
     this.stopCoopNativeLoop();
     if (this._coopSyncTimer) {
       clearInterval(this._coopSyncTimer);
@@ -36807,16 +38616,21 @@ window.RemixMod.runCodeAfter = function () {
     }
   };
 
-  MultiplayerApp.prototype.publishCoopState = function () {
+  MultiplayerApp.prototype.publishCoopState = function (opts) {
+    opts = opts || {};
     if (!this.client || !this.client.connected) return;
     if (!this._coopSessionActive) return;
+    if (!this.client.roster || !this.client.roster.sessionActive) return;
     if (!this.client.roster || this.client.roster.mode !== "coop") return;
     const me = this.client.me();
     if (!me || me.role !== "player") return;
 
+    const needColors = opts.forceColors || !this._coopColorsSent;
     const scrape =
       Gsm.scrapeCoopSnakeDelta || Gsm.scrapeSnakeDelta;
-    const delta = scrape ? scrape.call(Gsm, me.colorId) : null;
+    const delta = scrape
+      ? scrape.call(Gsm, me.colorId, { includeColors: needColors })
+      : null;
     if (!delta) return;
 
     delta.clientId = this.client.clientId;
@@ -36825,18 +38639,28 @@ window.RemixMod.runCodeAfter = function () {
       delta.alive = false;
       delta.body = this._coopLastBody;
     }
-    // Prefer claimed roster color over scraped menu if set
-    if (me.colorId != null) delta.colorId = me.colorId;
+    if (me.colorId != null && needColors) delta.colorId = me.colorId;
 
     const fp = Gsm.snakeDeltaFingerprint
       ? Gsm.snakeDeltaFingerprint(delta)
       : null;
-    if (fp && fp === this._coopLastPoseFp && !this._coopDeadSent) {
+    if (fp && fp === this._coopLastPoseFp && !this._coopDeadSent && !needColors) {
       return;
     }
     this._coopLastPoseFp = fp;
+    if (needColors && (delta.Sc || delta.colorId != null)) {
+      this._coopColorsSent = true;
+    }
 
-    if (this.coopNative) this.coopNative.applySnakeDelta(delta);
+    // First real move after seat → arm shared timer for everyone
+    if (!this._coopTimerArmed && this._coopLocalHasMoved(delta)) {
+      const t = Date.now();
+      this.armCoopRunTimer(t);
+      delta.timerArm = true;
+      delta.timerStartedAtMs = t;
+    }
+
+    // Do not apply self into remotes — paint skips myId; saves O(n) followBody/GC
     this.client.snakeDelta(delta);
     if (delta.alive === false && !this._coopDeadSent) {
       this._coopDeadSent = true;
@@ -36846,10 +38670,46 @@ window.RemixMod.runCodeAfter = function () {
     }
   };
 
+  /** Head left spawn (or seat already marked moved) → player is playing. */
+  MultiplayerApp.prototype._coopLocalHasMoved = function (delta) {
+    if (this._coopPlayerMoved) return true;
+    const body = delta && delta.body;
+    const head = body && body[0];
+    if (!head) return false;
+    const expected = this._coopSpawnBody(this._myCoopSpawnOy());
+    if (!expected || !expected[0]) return false;
+    return (
+      Number(head.x) !== Number(expected[0].x) ||
+      Number(head.y) !== Number(expected[0].y)
+    );
+  };
+
+  /** Idempotent: start native TimeKeeper from shared wall-clock epoch. */
+  MultiplayerApp.prototype.armCoopRunTimer = function (startedAtMs) {
+    if (this._coopTimerArmed) return;
+    if (typeof window !== "undefined" && window.__mpCoopSpectator) return;
+    const me = this.client && this.client.me && this.client.me();
+    if (me && me.role === "spectator") return;
+    const t =
+      startedAtMs != null && Number.isFinite(Number(startedAtMs))
+        ? Number(startedAtMs)
+        : Date.now();
+    this._coopTimerArmed = true;
+    this._coopTimerStartedAtMs = t;
+    if (Gsm.startCoopRunTimer) {
+      Gsm.startCoopRunTimer({
+        timerStartedAtMs: t,
+        maxAttempts: 40,
+        intervalMs: 50,
+      });
+    }
+  };
+
   /** Eater publishes full native fruit board after collect (shared spawn rules). */
   MultiplayerApp.prototype.publishCoopCollectables = function () {
     if (!this.client || !this.client.connected) return;
     if (!this._coopSessionActive) return;
+    if (!this.client.roster || !this.client.roster.sessionActive) return;
     if (!this.client.roster || this.client.roster.mode !== "coop") return;
     const me = this.client.me();
     if (!me || me.role !== "player") return;
@@ -36912,12 +38772,15 @@ window.RemixMod.runCodeAfter = function () {
         }
       },
       onDeath: function (timeMs, score) {
-        // Versus Focus puppet: keep watching; re-hide death; no PB from spectate
+        // Versus Focus puppet: ignore local false deaths; only mirror remote death
         if (
           typeof window !== "undefined" &&
           window.__mpVersusFocusSpectate
         ) {
-          if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
+          const fb = window.__mpVersusFocusBoard;
+          if (!fb || fb.alive !== false) {
+            if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
+          }
           return;
         }
         // Co-op spectator: never treat as a real player death
@@ -37122,6 +38985,7 @@ window.RemixMod.runCodeAfter = function () {
       const me = self.client.me();
       if (!me || me.role !== "player") return;
       if (!self.client.roster || self.client.roster.mode !== "versus") return;
+      if (!self.client.roster.sessionActive) return;
       const specs = (self.client.roster.clients || []).filter(function (c) {
         return c.role === "spectator";
       });
@@ -37130,7 +38994,7 @@ window.RemixMod.runCodeAfter = function () {
         colorId: me.colorId != null ? me.colorId : undefined,
       });
       if (board) self.client.boardDelta(board);
-    }, 150);
+    }, 80);
   };
 
   MultiplayerApp.prototype.hookCoopInput = function () {
@@ -37225,7 +39089,10 @@ window.RemixMod.runCodeAfter = function () {
             if (Gsm.restoreDeathScreen) Gsm.restoreDeathScreen();
             if (Gsm.unlockPersonalMenus) Gsm.unlockPersonalMenus();
             if (Gsm.showDeathScreen) {
-              Gsm.showDeathScreen({ skipEscapeDispatch: true });
+              Gsm.showDeathScreen({
+                skipEscapeDispatch: true,
+                keepRunning: true,
+              });
             }
           }
           return;
@@ -37259,7 +39126,7 @@ window.RemixMod.runCodeAfter = function () {
     if (Gsm.showDeathScreen) {
       Gsm.showDeathScreen({ skipEscapeDispatch: true });
     } else {
-      root.pauseGame = false;
+      root.pauseGame = 1;
     }
     this.applyControlLocks();
   };
@@ -37577,6 +39444,12 @@ window.RemixMod.runCodeAfter = function () {
         unlockSpeedInfoForMultiplayer();
         setTimeout(unlockSpeedInfoForMultiplayer, 0);
         setTimeout(unlockSpeedInfoForMultiplayer, 400);
+        if (Gsm.installModeLabelPatch) {
+          Gsm.installModeLabelPatch();
+          setTimeout(function () {
+            if (Gsm.installModeLabelPatch) Gsm.installModeLabelPatch();
+          }, 500);
+        }
         app.ui.mountSettingsTab();
         ensureSpeedInfoSettingsButton(app);
         setTimeout(function () {
@@ -37593,6 +39466,14 @@ window.RemixMod.runCodeAfter = function () {
         app.hookAdminSettingsWatch();
         app.hookSpectatorInputBlock();
         app.hookInGameColorPicker();
+        if (Gsm.installFirstRunControlTipGuard) {
+          Gsm.installFirstRunControlTipGuard();
+          setTimeout(function () {
+            if (Gsm.installFirstRunControlTipGuard) {
+              Gsm.installFirstRunControlTipGuard();
+            }
+          }, 400);
+        }
         if (root.MultiplayerVisibilityFix) {
           root.MultiplayerVisibilityFix.fix();
           setTimeout(function () {
@@ -37611,7 +39492,17 @@ window.RemixMod.runCodeAfter = function () {
             app.ui.mountSettingsTab();
             unlockSpeedInfoForMultiplayer();
             ensureSpeedInfoSettingsButton(app);
-            if (root.MultiplayerVisibilityFix) root.MultiplayerVisibilityFix.install();
+            if (
+              root.MultiplayerVisibilityFix &&
+              typeof root.MultiplayerVisibilityFix.install === "function"
+            ) {
+              root.MultiplayerVisibilityFix.install();
+            } else if (
+              root.MultiplayerVisibilityFix &&
+              typeof root.MultiplayerVisibilityFix.fix === "function"
+            ) {
+              root.MultiplayerVisibilityFix.fix();
+            }
             return r;
           };
           root.__mpOrganizeHooked = true;

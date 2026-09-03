@@ -228,9 +228,11 @@
 .mp-hud h4{margin:0 0 6px;font-size:13px}
 .mp-color-icon{width:28px;height:28px;border-radius:6px;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.3)}
 #mp-mosaic{
-  position:fixed;left:8px;bottom:8px;z-index:9996;display:none;
-  gap:8px;padding:8px;background:rgba(0,0,0,.45);border-radius:8px;
-  max-width:min(96vw,920px);max-height:42vh;overflow:auto;
+  position:fixed;left:50%;top:12px;transform:translateX(-50%);
+  z-index:9996;display:none;
+  gap:10px;padding:10px;background:rgba(0,0,0,.45);border-radius:10px;
+  max-width:min(96vw,1100px);max-height:58vh;overflow:auto;
+  box-sizing:border-box;
 }
 #mp-mosaic .mp-mosaic-cell{
   position:relative;cursor:pointer;
@@ -586,11 +588,6 @@
     endBtn.style.display = "none";
     adminBox.appendChild(endBtn);
 
-    const passAdminSel = el("select");
-    passAdminSel.id = "mp-pass-admin";
-    const passAdminBtn = themedBtn("Pass admin");
-    adminBox.appendChild(field("Pass admin to", passAdminSel));
-    adminBox.appendChild(passAdminBtn);
     panelMatch.appendChild(adminBox);
 
     const playerBox = el("div", "mp-player-only hidden");
@@ -783,10 +780,6 @@
       if (self.app.abortMatchAsAdmin) self.app.abortMatchAsAdmin("ui");
       else if (self.app.client.sessionEnd) self.app.client.sessionEnd("aborted");
     };
-    passAdminBtn.onclick = function () {
-      const id = passAdminSel.value;
-      if (id && self.app.client) self.app.client.transferAdmin(id);
-    };
     readyBtn.onclick = function () {
       if (!self.app.client || !self.app.client.connected) return;
       const me = self.app.client.me();
@@ -829,6 +822,10 @@
         if (!self.app.client.isAdmin()) return;
         if (act === "kick") {
           self.app.client.kick(id);
+          return;
+        }
+        if (act === "admin") {
+          if (self.app.client.transferAdmin) self.app.client.transferAdmin(id);
           return;
         }
         if (act !== "role") return;
@@ -1082,19 +1079,6 @@
         : "Not connected";
 
       const myId = self.app.client && self.app.client.clientId;
-      const nextPassVal = passAdminSel.value;
-      passAdminSel.innerHTML = "";
-      clients.forEach(function (c) {
-        if (c.clientId === myId) return;
-        const o = el(
-          "option",
-          null,
-          (c.resolvedName || c.clientId.slice(0, 8)) + " (" + c.role + ")"
-        );
-        o.value = c.clientId;
-        passAdminSel.appendChild(o);
-      });
-      if (nextPassVal) passAdminSel.value = nextPassVal;
 
       const focusId =
         (self.app.versus && self.app.versus.focusClientId) || null;
@@ -1217,6 +1201,13 @@
           kick.setAttribute("data-mp-id", c.clientId);
           actions.appendChild(promo);
           actions.appendChild(kick);
+          if (c.clientId !== myId) {
+            const pass = themedBtn("Pass admin", "mp-mini");
+            pass.setAttribute("data-mp-act", "admin");
+            pass.setAttribute("data-mp-id", c.clientId);
+            pass.title = "Make this player the room admin";
+            actions.appendChild(pass);
+          }
           hasActions = true;
         }
         if (hasActions) row.appendChild(actions);

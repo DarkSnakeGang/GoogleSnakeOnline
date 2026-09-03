@@ -194,11 +194,93 @@ describe("ws integration", { timeout: 60000 }, () => {
     assert.ok(Array.isArray(start.payload.slots), "slots on SESSION_START");
     assert.equal(start.payload.slots.length, 1);
     assert.equal(start.payload.slots[0].oy, 0);
+    assert.equal(
+      start.payload.timerStartedAtMs,
+      undefined,
+      "timer arms on first move, not SESSION_START"
+    );
     assert.equal(start.payload.settings.trophy, 2);
     assert.equal(start.payload.settings.count, 1);
     const play = await waitMsg(a.inbox, "PLAY_SYNC");
     assert.ok(play);
     a.ws.close();
+  });
+
+  it("coop arms shared timer on first SNAKE_DELTA timerArm", async () => {
+    const a = await wsClient();
+    send(a.ws, "HELLO", { create: true, displayName: "Host" });
+    const aWelcome = await waitMsg(a.inbox, "WELCOME");
+    const aId = aWelcome.payload.clientId;
+    const room = aWelcome.payload.roomCode;
+    const b = await wsClient();
+    send(b.ws, "HELLO", { create: false, roomCode: room, displayName: "Guest" });
+    const bId = (await waitMsg(b.inbox, "WELCOME")).payload.clientId;
+    send(a.ws, "MODE_CHANGE", { mode: "coop" });
+    await waitMsg(a.inbox, "MODE_CHANGE");
+    send(a.ws, "SET_ROLE", { clientId: aId, role: "player" });
+    send(a.ws, "SET_ROLE", { clientId: bId, role: "player" });
+    await waitRosterWhere(
+      a.inbox,
+      (r) => r.clients.filter((c) => c.role === "player").length === 2
+    );
+    send(a.ws, "READY", { ready: true });
+    send(b.ws, "READY", { ready: true });
+    await waitRosterWhere(a.inbox, (r) => r.allPlayersReady === true);
+    a.inbox.length = 0;
+    b.inbox.length = 0;
+    send(a.ws, "SESSION_START", { settings: {} });
+    await waitMsg(a.inbox, "SESSION_START");
+    await waitMsg(b.inbox, "SESSION_START");
+    const epoch = Date.now();
+    send(a.ws, "SNAKE_DELTA", {
+      body: [{ x: 9, y: 7 }, { x: 8, y: 7 }, { x: 7, y: 7 }],
+      alive: true,
+      timerArm: true,
+      timerStartedAtMs: epoch,
+    });
+    const timerA = await waitMsg(a.inbox, "COOP_TIMER_START");
+    const timerB = await waitMsg(b.inbox, "COOP_TIMER_START");
+    assert.equal(timerA.payload.timerStartedAtMs, epoch);
+    assert.equal(timerB.payload.timerStartedAtMs, epoch);
+    a.ws.close();
+    b.ws.close();
+  });
+
+  it("coop auto-assigns distinct colors on promote and rejects taken claims", async () => {
+    const a = await wsClient();
+    send(a.ws, "HELLO", { create: true, displayName: "Host" });
+    const aWelcome = await waitMsg(a.inbox, "WELCOME");
+    const aId = aWelcome.payload.clientId;
+    const room = aWelcome.payload.roomCode;
+    const b = await wsClient();
+    send(b.ws, "HELLO", { create: false, roomCode: room, displayName: "Guest" });
+    const bId = (await waitMsg(b.inbox, "WELCOME")).payload.clientId;
+    send(a.ws, "MODE_CHANGE", { mode: "coop" });
+    await waitMsg(a.inbox, "MODE_CHANGE");
+    send(a.ws, "SET_ROLE", { clientId: aId, role: "player" });
+    send(a.ws, "SET_ROLE", { clientId: bId, role: "player" });
+    const roster = await waitRosterWhere(
+      a.inbox,
+      (r) => {
+        const players = r.clients.filter((c) => c.role === "player");
+        return (
+          players.length === 2 &&
+          players.every((p) => p.colorId != null) &&
+          players[0].colorId !== players[1].colorId
+        );
+      }
+    );
+    const colors = roster.clients
+      .filter((c) => c.role === "player")
+      .map((c) => c.colorId);
+    assert.equal(new Set(colors).size, 2, "players must have distinct colors");
+    const aColor = roster.clients.find((c) => c.clientId === aId).colorId;
+    a.inbox.length = 0;
+    send(b.ws, "COLOR_CLAIM", { colorId: aColor });
+    const err = await waitMsg(b.inbox, "ERROR");
+    assert.equal(err.payload.code, "color_taken");
+    a.ws.close();
+    b.ws.close();
   });
 
   it("coop enforces player cap of 4", async () => {
@@ -580,9 +662,94 @@ describe("ws integration", { timeout: 60000 }, () => {
     assert.equal(fruit.payload.clientId, bId);
     assert.equal(fruit.payload.apples.length, 2);
 
+    // End match then late pose — server must not ERROR(not_coop_session)
+    send(a.ws, "SESSION_END", { reason: "ALL_DEAD" });
+    await waitMsg(a.inbox, "SESSION_END");
+    a.inbox.length = 0;
+    b.inbox.length = 0;
+    send(a.ws, "SNAKE_DELTA", {
+      body: [{ x: 2, y: 2 }],
+      alive: false,
+    });
+    send(b.ws, "COLLECTABLES_DELTA", { apples: [{ x: 1, y: 1 }] });
+    await new Promise(function (r) {
+      setTimeout(r, 120);
+    });
+    const lateErrs = a.inbox
+      .concat(b.inbox)
+      .filter(function (m) {
+        return (
+          m.type === "ERROR" &&
+          m.payload &&
+          (m.payload.code === "not_coop_session" ||
+            m.payload.message === "not_coop_session")
+        );
+      });
+    assert.equal(lateErrs.length, 0, "late co-op packets must be silent");
+
     a.ws.close();
     b.ws.close();
     c.ws.close();
+    spec.ws.close();
+  });
+
+  it("versus: non-admin spectator receives admin BOARD_DELTA", async () => {
+    const admin = await wsClient();
+    send(admin.ws, "HELLO", { create: true, displayName: "Admin" });
+    const welcome = await waitMsg(admin.inbox, "WELCOME");
+    const adminId = welcome.payload.clientId;
+    const room = welcome.payload.roomCode;
+
+    const spec = await wsClient();
+    send(spec.ws, "HELLO", {
+      create: false,
+      roomCode: room,
+      displayName: "Spec",
+    });
+    await waitMsg(spec.inbox, "WELCOME");
+
+    send(admin.ws, "MODE_CHANGE", { mode: "versus" });
+    await waitMsg(admin.inbox, "MODE_CHANGE");
+    send(admin.ws, "SET_ROLE", { clientId: adminId, role: "player" });
+    await waitRosterWhere(admin.inbox, (r) =>
+      r.clients.some((c) => c.clientId === adminId && c.role === "player")
+    );
+    send(admin.ws, "READY", { ready: true });
+    await waitRosterWhere(admin.inbox, (r) => r.allPlayersReady === true);
+
+    admin.inbox.length = 0;
+    spec.inbox.length = 0;
+    send(admin.ws, "SESSION_START", {});
+    await waitMsg(admin.inbox, "SESSION_START");
+    await waitMsg(spec.inbox, "SESSION_START");
+
+    send(spec.ws, "SPECTATE_FOCUS", { clientId: adminId });
+    await waitMsg(spec.inbox, "SPECTATE_FOCUS");
+
+    spec.inbox.length = 0;
+    send(admin.ws, "BOARD_DELTA", {
+      body: [
+        { x: 7, y: 7 },
+        { x: 6, y: 7 },
+        { x: 5, y: 7 },
+      ],
+      apples: [{ x: 2, y: 2 }],
+      dir: "RIGHT",
+      score: 3,
+      alive: true,
+      sizeIndex: 0,
+      countIndex: 1,
+    });
+    const delta = await waitMsg(spec.inbox, "BOARD_DELTA", 5000);
+    assert.equal(delta.payload.clientId, adminId);
+    assert.ok(delta.payload.board);
+    assert.equal(delta.payload.board.body[0].x, 7);
+    assert.equal(delta.payload.board.apples.length, 1);
+    // Admin (player) must not receive their own BOARD_DELTA relay
+    const adminGot = admin.inbox.filter((m) => m.type === "BOARD_DELTA");
+    assert.equal(adminGot.length, 0);
+
+    admin.ws.close();
     spec.ws.close();
   });
 });

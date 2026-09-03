@@ -352,6 +352,10 @@
       self.ui.updateHud(self);
       self.applyControlLocks();
       self.updateStatusIndicator();
+      // Mode load: dismiss first-run arrow/hand tip as if already played once
+      if (Gsm.installFirstRunControlTipGuard) {
+        Gsm.installFirstRunControlTipGuard();
+      }
       // Admin: push current trophy/count/speed/size so co-op/versus peers match
       if (self.client && self.client.isAdmin()) {
         setTimeout(function () {
@@ -397,6 +401,32 @@
     });
     this.client.on(P.TYPES.SNAKE_DELTA, function (p) {
       if (!self.coopNative) return;
+      // Ignore self-echo — local already applied at publishCoopState
+      if (
+        p &&
+        p.clientId &&
+        self.client &&
+        p.clientId === self.client.clientId
+      ) {
+        return;
+      }
+      if (!p || !p.clientId) return;
+      // Peer may arm the shared timer before pose coalesce
+      if (p.timerArm || p.timerStartedAtMs != null) {
+        self.armCoopRunTimer(p.timerStartedAtMs);
+      }
+      // During a live co-op session, coalesce latest pose per peer (apply on tick)
+      if (
+        self._coopSessionActive &&
+        typeof window !== "undefined" &&
+        typeof window.__mpCoopFlushPendingDeltas === "function"
+      ) {
+        if (!self._pendingCoopSnakeDeltas) {
+          self._pendingCoopSnakeDeltas = Object.create(null);
+        }
+        self._pendingCoopSnakeDeltas[p.clientId] = p;
+        return;
+      }
       self.coopNative.applySnakeDelta(p);
     });
     this.client.on(P.TYPES.COLLECTABLES_DELTA, function (p) {
@@ -427,6 +457,9 @@
         self.coopNative.syncBridge();
       }
     });
+    this.client.on(P.TYPES.COOP_TIMER_START, function (p) {
+      self.armCoopRunTimer(p && p.timerStartedAtMs);
+    });
     this.client.on(P.TYPES.SETTINGS_SYNC, function (settings) {
       self._log("SETTINGS_SYNC");
       if (self.client && self.client.roster && settings) {
@@ -451,7 +484,28 @@
       if (me.role === "player") {
         // Prefer ready, but if SESSION_START already flipped sessionActive, start anyway
         if (!me.ready && !roster.sessionActive) return;
-      } else if (!(isCoop && me.role === "spectator")) {
+      } else if (me.role === "spectator") {
+        if (isCoop) {
+          self.startMatchLocalPlay({
+            coop: true,
+            spectator: true,
+          });
+          return;
+        }
+        // Versus Focus: every spectator (admin + non-admin) seats native Play
+        // the same way. If Focus is already mounted from run 1, force a fresh
+        // seat so run 2 matches the working first-run path.
+        if (typeof window !== "undefined") {
+          window.__mpStartingMatch = true;
+        }
+        const focusAlreadyMounted = !!self._versusFocusSpectate;
+        self.ensureAutoFocus();
+        self.renderFocusBoard();
+        if (focusAlreadyMounted) {
+          self._reseatVersusFocusForNewRun("play_sync");
+        }
+        return;
+      } else {
         return;
       }
       if (isCoop) {
@@ -465,13 +519,15 @@
       }
     });
     this.client.on(P.TYPES.ERROR, function (p) {
+      // Late SNAKE_DELTA / COLLECTABLES after ALL_DEAD — expected, not a UI error
+      if (p && p.code === "not_coop_session") return;
       console.warn("Multiplayer ERROR", p);
       const st = document.getElementById("mp-status");
       if (st) st.textContent = "Error: " + (p.message || p.code);
       if (p && p.code === "player_cap") {
         if (st) {
           st.textContent =
-            "Player cap reached (Versus ≤10, Co-op ≤4) — promote failed";
+            "Player cap reached (Versus ≤9, Co-op ≤4) — promote failed";
         }
       }
       if (p && (p.code === "color_taken" || p.code === "color_not_claimable")) {
@@ -531,6 +587,17 @@
     });
     this.client.on(P.TYPES.SESSION_END, function (p) {
       self._log("SESSION_END", p && p.reason);
+      // Stop co-op publishes immediately so late ticks don't hit not_coop_session
+      if (self.client && self.client.roster) {
+        self.client.roster.sessionActive = false;
+      }
+      self._coopSessionActive = false;
+      if (typeof window !== "undefined") {
+        window.__mpCoopAfterTick = null;
+        window.__mpCoopFlushPendingDeltas = null;
+        window.__mpCoopSession = false;
+        window.__mpCoopInject = false;
+      }
       self.versus.attemptRemainingMs = null;
       // Co-op: freeze native run clock for everyone (ALL_DEAD / ALL_APPLES)
       if (Gsm.stopCoopRunTimer) Gsm.stopCoopRunTimer();
@@ -551,7 +618,7 @@
       self.endCoopNativeSession();
       self.returnToMenus({ fromRemote: true });
       if (self.client && self.client.roster && self.ui.renderRoster) {
-        self.client.roster.sessionActive = false;
+        // sessionActive already cleared at handler start
         if (hasScores) self.client.roster.attemptExpired = true;
         self.ui.renderRoster(self.client.roster);
       }
@@ -598,6 +665,10 @@
         self.setCoopAuthorityMode(true);
         self._coopSlots = (p.slots || []).slice();
         self._coopSpawnApplied = false;
+        self._coopPlayerMoved = false;
+        self._coopTimerArmed = false;
+        // Timer arms on first move (COOP_TIMER_START), not at SESSION_START
+        self._coopTimerStartedAtMs = null;
         if (typeof window !== "undefined") {
           window.__mpCoopLocalDead = false;
         }
@@ -609,6 +680,7 @@
             p.collectablesOwnerId ||
             (self.client.roster && self.client.roster.collectablesOwnerId) ||
             null;
+          if (self.coopNative.beginSeedSticky) self.coopNative.beginSeedSticky(1500);
           self.coopNative.syncBridge();
         }
         self._coopDeadSent = false;
@@ -643,6 +715,9 @@
       self.ensureFocusCanvas();
       self.applyControlLocks();
       self.updateStatusIndicator();
+      if (Gsm.installFirstRunControlTipGuard) {
+        Gsm.installFirstRunControlTipGuard();
+      }
     });
   };
 
@@ -808,7 +883,7 @@
     if (Gsm.applySnakeColor) Gsm.applySnakeColor(id);
   };
 
-  MultiplayerApp.prototype.onLocalColorPicked = function () {
+    MultiplayerApp.prototype.onLocalColorPicked = function () {
     if (root.__mpApplyingColor) return;
     if (!this.client || !this.client.connected) return;
     const me = this.client.me();
@@ -829,6 +904,26 @@
 
     // Same as already claimed — nothing to do
     if (me.colorId != null && Number(me.colorId) === colorId) return;
+
+    // Co-op: refuse colors already taken by another player
+    if (this.client.roster && this.client.roster.mode === "coop") {
+      const clients = (this.client.roster.clients || []);
+      const taken = clients.some(function (c) {
+        return (
+          c &&
+          c.role === "player" &&
+          c.clientId !== me.clientId &&
+          c.colorId != null &&
+          Number(c.colorId) === colorId
+        );
+      });
+      if (taken) {
+        this.revertLocalColor(me.colorId != null ? me.colorId : 0);
+        const st = document.getElementById("mp-status");
+        if (st) st.textContent = "That color is taken — pick another";
+        return;
+      }
+    }
 
     this._pendingColorId = colorId;
     this._colorBeforeClaim = me.colorId != null ? me.colorId : null;
@@ -890,22 +985,38 @@
   };
 
   MultiplayerApp.prototype._colorForClient = function (clientId) {
+    const board =
+      this.versus && this.versus.boards && this.versus.boards[clientId];
+
+    // Prefer live scraped engine colors from that player's BOARD_DELTA
+    if (board && (board.Sc || board.Yc || (board.colorSet && board.colorSet.length))) {
+      const info = {
+        primary: board.Sc || board.Yc || null,
+        secondary: board.Yc || board.Sc || null,
+        Sc: board.Sc || null,
+        Yc: board.Yc || null,
+      };
+      if (board.colorSet && board.colorSet.length) {
+        info.set = board.colorSet;
+      } else if (Colors && board.colorId != null) {
+        const c = Colors.getColor(board.colorId);
+        if (c && c.set && c.set.length) info.set = c.set;
+        if (!info.primary && c && c.primary) {
+          info.primary = c.primary;
+          info.secondary = c.secondary || c.primary;
+        }
+      }
+      if (info.primary || info.set) return info;
+    }
+
     if (!Colors) return null;
     let colorId = null;
-    if (this.client && this.client.roster) {
+    if (board && board.colorId != null) colorId = board.colorId;
+    if (colorId == null && this.client && this.client.roster) {
       const c = (this.client.roster.clients || []).find(function (x) {
         return x.clientId === clientId;
       });
       if (c && c.colorId != null) colorId = c.colorId;
-    }
-    if (
-      colorId == null &&
-      this.versus &&
-      this.versus.boards &&
-      this.versus.boards[clientId] &&
-      this.versus.boards[clientId].colorId != null
-    ) {
-      colorId = this.versus.boards[clientId].colorId;
     }
     if (colorId == null) return null;
     return Colors.getColor(colorId);
@@ -933,19 +1044,165 @@
     return c;
   };
 
+  /**
+   * Clear Focus seat leftovers so the next spectated life matches a clean first enter.
+   * Without this, a mounted Focus keeps Seated/NativeOk/RemoteStarted from run 1 and
+   * run 2 goes head-only / skips startNativeRun (esp. bad for non-admin Play gating).
+   */
+  MultiplayerApp.prototype._clearVersusFocusSeatFlags = function (opts) {
+    opts = opts || {};
+    if (typeof window === "undefined") return;
+    window.__mpFocusSeated = false;
+    window.__mpFocusForceFullBody = true;
+    window.__mpFocusSeatPoseFp = null;
+    window.__mpFocusRemoteStarted = false;
+    window.__mpFocusRemoteHead = null;
+    window.__mpFocusRemoteBody = null;
+    window.__mpFocusPoseFp = null;
+    window.__mpFocusNativeOk = false;
+    if (opts.requirePlay !== false) {
+      window.__mpFocusRequirePlay = true;
+    }
+  };
+
+  /**
+   * Versus Focus: keep local death UI / engine seat matched to remote board.alive.
+   * false→true means the focused player reset — re-seat Play so we are not stuck dead.
+   */
+  MultiplayerApp.prototype._syncVersusFocusAlive = function (board) {
+    if (!board || typeof window === "undefined") return;
+    const remoteAlive = board.alive !== false;
+    const prev = window.__mpVersusFocusRemoteAlive;
+    // Detect revive BEFORE flipping the flag so applySpectateState can full-seat
+    if (prev === false && remoteAlive) {
+      this._clearVersusFocusSeatFlags({ requirePlay: true });
+    }
+    window.__mpVersusFocusRemoteAlive = remoteAlive;
+    if (!remoteAlive) {
+      // Real remote death — drop first-run seat flags so the next life reseats cleanly
+      // even if a dead BOARD_DELTA frame is skipped (alive→alive after auto-restart).
+      this._clearVersusFocusSeatFlags({ requirePlay: true });
+      return;
+    }
+    if (
+      typeof window === "undefined" ||
+      !window.__mpSpectateAllowMenus
+    ) {
+      if (
+        !window.__mpFocusRequirePlay &&
+        (Gsm.dismissDeathOverlayForRun || Gsm.hideDeathScreen)
+      ) {
+        if (Gsm.dismissDeathOverlayForRun) Gsm.dismissDeathOverlayForRun();
+        else Gsm.hideDeathScreen();
+      }
+    }
+    // Player restarted after a death — local puppet often stays nj/dead until Play
+    if (prev === false && !this._versusFocusRevivePending) {
+      this._versusFocusRevivePending = true;
+      const self = this;
+      setTimeout(function () {
+        self._versusFocusRevivePending = false;
+        if (!self._versusFocusSpectate) return;
+        self._seatVersusFocusNative({ reason: "revive", force: true });
+      }, 0);
+    }
+  };
+
+  /**
+   * One native Play seat for every Focus spectator (admin + non-admin identical).
+   * force: retry even if a prior attempt claimed success.
+   */
+  MultiplayerApp.prototype._seatVersusFocusNative = function (opts) {
+    opts = opts || {};
+    if (!this._versusFocusSpectate) {
+      this._enterVersusFocusSpectate();
+    }
+    if (!this._versusFocusSpectate) return false;
+    if (this._versusFocusNativeRetrying && !opts.force) return false;
+    if (
+      !opts.force &&
+      typeof window !== "undefined" &&
+      window.__mpFocusNativeOk &&
+      Gsm.isNativeRunLive &&
+      Gsm.isNativeRunLive()
+    ) {
+      return true;
+    }
+    if (!Gsm.startNativeRun) return false;
+    this._versusFocusNativeRetrying = true;
+    if (typeof window !== "undefined") {
+      window.__mpFocusRequirePlay = true;
+      window.__mpFocusNativeOk = false;
+      window.__mpFocusSeated = false;
+      window.__mpFocusForceFullBody = true;
+    }
+    const self = this;
+    const attempt = (this._versusFocusSeatAttempts =
+      (this._versusFocusSeatAttempts || 0) + 1);
+    Gsm.startNativeRun({
+      maxAttempts: opts.maxAttempts != null ? opts.maxAttempts : 50,
+      intervalMs: opts.intervalMs != null ? opts.intervalMs : 40,
+      requirePlayClick: true,
+      deferTimer: true,
+      onDone: function (ok) {
+        self._versusFocusNativeRetrying = false;
+        if (typeof window !== "undefined") {
+          // Only clear the Play gate on success — failed seats must keep retrying
+          if (ok) {
+            window.__mpFocusRequirePlay = false;
+            window.__mpFocusNativeOk = true;
+            window.__mpFocusSeated = false;
+            window.__mpFocusForceFullBody = true;
+            self._versusFocusSeatAttempts = 0;
+          } else {
+            window.__mpFocusRequirePlay = true;
+            window.__mpFocusNativeOk = false;
+          }
+        }
+        const board = self.versus && self.versus.focusBoard();
+        if (board) self._paintVersusFocus(board);
+        if (
+          ok &&
+          (typeof window === "undefined" || !window.__mpSpectateAllowMenus) &&
+          Gsm.hideDeathScreen
+        ) {
+          Gsm.hideDeathScreen();
+        }
+        if (!ok && opts.retry !== false && attempt < 6) {
+          setTimeout(function () {
+            if (!self._versusFocusSpectate) return;
+            if (typeof window !== "undefined" && window.__mpFocusNativeOk) return;
+            self._seatVersusFocusNative({ reason: "retry", force: true });
+          }, 250);
+        }
+      },
+    });
+    return true;
+  };
+
   /** Push latest focus board into the live GameInstance each native tick. */
   MultiplayerApp.prototype._installVersusFocusTick = function () {
     const self = this;
     if (typeof window === "undefined") return;
     window.__mpVersusFocusOnTick = function () {
       if (!window.__mpVersusFocusSpectate) return;
-      const board = window.__mpVersusFocusBoard || (self.versus && self.versus.focusBoard());
+      const board =
+        (self.versus && self.versus.focusBoard()) ||
+        window.__mpVersusFocusBoard;
       if (!board || !Gsm.applySpectateState) return;
+      if (typeof window !== "undefined") window.__mpVersusFocusBoard = board;
+      self._syncVersusFocusAlive(board);
       const colorInfo = self._colorForClient(self.versus && self.versus.focusClientId);
-      // Native inject only — never fillRect over the real renderer
       Gsm.applySpectateState(null, board, colorInfo, { paint: false });
       if (Gsm.hideControlHelper) Gsm.hideControlHelper();
-      if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
+      if (
+        board.alive !== false &&
+        !window.__mpFocusRequirePlay &&
+        !window.__mpSpectateAllowMenus &&
+        Gsm.hideDeathScreen
+      ) {
+        Gsm.hideDeathScreen();
+      }
     };
   };
 
@@ -954,11 +1211,49 @@
     if (typeof window !== "undefined") {
       window.__mpVersusFocusBoard = board;
     }
+    this._syncVersusFocusAlive(board);
     const colorInfo = this._colorForClient(this.versus.focusClientId);
     if (!Gsm.applySpectateState) return false;
-    // Product path: native inject only (eyes + fruit sprites + board chrome)
-    const result = Gsm.applySpectateState(null, board, colorInfo, { paint: false });
-    return !!(result && result.ok);
+    const result = Gsm.applySpectateState(null, board, colorInfo, {
+      paint: false,
+    });
+    return !!(result && result.ok && result.injected);
+  };
+
+  /** Keep retrying Play until Focus has a live native GameInstance (all seats). */
+  MultiplayerApp.prototype._ensureVersusFocusNative = function () {
+    // Do not hammer Play while the focused player is dead — wait for revive/PLAY_SYNC
+    if (
+      typeof window !== "undefined" &&
+      window.__mpVersusFocusRemoteAlive === false
+    ) {
+      return;
+    }
+    this._seatVersusFocusNative({ reason: "ensure", force: false });
+  };
+
+  /**
+   * New versus run while Focus is already mounted (PLAY_SYNC / Start match).
+   * First enter seats once; without this, run 2 keeps stale NativeOk/Seated flags.
+   */
+  MultiplayerApp.prototype._reseatVersusFocusForNewRun = function (reason) {
+    if (!this._versusFocusSpectate) {
+      this._enterVersusFocusSpectate();
+      return !!this._versusFocusSpectate;
+    }
+    this._clearVersusFocusSeatFlags({ requirePlay: true });
+    this._versusFocusPlayStarted = true;
+    this._versusFocusRevivePending = false;
+    this._versusFocusNativeRetrying = false;
+    this._versusFocusSeatAttempts = 0;
+    if (typeof window !== "undefined") {
+      window.__mpVersusFocusRemoteAlive = undefined;
+      window.__mpSpectateMenuFp = null;
+    }
+    return this._seatVersusFocusNative({
+      reason: reason || "new_run",
+      force: true,
+    });
   };
 
   MultiplayerApp.prototype._enterVersusFocusSpectate = function () {
@@ -967,65 +1262,61 @@
     this._installVersusFocusTick();
     if (typeof window !== "undefined") {
       window.__mpVersusFocusSpectate = true;
-      // Fresh focus seat — menus hidden until Escape peek
       window.__mpSpectateAllowMenus = false;
+      window.__mpVersusFocusPaintFallback = false;
+      window.__mpSpectateMenuFp = null;
+      window.__mpVersusFocusRemoteAlive = undefined;
+      window.__mpFocusSeated = false;
+      window.__mpFocusSeatPoseFp = null;
+      window.__mpFocusRemoteStarted = false;
+      window.__mpFocusRemoteHead = null;
+      window.__mpFocusRemoteBody = null;
+      window.__mpFocusPoseFp = null;
+      window.__mpFocusRequirePlay = true;
+      window.__mpFocusNativeOk = false;
+      window.__mpFocusForceFullBody = true;
     }
-    // Live GameInstance — must NOT pause or native snake/fruit won't render
+    this._versusFocusRevivePending = false;
+    this._versusFocusNativeRetrying = false;
+    if (Gsm.installSpectatorTimeKeeperGuard) Gsm.installSpectatorTimeKeeperGuard();
     if (Gsm.setLocalPaused) Gsm.setLocalPaused(false);
-    if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
+    if (Gsm.clearDeathOverlayOverrides) Gsm.clearDeathOverlayOverrides();
     if (Gsm.hideControlHelper) Gsm.hideControlHelper();
     this.hideNativeBoard(false);
+    this.ensureAutoFocus();
     if (!this._versusFocusPlayStarted) {
       this._versusFocusPlayStarted = true;
-      try {
-        Gsm.triggerPlay();
-      } catch (e) { /* ignore */ }
-      if (Gsm.setLocalPaused) Gsm.setLocalPaused(false);
-      // Dismiss Google's first-move tip (our key blocker otherwise keeps it forever)
-      try {
-        if (typeof window !== "undefined") window.__mpAllowSpectateKeyDismiss = true;
-        document.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key: "ArrowRight",
-            code: "ArrowRight",
-            keyCode: 39,
-            which: 39,
-            bubbles: true,
-            cancelable: true,
-          })
-        );
-      } catch (e2) { /* ignore */ }
-      finally {
-        if (typeof window !== "undefined") window.__mpAllowSpectateKeyDismiss = false;
-      }
-      const self = this;
-      // Tip appears right after Play; hide repeatedly for a short window
-      let hides = 0;
-      function hideTip() {
-        if (Gsm.hideControlHelper) Gsm.hideControlHelper();
-        hides++;
-        if (hides < 20 && self._versusFocusSpectate) {
-          setTimeout(hideTip, 100);
-        }
-      }
-      setTimeout(hideTip, 0);
+      this._seatVersusFocusNative({ reason: "enter", force: true });
     }
     this.startVersusFocusLoop();
   };
 
   MultiplayerApp.prototype._leaveVersusFocusSpectate = function () {
     if (!this._versusFocusSpectate) {
-      // Still restore menus if a prior hide stuck after lobby gate
       if (Gsm.restoreDeathScreen) Gsm.restoreDeathScreen();
       if (Gsm.unlockPersonalMenus) Gsm.unlockPersonalMenus();
       return;
     }
     this._versusFocusSpectate = false;
     this._versusFocusPlayStarted = false;
+    this._versusFocusRevivePending = false;
+    this._versusFocusNativeRetrying = false;
     if (typeof window !== "undefined") {
       window.__mpVersusFocusSpectate = false;
       window.__mpVersusFocusBoard = null;
       window.__mpSpectateAllowMenus = false;
+      window.__mpVersusFocusPaintFallback = false;
+      window.__mpSpectateMenuFp = null;
+      window.__mpVersusFocusRemoteAlive = undefined;
+      window.__mpFocusRequirePlay = false;
+      window.__mpFocusNativeOk = false;
+      window.__mpFocusSeated = false;
+      window.__mpFocusSeatPoseFp = null;
+      window.__mpFocusRemoteStarted = false;
+      window.__mpFocusRemoteHead = null;
+      window.__mpFocusRemoteBody = null;
+      window.__mpFocusPoseFp = null;
+      window.__mpFocusForceFullBody = false;
     }
     this.stopVersusFocusLoop();
     if (Gsm.restoreControlHelper) Gsm.restoreControlHelper();
@@ -1037,19 +1328,23 @@
   MultiplayerApp.prototype.startVersusFocusLoop = function () {
     const self = this;
     if (this._versusFocusRaf) return;
+    let frames = 0;
     function frame() {
       self._versusFocusRaf = 0;
       if (!self._versusFocusSpectate) return;
+      frames++;
+      if (frames % 45 === 0) self._ensureVersusFocusNative();
       const board = self.versus && self.versus.focusBoard();
       if (board) {
         if (typeof window !== "undefined") window.__mpVersusFocusBoard = board;
         self._paintVersusFocus(board);
       }
       if (Gsm.hideControlHelper) Gsm.hideControlHelper();
-      // Do not re-hide death every frame — Escape peek must stick for cosmetics
       if (
-        typeof window === "undefined" ||
-        !window.__mpSpectateAllowMenus
+        board &&
+        board.alive !== false &&
+        (typeof window === "undefined" || !window.__mpSpectateAllowMenus) &&
+        (typeof window === "undefined" || !window.__mpFocusRequirePlay)
       ) {
         if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
       }
@@ -1096,7 +1391,12 @@
     if (board) {
       this._paintVersusFocus(board);
     }
-    if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
+    if (
+      typeof window === "undefined" ||
+      (!window.__mpFocusRequirePlay && !window.__mpSpectateAllowMenus)
+    ) {
+      if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
+    }
   };
 
   MultiplayerApp.prototype.ensureMosaic = function () {
@@ -1107,6 +1407,14 @@
     document.body.appendChild(el);
     this._mosaicEl = el;
     this._mosaicCells = {};
+    const self = this;
+    if (typeof window !== "undefined") {
+      window.__mpMosaicRepaint = function () {
+        if (self.versus && self.versus.spectateMode === "mosaic") {
+          self.renderMosaic();
+        }
+      };
+    }
     return el;
   };
 
@@ -1135,7 +1443,7 @@
     }
     const cols = Math.min(players.length, players.length <= 4 ? 2 : 3);
     el.style.display = "grid";
-    el.style.gridTemplateColumns = "repeat(" + cols + ", minmax(120px, 1fr))";
+    el.style.gridTemplateColumns = "repeat(" + cols + ", minmax(180px, 1fr))";
 
     // Mosaic chrome: prefer focused/selected player's border, else first board with theme
     let chromeBorder = null;
@@ -1164,8 +1472,9 @@
         const label = document.createElement("div");
         label.className = "mp-mosaic-label";
         const canvas = document.createElement("canvas");
-        canvas.width = 170;
-        canvas.height = 150;
+        // ~1.4× prior 170×150 — readable 3×3 without dominating the screen
+        canvas.width = 240;
+        canvas.height = 212;
         canvas.className = "mp-mosaic-canvas";
         // Name sits above the mini-board
         cell.appendChild(label);
@@ -1224,19 +1533,45 @@
   MultiplayerApp.prototype.startMatchLocalPlay = function (opts) {
     opts = opts || {};
     const self = this;
-    // Drop any leftover Focus/helper hides that trap the endscreen / top bar
-    if (Gsm.restoreControlHelper) Gsm.restoreControlHelper();
+    // Drop sticky death hides that trap the endscreen; tip guard stays active
     if (Gsm.clearDeathOverlayOverrides) Gsm.clearDeathOverlayOverrides();
+    if (Gsm.installFirstRunControlTipGuard) {
+      Gsm.installFirstRunControlTipGuard();
+    } else if (Gsm.hideControlHelper) {
+      Gsm.hideControlHelper();
+    }
     if (Gsm.startNativeRun) {
       Gsm.startNativeRun({
         maxAttempts: 50,
         intervalMs: 40,
-        onDone: function () {
-          if (opts.coop) {
-            self.beginCoopNativeSession({
-              spectator: !!opts.spectator,
-            });
+        onDone: function (ok) {
+          if (!opts.coop) return;
+          if (!ok) {
+            // Retry Play briefly rather than seating a dead GameInstance
+            setTimeout(function () {
+              Gsm.startNativeRun({
+                maxAttempts: 30,
+                intervalMs: 40,
+                onDone: function (ok2) {
+                  if (ok2) {
+                    self.beginCoopNativeSession({
+                      spectator: !!opts.spectator,
+                    });
+                    return;
+                  }
+                  // Last chance: seat anyway and let spawn reassert catch up
+                  console.debug("[Multiplayer] co-op Play cold-start; seating with reassert");
+                  self.beginCoopNativeSession({
+                    spectator: !!opts.spectator,
+                  });
+                },
+              });
+            }, 100);
+            return;
           }
+          self.beginCoopNativeSession({
+            spectator: !!opts.spectator,
+          });
         },
       });
       return;
@@ -1290,6 +1625,11 @@
     opts = opts || {};
     this._coopSessionActive = true;
     this._coopLastPoseFp = null;
+    this._coopColorsSent = false;
+    this._coopSeatedPublish = false;
+    this._coopTimerArmed = false;
+    this._coopTimerStartedAtMs = null;
+    this._coopPlayerMoved = false;
     if (typeof window !== "undefined") {
       window.__mpCoopSpectator = !!opts.spectator;
       if (opts.spectator) {
@@ -1302,17 +1642,43 @@
       this.coopNative.sessionActive = true;
       this.coopNative.myClientId = this.client && this.client.clientId;
       this.coopNative.injectEnabled = true;
+      if (this.coopNative.beginSeedSticky) this.coopNative.beginSeedSticky(1500);
       this.coopNative.syncBridge();
     }
-    // Native run clock starts with Play for every co-op client
-    if (Gsm.startCoopRunTimer) Gsm.startCoopRunTimer();
+    // Native run clock starts when any player first moves (see armCoopRunTimer)
+    if (opts.spectator && Gsm.installSpectatorTimeKeeperGuard) {
+      Gsm.installSpectatorTimeKeeperGuard();
+    } else if (Gsm.installSpectatorTimeKeeperGuard) {
+      Gsm.installSpectatorTimeKeeperGuard();
+    }
 
     const self = this;
     this._coopSpawnApplied = false;
-    // Pose publish on engine tick (fingerprint skip) — no 100ms heavy scrape
+    this._coopSpawnOy = null;
+    // Pose publish on engine tick only after seated (or spectator)
     if (typeof window !== "undefined") {
+      window.__mpCoopFlushPendingDeltas = function () {
+        const pending = self._pendingCoopSnakeDeltas;
+        if (!pending || !self.coopNative) return;
+        self._pendingCoopSnakeDeltas = Object.create(null);
+        const ids = Object.keys(pending);
+        for (let i = 0; i < ids.length; i++) {
+          try {
+            self.coopNative.applySnakeDelta(pending[ids[i]]);
+          } catch (e) {
+            console.warn("__mpCoopFlushPendingDeltas", e);
+          }
+        }
+      };
       window.__mpCoopAfterTick = function () {
-        if (!opts.spectator) self.publishCoopState();
+        if (opts.spectator) return;
+        if (!self._coopSeatedPublish && !self._coopSpawnApplied) {
+          // Still re-asserting spawn — don't flood center poses
+          self._reassertCoopSpawnIfNeeded();
+          return;
+        }
+        self._reassertCoopSpawnIfNeeded();
+        self.publishCoopState();
       };
       window.__mpCoopOnFriendlyDeath = function (bodySnap) {
         if (!bodySnap || !bodySnap.length) return;
@@ -1329,25 +1695,89 @@
         }
       };
     }
-    // Seat once when GameInstance is live — do not sticky-teleport (that auto-moved snakes)
+    // Seat when run is live; re-assert until body matches oy (native may clobber)
     let tries = 0;
-    function trySpawnOnce() {
-      if (self._coopSpawnApplied) return;
-      const g = Gsm.gameInstance && Gsm.gameInstance();
-      if (g && g.oa) {
-        self.applyCoopSpawnOrPark(opts.spectator);
-        // Seed every player at their slot so remotes are visible immediately
-        // (before the first SNAKE_DELTA round-trip).
+    function trySpawnLoop() {
+      if (opts.spectator) {
+        self.applyCoopSpawnOrPark(true);
         self.seedCoopRemotesFromSlots();
-        if (!opts.spectator) {
-          self.publishCoopState();
+        return;
+      }
+      const live = Gsm.isNativeRunLive ? Gsm.isNativeRunLive() : false;
+      const g = Gsm.gameInstance && Gsm.gameInstance();
+      if (live && g && g.oa) {
+        self.applyCoopSpawnOrPark(false);
+        self.seedCoopRemotesFromSlots();
+        if (self._bodyMatchesSpawnOy()) {
+          self._coopSpawnApplied = true;
+          self._coopSeatedPublish = true;
+          self.publishCoopState({ forceColors: true });
+          return;
         }
-        if (self._coopSpawnApplied || opts.spectator) return;
       }
       tries++;
-      if (tries < 25) setTimeout(trySpawnOnce, 40);
+      if (tries < 40) setTimeout(trySpawnLoop, 40);
+      else {
+        // Give up waiting — publish whatever we have so peers see something
+        self._coopSeatedPublish = true;
+        self.seedCoopRemotesFromSlots();
+        if (!opts.spectator) self.publishCoopState({ forceColors: true });
+      }
     }
-    setTimeout(trySpawnOnce, 20);
+    setTimeout(trySpawnLoop, 20);
+  };
+
+  MultiplayerApp.prototype._myCoopSpawnOy = function () {
+    if (this._coopSpawnOy != null) return this._coopSpawnOy;
+    const myId = this.client && this.client.clientId;
+    const slots = this._coopSlots || [];
+    for (let i = 0; i < slots.length; i++) {
+      if (slots[i] && slots[i].clientId === myId) {
+        this._coopSpawnOy = slots[i].oy != null ? Number(slots[i].oy) : 0;
+        return this._coopSpawnOy;
+      }
+    }
+    this._coopSpawnOy = 0;
+    return 0;
+  };
+
+  MultiplayerApp.prototype._bodyMatchesSpawnOy = function () {
+    const g = Gsm.gameInstance && Gsm.gameInstance();
+    const body = g && g.oa && g.oa.ka;
+    if (!body || !body.length) return false;
+    // Player already moved — stop reasserting
+    const dir = g.oa.direction || g.oa.dir;
+    if (dir && this._coopPlayerMoved) return true;
+    const expected = this._coopSpawnBody(this._myCoopSpawnOy());
+    const head = body[0];
+    return (
+      head &&
+      expected[0] &&
+      Number(head.x) === expected[0].x &&
+      Number(head.y) === expected[0].y
+    );
+  };
+
+  MultiplayerApp.prototype._reassertCoopSpawnIfNeeded = function () {
+    if (this._coopSpawnApplied) return;
+    if (typeof window !== "undefined" && window.__mpCoopSpectator) return;
+    const g = Gsm.gameInstance && Gsm.gameInstance();
+    if (!g || !g.oa) return;
+    const dir = g.oa.direction || g.oa.dir;
+    if (dir) {
+      // Native assigned a facing → player/input engaged; lock seat
+      this._coopPlayerMoved = true;
+      this._coopSpawnApplied = true;
+      this._coopSeatedPublish = true;
+      return;
+    }
+    if (!this._bodyMatchesSpawnOy()) {
+      const oy = this._myCoopSpawnOy();
+      if (Gsm.applyCoopSpawnOffset) Gsm.applyCoopSpawnOffset(oy);
+    } else {
+      this._coopSpawnApplied = true;
+      this._coopSeatedPublish = true;
+    }
   };
 
   /**
@@ -1454,62 +1884,39 @@
       }
       if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
       this._coopSpawnApplied = true;
+      this._coopSeatedPublish = true;
       return;
     }
-    if (this._coopSpawnApplied) return;
-    const myId = this.client && this.client.clientId;
-    const slots = this._coopSlots || [];
-    let oy = 0;
-    let found = false;
-    for (let i = 0; i < slots.length; i++) {
-      if (slots[i] && slots[i].clientId === myId) {
-        oy = slots[i].oy != null ? slots[i].oy : 0;
-        found = true;
-        break;
-      }
-    }
-    // Fallback to promote-order index if slots missing
-    if (!found && this.client && this.client.roster) {
-      const players = (this.client.roster.clients || [])
-        .filter(function (c) {
-          return c.role === "player";
-        })
-        .slice()
-        .sort(function (a, b) {
-          const ao = a.promoteOrder != null ? a.promoteOrder : 1e15;
-          const bo = b.promoteOrder != null ? b.promoteOrder : 1e15;
-          return ao - bo;
-        });
-      const idx = players.findIndex(function (c) {
-        return c.clientId === myId;
-      });
-      const Session = root.MultiplayerSession;
-      const OFFSETS =
-        Session && Session.coopSpawnOffsets
-          ? Session.coopSpawnOffsets(players.length)
-          : [0];
-      if (idx >= 0) oy = OFFSETS[idx] != null ? OFFSETS[idx] : 0;
-    }
-    if (Gsm.applyCoopSpawnOffset && Gsm.applyCoopSpawnOffset(oy)) {
-      this._coopSpawnApplied = true;
-    }
+    const oy = this._myCoopSpawnOy();
+    if (Gsm.applyCoopSpawnOffset) Gsm.applyCoopSpawnOffset(oy);
+    // Do not lock _coopSpawnApplied yet — beginCoopNativeSession reasserts until match
   };
 
   MultiplayerApp.prototype.endCoopNativeSession = function () {
     this._coopSessionActive = false;
     this._coopDeadSent = false;
     this._coopSpawnApplied = false;
+    this._coopSeatedPublish = false;
     this._coopSlots = [];
     this._coopLastPoseFp = null;
+    this._coopColorsSent = false;
+    this._coopSpawnOy = null;
+    this._coopPlayerMoved = false;
+    this._coopTimerStartedAtMs = null;
+    this._coopTimerArmed = false;
     if (typeof window !== "undefined") {
       window.__mpCoopLocalDead = false;
       window.__mpCoopInject = false;
       window.__mpCoopSession = false;
       window.__mpCoopSpectator = false;
       window.__mpCoopAfterTick = null;
+      window.__mpCoopFlushPendingDeltas = null;
       window.__mpCoopOnFriendlyDeath = null;
+      window.__mpCoopPlayerRenderer = null;
+      window.__mpCoopRenderArgs = null;
       if (window.__mpCoopStopCorpsePaint) window.__mpCoopStopCorpsePaint();
     }
+    this._pendingCoopSnakeDeltas = null;
     this.stopCoopNativeLoop();
     if (this._coopSyncTimer) {
       clearInterval(this._coopSyncTimer);
@@ -1527,16 +1934,21 @@
     }
   };
 
-  MultiplayerApp.prototype.publishCoopState = function () {
+  MultiplayerApp.prototype.publishCoopState = function (opts) {
+    opts = opts || {};
     if (!this.client || !this.client.connected) return;
     if (!this._coopSessionActive) return;
+    if (!this.client.roster || !this.client.roster.sessionActive) return;
     if (!this.client.roster || this.client.roster.mode !== "coop") return;
     const me = this.client.me();
     if (!me || me.role !== "player") return;
 
+    const needColors = opts.forceColors || !this._coopColorsSent;
     const scrape =
       Gsm.scrapeCoopSnakeDelta || Gsm.scrapeSnakeDelta;
-    const delta = scrape ? scrape.call(Gsm, me.colorId) : null;
+    const delta = scrape
+      ? scrape.call(Gsm, me.colorId, { includeColors: needColors })
+      : null;
     if (!delta) return;
 
     delta.clientId = this.client.clientId;
@@ -1545,18 +1957,28 @@
       delta.alive = false;
       delta.body = this._coopLastBody;
     }
-    // Prefer claimed roster color over scraped menu if set
-    if (me.colorId != null) delta.colorId = me.colorId;
+    if (me.colorId != null && needColors) delta.colorId = me.colorId;
 
     const fp = Gsm.snakeDeltaFingerprint
       ? Gsm.snakeDeltaFingerprint(delta)
       : null;
-    if (fp && fp === this._coopLastPoseFp && !this._coopDeadSent) {
+    if (fp && fp === this._coopLastPoseFp && !this._coopDeadSent && !needColors) {
       return;
     }
     this._coopLastPoseFp = fp;
+    if (needColors && (delta.Sc || delta.colorId != null)) {
+      this._coopColorsSent = true;
+    }
 
-    if (this.coopNative) this.coopNative.applySnakeDelta(delta);
+    // First real move after seat → arm shared timer for everyone
+    if (!this._coopTimerArmed && this._coopLocalHasMoved(delta)) {
+      const t = Date.now();
+      this.armCoopRunTimer(t);
+      delta.timerArm = true;
+      delta.timerStartedAtMs = t;
+    }
+
+    // Do not apply self into remotes — paint skips myId; saves O(n) followBody/GC
     this.client.snakeDelta(delta);
     if (delta.alive === false && !this._coopDeadSent) {
       this._coopDeadSent = true;
@@ -1566,10 +1988,46 @@
     }
   };
 
+  /** Head left spawn (or seat already marked moved) → player is playing. */
+  MultiplayerApp.prototype._coopLocalHasMoved = function (delta) {
+    if (this._coopPlayerMoved) return true;
+    const body = delta && delta.body;
+    const head = body && body[0];
+    if (!head) return false;
+    const expected = this._coopSpawnBody(this._myCoopSpawnOy());
+    if (!expected || !expected[0]) return false;
+    return (
+      Number(head.x) !== Number(expected[0].x) ||
+      Number(head.y) !== Number(expected[0].y)
+    );
+  };
+
+  /** Idempotent: start native TimeKeeper from shared wall-clock epoch. */
+  MultiplayerApp.prototype.armCoopRunTimer = function (startedAtMs) {
+    if (this._coopTimerArmed) return;
+    if (typeof window !== "undefined" && window.__mpCoopSpectator) return;
+    const me = this.client && this.client.me && this.client.me();
+    if (me && me.role === "spectator") return;
+    const t =
+      startedAtMs != null && Number.isFinite(Number(startedAtMs))
+        ? Number(startedAtMs)
+        : Date.now();
+    this._coopTimerArmed = true;
+    this._coopTimerStartedAtMs = t;
+    if (Gsm.startCoopRunTimer) {
+      Gsm.startCoopRunTimer({
+        timerStartedAtMs: t,
+        maxAttempts: 40,
+        intervalMs: 50,
+      });
+    }
+  };
+
   /** Eater publishes full native fruit board after collect (shared spawn rules). */
   MultiplayerApp.prototype.publishCoopCollectables = function () {
     if (!this.client || !this.client.connected) return;
     if (!this._coopSessionActive) return;
+    if (!this.client.roster || !this.client.roster.sessionActive) return;
     if (!this.client.roster || this.client.roster.mode !== "coop") return;
     const me = this.client.me();
     if (!me || me.role !== "player") return;
@@ -1632,12 +2090,15 @@
         }
       },
       onDeath: function (timeMs, score) {
-        // Versus Focus puppet: keep watching; re-hide death; no PB from spectate
+        // Versus Focus puppet: ignore local false deaths; only mirror remote death
         if (
           typeof window !== "undefined" &&
           window.__mpVersusFocusSpectate
         ) {
-          if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
+          const fb = window.__mpVersusFocusBoard;
+          if (!fb || fb.alive !== false) {
+            if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
+          }
           return;
         }
         // Co-op spectator: never treat as a real player death
@@ -1842,6 +2303,7 @@
       const me = self.client.me();
       if (!me || me.role !== "player") return;
       if (!self.client.roster || self.client.roster.mode !== "versus") return;
+      if (!self.client.roster.sessionActive) return;
       const specs = (self.client.roster.clients || []).filter(function (c) {
         return c.role === "spectator";
       });
@@ -1850,7 +2312,7 @@
         colorId: me.colorId != null ? me.colorId : undefined,
       });
       if (board) self.client.boardDelta(board);
-    }, 150);
+    }, 80);
   };
 
   MultiplayerApp.prototype.hookCoopInput = function () {
@@ -1945,7 +2407,10 @@
             if (Gsm.restoreDeathScreen) Gsm.restoreDeathScreen();
             if (Gsm.unlockPersonalMenus) Gsm.unlockPersonalMenus();
             if (Gsm.showDeathScreen) {
-              Gsm.showDeathScreen({ skipEscapeDispatch: true });
+              Gsm.showDeathScreen({
+                skipEscapeDispatch: true,
+                keepRunning: true,
+              });
             }
           }
           return;
@@ -1979,7 +2444,7 @@
     if (Gsm.showDeathScreen) {
       Gsm.showDeathScreen({ skipEscapeDispatch: true });
     } else {
-      root.pauseGame = false;
+      root.pauseGame = 1;
     }
     this.applyControlLocks();
   };
@@ -2297,6 +2762,12 @@
         unlockSpeedInfoForMultiplayer();
         setTimeout(unlockSpeedInfoForMultiplayer, 0);
         setTimeout(unlockSpeedInfoForMultiplayer, 400);
+        if (Gsm.installModeLabelPatch) {
+          Gsm.installModeLabelPatch();
+          setTimeout(function () {
+            if (Gsm.installModeLabelPatch) Gsm.installModeLabelPatch();
+          }, 500);
+        }
         app.ui.mountSettingsTab();
         ensureSpeedInfoSettingsButton(app);
         setTimeout(function () {
@@ -2313,6 +2784,14 @@
         app.hookAdminSettingsWatch();
         app.hookSpectatorInputBlock();
         app.hookInGameColorPicker();
+        if (Gsm.installFirstRunControlTipGuard) {
+          Gsm.installFirstRunControlTipGuard();
+          setTimeout(function () {
+            if (Gsm.installFirstRunControlTipGuard) {
+              Gsm.installFirstRunControlTipGuard();
+            }
+          }, 400);
+        }
         if (root.MultiplayerVisibilityFix) {
           root.MultiplayerVisibilityFix.fix();
           setTimeout(function () {
@@ -2331,7 +2810,17 @@
             app.ui.mountSettingsTab();
             unlockSpeedInfoForMultiplayer();
             ensureSpeedInfoSettingsButton(app);
-            if (root.MultiplayerVisibilityFix) root.MultiplayerVisibilityFix.install();
+            if (
+              root.MultiplayerVisibilityFix &&
+              typeof root.MultiplayerVisibilityFix.install === "function"
+            ) {
+              root.MultiplayerVisibilityFix.install();
+            } else if (
+              root.MultiplayerVisibilityFix &&
+              typeof root.MultiplayerVisibilityFix.fix === "function"
+            ) {
+              root.MultiplayerVisibilityFix.fix();
+            }
             return r;
           };
           root.__mpOrganizeHooked = true;

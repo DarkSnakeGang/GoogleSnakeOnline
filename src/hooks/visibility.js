@@ -94,6 +94,8 @@
 
   root.MultiplayerVisibilityFix = {
     fix: fixVisibilityUi,
+    /** Alias — remixOrganizeSettings / older hooks call install(). */
+    install: fixVisibilityUi,
     close: closeVisibility,
   };
 

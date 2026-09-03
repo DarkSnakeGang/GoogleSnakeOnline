@@ -86,6 +86,19 @@ pub fn is_claimable(id: u8) -> bool {
     )
 }
 
+/// First claimable color not present in `taken`.
+pub fn first_free_claimable(taken: &[u8]) -> Option<u8> {
+    for c in SNAKE_COLORS {
+        if c.kind == ColorKind::Random {
+            continue;
+        }
+        if !taken.contains(&c.id) {
+            return Some(c.id);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +111,7 @@ mod tests {
         assert!(!is_claimable(46));
         assert_eq!(color_name(35), "Pride");
         assert_eq!(SNAKE_COLORS.len(), 47);
+        assert_eq!(first_free_claimable(&[]), Some(0));
+        assert_eq!(first_free_claimable(&[0, 1]), Some(2));
     }
 }
