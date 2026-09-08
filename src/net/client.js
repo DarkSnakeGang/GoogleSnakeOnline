@@ -272,6 +272,12 @@
     this.ws.send(P.encode(env));
   };
 
+  MultiplayerClient.prototype.setDisplayName = function (displayName) {
+    const next = displayName != null ? String(displayName).trim() : "";
+    this.displayName = next;
+    this.send(P.TYPES.SET_DISPLAY_NAME, { displayName: next });
+  };
+
   MultiplayerClient.prototype.setRole = function (clientId, role) {
     this.send(P.TYPES.SET_ROLE, { clientId: clientId, role: role });
   };
@@ -281,8 +287,8 @@
   MultiplayerClient.prototype.setDuration = function (minutes) {
     this.send(P.TYPES.SET_DURATION, { minutes: minutes });
   };
-  MultiplayerClient.prototype.setVersusGoal = function (goal) {
-    this.send(P.TYPES.SET_VERSUS_GOAL, { goal: goal });
+  MultiplayerClient.prototype.setRaceGoal = function (goal) {
+    this.send(P.TYPES.SET_RACE_GOAL, { goal: goal });
   };
   MultiplayerClient.prototype.setReady = function (ready) {
     this.send(P.TYPES.READY, { ready: !!ready });
@@ -307,6 +313,9 @@
   };
   MultiplayerClient.prototype.sendInput = function (dir) {
     this.send(P.TYPES.INPUT, { dir: dir });
+  };
+  MultiplayerClient.prototype.sendCoopInput = function (dir) {
+    this.send(P.TYPES.COOP_INPUT, { dir: dir });
   };
   MultiplayerClient.prototype.scorePulse = function (data) {
     this.send(P.TYPES.SCORE_PULSE, data);
@@ -334,6 +343,15 @@
   };
   MultiplayerClient.prototype.coopGoal = function (data) {
     this.send(P.TYPES.COOP_GOAL, data || {});
+  };
+  MultiplayerClient.prototype.coopBoardInit = function (data) {
+    this.send(P.TYPES.COOP_BOARD_INIT, data || {});
+  };
+  MultiplayerClient.prototype.coopBoardReady = function (data) {
+    this.send(P.TYPES.COOP_BOARD_READY, data || {});
+  };
+  MultiplayerClient.prototype.coopSpeedTransition = function (data) {
+    this.send(P.TYPES.COOP_SPEED_TRANSITION, data || {});
   };
   MultiplayerClient.prototype.resync = function () {
     this.send(P.TYPES.RESYNC_REQUEST, {});

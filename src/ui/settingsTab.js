@@ -1,11 +1,9 @@
-/** Multiplayer settings — own Remix top tab + Connect/Match/Roster sub-tabs. */
+/** Multiplayer settings — own Remix top tab + Control/Roster sub-tabs. */
 (function (root) {
   const Colors = root.MultiplayerColors;
-  const Session = root.MultiplayerSession;
 
   const SUBPAGES = [
-    ["connect", "Connect"],
-    ["match", "Match"],
+    ["control", "Control"],
     ["roster", "Roster"],
   ];
 
@@ -53,7 +51,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 }
 #mp-subpager {
   display:grid;
-  grid-template-columns:1fr 1fr 1fr;
+  grid-template-columns:1fr 1fr;
   gap:4px;
   flex-shrink:0;
   margin-bottom:2px;
@@ -246,16 +244,24 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 }
 #mp-settings-host .mp-admin-only.hidden,
 #mp-settings-host .mp-player-only.hidden,
-#mp-settings-host .mp-versus-only.hidden { display:none !important; }
+#mp-settings-host .mp-race-only.hidden { display:none !important; }
 #mp-settings-host .mp-mode-btn.mp-mode-on {
   background:#1b5e20 !important;
   border-color:#2e7d32 !important;
   color:#fff !important;
 }
 #mp-settings-host .mp-mode-btn.mp-mode-off {
-  background:#b71c1c !important;
-  border-color:#c62828 !important;
-  color:#fff !important;
+  background:#5f6368 !important;
+  border-color:#5f6368 !important;
+  color:#e8eaed !important;
+}
+#mp-settings-host .mp-mode-btn.mp-mode-disabled,
+#mp-settings-host .mp-mode-btn:disabled {
+  background:#3c4043 !important;
+  border-color:#3c4043 !important;
+  color:#9aa0a6 !important;
+  opacity:0.85 !important;
+  cursor:not-allowed !important;
 }
 #mp-settings-host .pudding-settings-section-title {
   display:block; color:rgba(255,255,255,0.85); font-family:Roboto,Arial,sans-serif;
@@ -374,7 +380,19 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     try {
       if (typeof localStorage === "undefined") return fallback;
       const v = localStorage.getItem(key);
-      return v == null ? fallback : v;
+      if (v != null) return v;
+      // Migrate pre-Race keys (old Versus naming)
+      if (String(key).indexOf("MULTIPLAYER_RACE_") === 0) {
+        const legacy = String(key).replace("MULTIPLAYER_RACE_", "MULTIPLAYER_VERSUS_");
+        const old = localStorage.getItem(legacy);
+        if (old != null) {
+          try {
+            localStorage.setItem(key, old);
+          } catch (eMig) { /* ignore */ }
+          return old;
+        }
+      }
+      return fallback;
     } catch (e) {
       return fallback;
     }
@@ -394,7 +412,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     host.style.setProperty("--ultra-btn", btn);
     host.querySelectorAll(".pudding-settings-btn, button.btn").forEach(function (b) {
       if (b.classList.contains("mp-mode-btn")) {
-        // Versus / Co-op selection colors are owned by paintModeButtons
+        // Race / Co-op / Versus selection colors are owned by paintModeButtons
         return;
       }
       if (b.classList.contains("mp-danger")) {
@@ -424,7 +442,11 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
   }
 
   function colorDotStyle(colorId) {
-    const c = Colors && Colors.getColor ? Colors.getColor(colorId) : null;
+    const id = colorId != null && colorId !== "" ? Number(colorId) : null;
+    const c =
+      Colors && Colors.getColor && id != null && !Number.isNaN(id)
+        ? Colors.getColor(id)
+        : null;
     if (!c) return "";
     if (c.kind === "solid" && c.primary) {
       return (
@@ -436,7 +458,15 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       );
     }
     if (c.set && c.set.length) {
-      return "background:" + c.set[0];
+      // Rainbow / pride sets — show the full stripe, not just set[0]
+      if (c.set.length === 1) return "background:" + c.set[0];
+      const stops = c.set
+        .map(function (hex, i) {
+          const pct = Math.round((i / (c.set.length - 1)) * 100);
+          return hex + " " + pct + "%";
+        })
+        .join(",");
+      return "background:linear-gradient(135deg," + stops + ")";
     }
     return "";
   }
@@ -522,7 +552,9 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
   function showSubPage(id) {
     // Spectate tab retired — controls live on Roster
     if (id === "spectate") id = "roster";
-    if (!SUBPAGES.some(function (p) { return p[0] === id; })) id = "connect";
+    // Connect + Match merged into Control
+    if (id === "connect" || id === "match") id = "control";
+    if (!SUBPAGES.some(function (p) { return p[0] === id; })) id = "control";
     root.__mpSettingsSubPage = id;
     SUBPAGES.forEach(function (pair) {
       const name = pair[0];
@@ -556,6 +588,12 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 
     // Already built — just re-home under Multiplayer page
     let host = document.getElementById("mp-settings-host");
+    if (host && !document.getElementById("mp-panel-control")) {
+      // Connect/Match → Control layout; rebuild once
+      host.remove();
+      host = null;
+      this._built = false;
+    }
     if (host) {
       if (host.parentElement !== page) page.appendChild(host);
       this.panel = host;
@@ -583,17 +621,14 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     });
     host.appendChild(subpager);
 
-    const panelConnect = el("div", "mp-panel");
-    panelConnect.id = "mp-panel-connect";
-    const panelMatch = el("div", "mp-panel");
-    panelMatch.id = "mp-panel-match";
+    const panelControl = el("div", "mp-panel");
+    panelControl.id = "mp-panel-control";
     const panelRoster = el("div", "mp-panel");
     panelRoster.id = "mp-panel-roster";
-    host.appendChild(panelConnect);
-    host.appendChild(panelMatch);
+    host.appendChild(panelControl);
     host.appendChild(panelRoster);
 
-    // --- Connect ---
+    // --- Control (connect fields + match admin / ready) ---
     const nameIn = el("input");
     nameIn.type = "text";
     nameIn.placeholder = "Optional display name";
@@ -622,72 +657,122 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       roomIn.addEventListener(ev, persistConnectFields);
     });
 
-    panelConnect.appendChild(field("Display name", nameIn));
-    panelConnect.appendChild(field("Server URL", urlIn));
-    panelConnect.appendChild(field("Room code", roomIn));
+    let nameSyncTimer = 0;
+    function pushDisplayNameLive() {
+      persistConnectFields();
+      const client = self.app && self.app.client;
+      if (!client || !client.joined) return;
+      if (typeof client.setDisplayName !== "function") return;
+      const next = nameIn.value.trim();
+      if ((client.displayName || "") === next) return;
+      client.setDisplayName(next);
+    }
+    nameIn.addEventListener("input", function () {
+      persistConnectFields();
+      if (nameSyncTimer) clearTimeout(nameSyncTimer);
+      nameSyncTimer = setTimeout(function () {
+        nameSyncTimer = 0;
+        pushDisplayNameLive();
+      }, 400);
+    });
+
+    const nameField = field("Display name", nameIn);
+    nameField.id = "mp-display-name-field";
+    const urlField = field("Server URL", urlIn);
+    urlField.id = "mp-server-url-field";
+    const roomField = field("Room code", roomIn);
+    roomField.id = "mp-room-code-field";
+
+    panelControl.appendChild(nameField);
+    panelControl.appendChild(urlField);
+    panelControl.appendChild(roomField);
 
     const connBtn = themedBtn("Connect", "mp-conn-toggle");
     connBtn.id = "mp-conn-toggle";
-    panelConnect.appendChild(connBtn);
+    panelControl.appendChild(connBtn);
 
     const status = el("div", "mp-status", "Disconnected");
     status.id = "mp-status";
-    panelConnect.appendChild(status);
+    panelControl.appendChild(status);
 
-    // --- Match (admin + player) ---
+    // --- Admin controls (same Control tab) ---
     const adminBox = el("div", "mp-admin-only hidden");
     adminBox.id = "mp-admin-box";
     adminBox.appendChild(el("span", "pudding-settings-section-title", "Admin"));
 
     const modeRow = el("div", "pudding-settings-btn-row");
-    const versusBtn = themedBtn("Versus", "mp-mode-btn");
-    versusBtn.id = "mp-mode-versus";
+    // Wire mode is "race". Disabled Versus button is reserved for a future mode.
+    const raceBtn = themedBtn("Race", "mp-mode-btn");
+    raceBtn.id = "mp-mode-race";
+    raceBtn.title = "Race mode (independent boards)";
     const coopBtn = themedBtn("Co-op", "mp-mode-btn");
     coopBtn.id = "mp-mode-coop";
-    modeRow.appendChild(versusBtn);
+    const versusBtn = themedBtn("Versus", "mp-mode-btn mp-mode-disabled");
+    versusBtn.id = "mp-mode-versus";
+    versusBtn.disabled = true;
+    versusBtn.setAttribute("aria-disabled", "true");
+    versusBtn.title = "Coming soon";
+    modeRow.appendChild(raceBtn);
     modeRow.appendChild(coopBtn);
+    modeRow.appendChild(versusBtn);
     adminBox.appendChild(modeRow);
 
     function paintModeButtons(mode) {
-      const versusOn = mode === "versus";
+      const raceOn = mode === "race";
       const coopOn = mode === "coop";
-      versusBtn.classList.toggle("mp-mode-on", versusOn);
-      versusBtn.classList.toggle("mp-mode-off", !versusOn);
+      raceBtn.classList.toggle("mp-mode-on", raceOn);
+      raceBtn.classList.toggle("mp-mode-off", !raceOn);
       coopBtn.classList.toggle("mp-mode-on", coopOn);
       coopBtn.classList.toggle("mp-mode-off", !coopOn);
-      versusBtn.setAttribute("aria-pressed", versusOn ? "true" : "false");
+      versusBtn.classList.add("mp-mode-disabled");
+      versusBtn.classList.remove("mp-mode-on", "mp-mode-off");
+      raceBtn.setAttribute("aria-pressed", raceOn ? "true" : "false");
       coopBtn.setAttribute("aria-pressed", coopOn ? "true" : "false");
+      versusBtn.setAttribute("aria-pressed", "false");
       // Inline !important so theme repaint cannot wash them out
       [
-        [versusBtn, versusOn],
-        [coopBtn, coopOn],
+        [raceBtn, raceOn, false],
+        [coopBtn, coopOn, false],
+        [versusBtn, false, true],
       ].forEach(function (pair) {
         const b = pair[0];
         const on = pair[1];
-        const bg = on ? "#1b5e20" : "#b71c1c";
+        const disabled = pair[2];
+        let bg;
+        let fg = "#fff";
+        if (disabled) {
+          bg = "#3c4043";
+          fg = "#9aa0a6";
+        } else if (on) {
+          bg = "#1b5e20";
+        } else {
+          // Unselected — grey, not red
+          bg = "#5f6368";
+          fg = "#e8eaed";
+        }
         b.style.setProperty("background", bg, "important");
         b.style.setProperty("background-color", bg, "important");
-        b.style.setProperty("color", "#fff", "important");
+        b.style.setProperty("color", fg, "important");
         b.style.setProperty("border", "none", "important");
       });
     }
-    paintModeButtons("versus");
+    paintModeButtons("race");
 
     const dur = el("input");
     dur.type = "number";
     dur.min = "1";
     dur.value = String(
-      Math.max(1, parseInt(lsGet("MULTIPLAYER_VERSUS_ATTEMPT_MIN", "30"), 10) || 30)
+      Math.max(1, parseInt(lsGet("MULTIPLAYER_RACE_ATTEMPT_MIN", "30"), 10) || 30)
     );
     dur.id = "mp-duration";
-    const durField = field("Versus attempt (min)", dur);
+    const durField = field("Race attempt (min)", dur);
     durField.id = "mp-duration-field";
     adminBox.appendChild(durField);
 
     const goalSel = el("select");
-    goalSel.id = "mp-versus-goal";
-    const VersusState = root.VersusState;
-    (VersusState && VersusState.GOALS ? VersusState.GOALS : [
+    goalSel.id = "mp-race-goal";
+    const RaceState = root.RaceState;
+    (RaceState && RaceState.GOALS ? RaceState.GOALS : [
       { id: "score", label: "Score" },
       { id: "best25", label: "Best 25" },
       { id: "best50", label: "Best 50" },
@@ -699,18 +784,18 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       opt.textContent = g.label;
       goalSel.appendChild(opt);
     });
-    const savedGoal = lsGet("MULTIPLAYER_VERSUS_GOAL", "score");
+    const savedGoal = lsGet("MULTIPLAYER_RACE_GOAL", "score");
     goalSel.value =
-      VersusState && VersusState.normalizeGoal
-        ? VersusState.normalizeGoal(savedGoal)
+      RaceState && RaceState.normalizeGoal
+        ? RaceState.normalizeGoal(savedGoal)
         : savedGoal || "score";
-    const goalField = field("Versus goal", goalSel);
-    goalField.id = "mp-versus-goal-field";
+    const goalField = field("Race goal", goalSel);
+    goalField.id = "mp-race-goal-field";
     adminBox.appendChild(goalField);
 
     const finishOngoingWrap = el(
       "div",
-      "form-check form-check-inline mp-finish-ongoing-wrap mp-versus-only"
+      "form-check form-check-inline mp-finish-ongoing-wrap mp-race-only"
     );
     finishOngoingWrap.id = "mp-finish-ongoing-wrap";
     const finishOngoingCb = el("input", "form-check-input");
@@ -718,7 +803,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     finishOngoingCb.setAttribute("role", "switch");
     finishOngoingCb.id = "mp-finish-ongoing";
     finishOngoingCb.checked =
-      lsGet("MULTIPLAYER_VERSUS_FINISH_ONGOING", "1") !== "0";
+      lsGet("MULTIPLAYER_RACE_FINISH_ONGOING", "1") !== "0";
     const finishOngoingLabel = el(
       "label",
       "form-check-label",
@@ -733,11 +818,6 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     finishOngoingWrap.appendChild(finishOngoingLabel);
     adminBox.appendChild(finishOngoingWrap);
 
-    const startBtn = themedBtn("Start match");
-    startBtn.id = "mp-start";
-    startBtn.disabled = true;
-    adminBox.appendChild(startBtn);
-
     const endBtn = themedBtn("End match");
     endBtn.id = "mp-end";
     endBtn.title = "Stop the run for everyone (also Esc)";
@@ -745,11 +825,10 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     endBtn.style.display = "none";
     adminBox.appendChild(endBtn);
 
-    panelMatch.appendChild(adminBox);
+    panelControl.appendChild(adminBox);
 
     const playerBox = el("div", "mp-player-only hidden");
     playerBox.id = "mp-player-box";
-    playerBox.appendChild(el("span", "pudding-settings-section-title", "Player"));
     const readyBtn = themedBtn("Ready");
     readyBtn.id = "mp-ready";
     playerBox.appendChild(readyBtn);
@@ -761,15 +840,33 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     colorHint.id = "mp-coop-color-hint";
     colorHint.style.display = "none";
     playerBox.appendChild(colorHint);
-    panelMatch.appendChild(playerBox);
+    panelControl.appendChild(playerBox);
 
-    const matchHint = el(
+    // Personal race preference — only when connected as a non-spectator in race
+    const resetOnGoalWrap = el(
       "div",
-      "mp-status",
-      "Connect first. Admin controls appear when you are room admin; Ready when you are a player."
+      "form-check form-check-inline mp-reset-on-goal-wrap mp-race-only hidden"
     );
-    matchHint.id = "mp-match-hint";
-    panelMatch.appendChild(matchHint);
+    resetOnGoalWrap.id = "mp-reset-on-goal-wrap";
+    const resetOnGoalCb = el("input", "form-check-input");
+    resetOnGoalCb.type = "checkbox";
+    resetOnGoalCb.setAttribute("role", "switch");
+    resetOnGoalCb.id = "mp-reset-on-goal";
+    resetOnGoalCb.checked =
+      lsGet("MULTIPLAYER_RACE_RESET_ON_GOAL", "0") === "1";
+    const resetOnGoalLabel = el(
+      "label",
+      "form-check-label",
+      "Reset on goal"
+    );
+    resetOnGoalLabel.htmlFor = "mp-reset-on-goal";
+    resetOnGoalLabel.title =
+      "Best 25/50/100: instantly start a new run when you reach that score (even mid-run)";
+    resetOnGoalLabel.style.cssText =
+      "margin:3px;color:white;font-family:Roboto,Arial,sans-serif;";
+    resetOnGoalWrap.appendChild(resetOnGoalCb);
+    resetOnGoalWrap.appendChild(resetOnGoalLabel);
+    panelControl.appendChild(resetOnGoalWrap);
 
     // --- Roster ---
     const rosterToolbar = el("div", "mp-roster-toolbar");
@@ -817,7 +914,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     page.appendChild(host);
     this.panel = host;
     this._built = true;
-    showSubPage(root.__mpSettingsSubPage || "connect");
+    showSubPage(root.__mpSettingsSubPage || "control");
 
     function setConnButton(connected) {
       if (connected) {
@@ -852,13 +949,13 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           })
           .then(function (welcome) {
             setConnButton(true);
-    // Push saved Versus attempt length once we know we're admin (WELCOME.isAdmin)
+    // Push saved Race attempt length once we know we're admin (WELCOME.isAdmin)
     const mins = Math.max(1, parseInt(dur.value, 10) || 30);
-    lsSet("MULTIPLAYER_VERSUS_ATTEMPT_MIN", String(mins));
+    lsSet("MULTIPLAYER_RACE_ATTEMPT_MIN", String(mins));
     if (welcome && welcome.isAdmin && self.app.client) {
       self.app.client.setDuration(mins);
-      if (self.app.client.setVersusGoal) {
-        self.app.client.setVersusGoal(goalSel.value);
+      if (self.app.client.setRaceGoal) {
+        self.app.client.setRaceGoal(goalSel.value);
       }
     }
           })
@@ -870,33 +967,57 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           });
       }
     };
-    versusBtn.onclick = function () {
-      paintModeButtons("versus");
+    function syncResetOnGoalVisibility(mode, connected, role) {
+      const show =
+        !!connected && mode === "race" && role === "player";
+      resetOnGoalWrap.classList.toggle("hidden", !show);
+      resetOnGoalWrap.style.display = show ? "" : "none";
+    }
+
+    raceBtn.onclick = function () {
+      paintModeButtons("race");
       finishOngoingWrap.classList.remove("hidden");
       finishOngoingWrap.style.display = "";
+      const meNow = self.app.client && self.app.client.me && self.app.client.me();
+      const connectedNow = !!(
+        self.app.client &&
+        (self.app.client.joined || self.app.client.connected)
+      );
+      syncResetOnGoalVisibility(
+        "race",
+        connectedNow,
+        meNow && meNow.role
+      );
       colorHint.classList.add("hidden");
       colorHint.style.display = "none";
-      self.app.client && self.app.client.setMode("versus");
+      self.app.client && self.app.client.setMode("race");
+      if (self.app && self.app._paintPlayAsStartMatch) {
+        self.app._paintPlayAsStartMatch();
+      }
     };
     coopBtn.onclick = function () {
       paintModeButtons("coop");
       finishOngoingWrap.classList.add("hidden");
       finishOngoingWrap.style.display = "none";
+      syncResetOnGoalVisibility("coop", false, null);
       colorHint.classList.remove("hidden");
       colorHint.style.display = "";
       self.app.client && self.app.client.setMode("coop");
+      if (self.app && self.app._paintPlayAsStartMatch) {
+        self.app._paintPlayAsStartMatch();
+      }
     };
     dur.onchange = function () {
       const mins = Math.max(1, parseInt(dur.value, 10) || 30);
       dur.value = String(mins);
-      lsSet("MULTIPLAYER_VERSUS_ATTEMPT_MIN", String(mins));
+      lsSet("MULTIPLAYER_RACE_ATTEMPT_MIN", String(mins));
       if (self.app.client && self.app.client.isAdmin()) {
         self.app.client.setDuration(mins);
       }
     };
     dur.addEventListener("input", function () {
       const mins = Math.max(1, parseInt(dur.value, 10) || 30);
-      lsSet("MULTIPLAYER_VERSUS_ATTEMPT_MIN", String(mins));
+      lsSet("MULTIPLAYER_RACE_ATTEMPT_MIN", String(mins));
       // Push live so Start match doesn't still use the server default (30)
       if (self.app.client && self.app.client.connected && self.app.client.isAdmin()) {
         self.app.client.setDuration(mins);
@@ -904,66 +1025,31 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     });
     goalSel.onchange = function () {
       const g =
-        VersusState && VersusState.normalizeGoal
-          ? VersusState.normalizeGoal(goalSel.value)
+        RaceState && RaceState.normalizeGoal
+          ? RaceState.normalizeGoal(goalSel.value)
           : goalSel.value;
       goalSel.value = g;
-      lsSet("MULTIPLAYER_VERSUS_GOAL", g);
+      lsSet("MULTIPLAYER_RACE_GOAL", g);
       if (
         self.app.client &&
         self.app.client.connected &&
         self.app.client.isAdmin() &&
-        self.app.client.setVersusGoal
+        self.app.client.setRaceGoal
       ) {
-        self.app.client.setVersusGoal(g);
+        self.app.client.setRaceGoal(g);
       }
     };
     finishOngoingCb.onchange = function () {
       lsSet(
-        "MULTIPLAYER_VERSUS_FINISH_ONGOING",
+        "MULTIPLAYER_RACE_FINISH_ONGOING",
         finishOngoingCb.checked ? "1" : "0"
       );
     };
-    startBtn.onclick = function () {
-      if (!self.app.client || !self.app.client.isAdmin()) return;
-      const roster = self.app.client.roster || {};
-      // After timer expiry, Start begins a *new* match (scores clear on SESSION_START).
-      // Block while a live session still forbids new runs (incl. finish-ongoing grace).
-      const midAttemptNoRuns =
-        roster.mode === "versus" &&
-        roster.sessionActive &&
-        roster.allowNewRuns === false;
-      if (midAttemptNoRuns) return;
-      if (!Session.canStart(roster)) return;
-      // Always push the textbox value before starting — localStorage alone is not enough
-      const mins = Math.max(1, parseInt(dur.value, 10) || 30);
-      dur.value = String(mins);
-      lsSet("MULTIPLAYER_VERSUS_ATTEMPT_MIN", String(mins));
-      self.app.client.setDuration(mins);
-      const g =
-        VersusState && VersusState.normalizeGoal
-          ? VersusState.normalizeGoal(goalSel.value)
-          : goalSel.value;
-      goalSel.value = g;
-      lsSet("MULTIPLAYER_VERSUS_GOAL", g);
-      if (self.app.client.setVersusGoal) self.app.client.setVersusGoal(g);
-      // Bundle match rules into SESSION_START so co-op/versus peers apply
-      // trophy/count/speed/size quietly under __mpStartingMatch (no menu open).
-      const snap =
-        self.app.syncMySettingsAsAdmin && self.app.syncMySettingsAsAdmin();
-      const startPayload = snap ? { settings: snap } : {};
-      // finishOngoingRuns is versus-only (checkbox hidden in co-op).
-      if (roster.mode === "versus") {
-        const finishOngoing = !!finishOngoingCb.checked;
-        lsSet(
-          "MULTIPLAYER_VERSUS_FINISH_ONGOING",
-          finishOngoing ? "1" : "0"
-        );
-        startPayload.finishOngoingRuns = finishOngoing;
-      }
-      self.app.client.sessionStart(startPayload);
-      const st = document.getElementById("mp-status");
-      if (st) st.textContent = "Starting match…";
+    resetOnGoalCb.onchange = function () {
+      lsSet(
+        "MULTIPLAYER_RACE_RESET_ON_GOAL",
+        resetOnGoalCb.checked ? "1" : "0"
+      );
     };
     endBtn.onclick = function () {
       if (!self.app.client || !self.app.client.isAdmin()) return;
@@ -1049,7 +1135,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       }
     };
     mosaicBtn.onclick = function () {
-      if (!self.app.versus) return;
+      if (!self.app.race) return;
       if (
         self.app.client &&
         self.app.client.roster &&
@@ -1059,7 +1145,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         self.app.setSpectateMode("mosaic");
         return;
       }
-      const next = self.app.versus.spectateMode === "mosaic" ? "focus" : "mosaic";
+      const next = self.app.race.spectateMode === "mosaic" ? "focus" : "mosaic";
       self.app.setSpectateMode(next);
       mosaicBtn.textContent = next === "mosaic" ? "Focus view" : "Mosaic";
       if (self.app.client && self.app.client.roster) {
@@ -1107,31 +1193,31 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     }
 
     function statsHtmlFor(clientId) {
-      const scores = (self.app.versus && self.app.versus.scores) || {};
+      const scores = (self.app.race && self.app.race.scores) || {};
       const sc = scores[clientId] || {};
       const goal =
-        (self.app.versus && self.app.versus.versusGoal) ||
+        (self.app.race && self.app.race.raceGoal) ||
         (self.app.client &&
           self.app.client.roster &&
-          self.app.client.roster.versusGoal) ||
+          self.app.client.roster.raceGoal) ||
         "score";
-      const VersusState = root.VersusState;
+      const RaceState = root.RaceState;
       const leaderId =
-        (self.app.versus &&
-          (self.app.versus.winnerClientId || self.app.versus.leaderClientId)) ||
+        (self.app.race &&
+          (self.app.race.winnerClientId || self.app.race.leaderClientId)) ||
         null;
       const isLeader = leaderId && leaderId === clientId;
       const matchOver = !!(
-        self.app.versus &&
-        (self.app.versus.expired ||
+        self.app.race &&
+        (self.app.race.expired ||
           (self.app.client &&
             self.app.client.roster &&
             (self.app.client.roster.attemptExpired ||
               self.app.client.roster.allowNewRuns === false)))
       );
       const goalBest =
-        VersusState && VersusState.formatGoalBest
-          ? VersusState.formatGoalBest(sc, goal)
+        RaceState && RaceState.formatGoalBest
+          ? RaceState.formatGoalBest(sc, goal)
           : sc.bestScore != null
             ? String(sc.bestScore)
             : "—";
@@ -1143,8 +1229,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
             (sc.timeMs != null ? " · " + formatMs(sc.timeMs) : "")
           : null;
       const goalLabel =
-        VersusState && VersusState.goalLabel
-          ? VersusState.goalLabel(goal)
+        RaceState && RaceState.goalLabel
+          ? RaceState.goalLabel(goal)
           : "Score";
       let html =
         goalLabel +
@@ -1156,19 +1242,41 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       return html;
     }
 
+    /** Refresh color dots from current roster without rebuilding rows. */
+    self.updateRosterColorDots = function () {
+      const clients =
+        (self.app.client && self.app.client.roster && self.app.client.roster.clients) ||
+        [];
+      roster.querySelectorAll("[data-mp-row]").forEach(function (row) {
+        const id = row.getAttribute("data-mp-row");
+        const c = clients.find(function (x) {
+          return x && x.clientId === id;
+        });
+        const dot = row.querySelector(".mp-roster-dot");
+        if (!dot || !c) return;
+        const ds = colorDotStyle(c.colorId);
+        if (ds) {
+          if (dot.getAttribute("style") !== ds) dot.style.cssText = ds;
+        } else {
+          dot.removeAttribute("style");
+        }
+      });
+    };
+
     /** Update live/best lines without destroying Spec/Play buttons. */
     self.updateRosterScores = function () {
       const rosterData = (self.app.client && self.app.client.roster) || {};
+      if (self.updateRosterColorDots) self.updateRosterColorDots();
       const matchOver = !!(
-        rosterData.mode === "versus" &&
+        rosterData.mode === "race" &&
         (rosterData.allowNewRuns === false ||
           rosterData.attemptExpired ||
-          (self.app.versus && self.app.versus.expired))
+          (self.app.race && self.app.race.expired))
       );
       const hasScores = !!(
-        self.app.versus &&
-        self.app.versus.scores &&
-        Object.keys(self.app.versus.scores).length
+        self.app.race &&
+        self.app.race.scores &&
+        Object.keys(self.app.race.scores).length
       );
       if (!showBestCb.checked && !(matchOver && hasScores)) return;
       roster.querySelectorAll("[data-mp-stats-id]").forEach(function (node) {
@@ -1185,40 +1293,56 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       status.textContent = connected
         ? "Connected · " + (rosterData.mode || "") + " · room " + (rosterData.roomCode || "")
         : "Disconnected";
+      // Join fields only matter offline; display name stays editable live
+      urlField.style.display = connected ? "none" : "";
+      roomField.style.display = connected ? "none" : "";
       const isAdmin = self.app.client && self.app.client.isAdmin();
       const me = self.app.client && self.app.client.me();
+      if (connected && me && document.activeElement !== nameIn) {
+        const serverName =
+          me.displayName != null && String(me.displayName).trim()
+            ? String(me.displayName).trim()
+            : "";
+        if (nameIn.value !== serverName) nameIn.value = serverName;
+      }
       adminBox.classList.toggle("hidden", !isAdmin);
       playerBox.classList.toggle("hidden", !(me && me.role === "player"));
       // Spectate controls on Roster — only while you are a spectator
       const amSpectator = !!(me && me.role === "spectator");
-      const isVersus = rosterData.mode === "versus";
+      const isRace = rosterData.mode === "race";
       const isCoop = rosterData.mode === "coop";
-      spectateBar.style.display = amSpectator && (isVersus || isCoop) ? "" : "none";
-      // Co-op spectators watch the shared native board — mosaic is versus-only
-      if (amSpectator && isCoop && self.app.versus) {
-        self.app.versus.spectateMode = "focus";
+      spectateBar.style.display = amSpectator && (isRace || isCoop) ? "" : "none";
+      // Co-op spectators watch the shared native board — mosaic is race-only
+      if (amSpectator && isCoop && self.app.race) {
+        self.app.race.spectateMode = "focus";
         mosaicBtn.style.display = "none";
-      } else if (amSpectator && self.app.versus) {
+      } else if (amSpectator && self.app.race) {
         mosaicBtn.style.display = "";
         mosaicBtn.textContent =
-          self.app.versus.spectateMode === "mosaic" ? "Focus view" : "Mosaic";
+          self.app.race.spectateMode === "mosaic" ? "Focus view" : "Mosaic";
       }
-      // Versus attempt length / goal / finish-ongoing are versus-only
-      paintModeButtons(rosterData.mode || "versus");
-      const showVersusOpts = !!isVersus;
-      durField.classList.toggle("hidden", !showVersusOpts);
-      durField.style.display = showVersusOpts ? "" : "none";
-      const goalFieldEl = document.getElementById("mp-versus-goal-field");
+      // Race attempt length / goal / finish-ongoing are race-only
+      paintModeButtons(rosterData.mode || "race");
+      const showRaceOpts = !!isRace;
+      durField.classList.toggle("hidden", !showRaceOpts);
+      durField.style.display = showRaceOpts ? "" : "none";
+      const goalFieldEl = document.getElementById("mp-race-goal-field");
       if (goalFieldEl) {
-        goalFieldEl.classList.toggle("hidden", !showVersusOpts);
-        goalFieldEl.style.display = showVersusOpts ? "" : "none";
+        goalFieldEl.classList.toggle("hidden", !showRaceOpts);
+        goalFieldEl.style.display = showRaceOpts ? "" : "none";
       }
-      finishOngoingWrap.classList.toggle("hidden", !showVersusOpts);
-      finishOngoingWrap.style.display = showVersusOpts ? "" : "none";
+      finishOngoingWrap.classList.toggle("hidden", !showRaceOpts);
+      finishOngoingWrap.style.display = showRaceOpts ? "" : "none";
+      // Reset on goal: connected + race + non-spectator player only
+      syncResetOnGoalVisibility(
+        rosterData.mode || "",
+        connected,
+        me && me.role
+      );
       colorHint.classList.toggle("hidden", !isCoop);
       colorHint.style.display = isCoop ? "" : "none";
       if (
-        showVersusOpts &&
+        showRaceOpts &&
         rosterData.finishOngoingRuns != null &&
         document.activeElement !== finishOngoingCb
       ) {
@@ -1233,17 +1357,17 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         const serverMins = String(Math.max(1, Number(rosterData.durationMin)));
         if (document.activeElement !== dur && dur.value !== serverMins) {
           dur.value = serverMins;
-          lsSet("MULTIPLAYER_VERSUS_ATTEMPT_MIN", serverMins);
+          lsSet("MULTIPLAYER_RACE_ATTEMPT_MIN", serverMins);
         }
       }
-      if (!isCoop && rosterData.versusGoal && document.activeElement !== goalSel) {
+      if (!isCoop && rosterData.raceGoal && document.activeElement !== goalSel) {
         const g =
-          VersusState && VersusState.normalizeGoal
-            ? VersusState.normalizeGoal(rosterData.versusGoal)
-            : rosterData.versusGoal;
+          RaceState && RaceState.normalizeGoal
+            ? RaceState.normalizeGoal(rosterData.raceGoal)
+            : rosterData.raceGoal;
         if (goalSel.value !== g) {
           goalSel.value = g;
-          lsSet("MULTIPLAYER_VERSUS_GOAL", g);
+          lsSet("MULTIPLAYER_RACE_GOAL", g);
         }
       }
       // End match is how the admin leaves a live (or stuck) run and gets
@@ -1253,10 +1377,10 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       // on a hidden death screen.
       const sessionOn = !!rosterData.sessionActive;
       const matchOver = !!(
-        rosterData.mode === "versus" &&
+        rosterData.mode === "race" &&
         (rosterData.allowNewRuns === false ||
           rosterData.attemptExpired ||
-          (self.app.versus && self.app.versus.expired))
+          (self.app.race && self.app.race.expired))
       );
       const coopLive = !!(
         (self.app && self.app._coopSessionActive) ||
@@ -1265,18 +1389,10 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       const showEnd = !!(isAdmin && (sessionOn || coopLive));
       endBtn.classList.toggle("hidden", !showEnd);
       endBtn.style.display = showEnd ? "" : "none";
-      matchHint.style.display =
-        !connected || (isAdmin || (me && me.role === "player")) ? "none" : "block";
-      // Start match has nothing left to do once a match is live — including
-      // finish-ongoing grace (sessionActive stays true until all runs end).
-      const canOfferStart = !sessionOn;
-      startBtn.classList.toggle("hidden", !canOfferStart);
-      startBtn.style.display = canOfferStart ? "" : "none";
-      startBtn.disabled =
-        !Session.canStart(rosterData) ||
-        (rosterData.mode === "versus" &&
-          rosterData.sessionActive &&
-          rosterData.allowNewRuns === false);
+      // Native Play is Start Match / Start Co-op for the admin
+      if (self.app && self.app._paintPlayAsStartMatch) {
+        self.app._paintPlayAsStartMatch();
+      }
       readyBtn.textContent = me && me.ready ? "Unready" : "Ready";
       // Every player readies on the in-game Shuffle→Ready button, admin
       // included; only spectator seats keep the Match Ready button.
@@ -1289,7 +1405,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       roomIn.value = rosterData.roomCode || roomIn.value;
       if (rosterData.roomCode) lsSet("MULTIPLAYER_ROOM_CODE", rosterData.roomCode);
       if (
-        rosterData.mode === "versus" &&
+        rosterData.mode === "race" &&
         (rosterData.allowNewRuns === false || rosterData.attemptExpired)
       ) {
         let suffix = " · no new runs";
@@ -1300,32 +1416,32 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         }
         status.textContent =
           (connected
-            ? "Connected · versus · room " + (rosterData.roomCode || "")
+            ? "Connected · race · room " + (rosterData.roomCode || "")
             : "Disconnected") + suffix;
       }
 
       const showBestToggle = !!(isAdmin && showBestCb.checked);
       const hasScores = !!(
-        self.app.versus &&
-        self.app.versus.scores &&
-        Object.keys(self.app.versus.scores).length
+        self.app.race &&
+        self.app.race.scores &&
+        Object.keys(self.app.race.scores).length
       );
       // After match end: show goal bests to everyone (not only admin "Best times")
       const showBest = showBestToggle || (matchOver && hasScores);
       showBestWrap.classList.toggle("hidden", !isAdmin);
       const clients = rosterData.clients || [];
-      const VersusStateApi = root.VersusState;
+      const RaceStateApi = root.RaceState;
       const goalId =
-        (self.app.versus && self.app.versus.versusGoal) ||
-        rosterData.versusGoal ||
+        (self.app.race && self.app.race.raceGoal) ||
+        rosterData.raceGoal ||
         "score";
       const goalLabel =
-        (VersusStateApi && VersusStateApi.goalLabel && VersusStateApi.goalLabel(goalId)) ||
-        rosterData.versusGoalLabel ||
+        (RaceStateApi && RaceStateApi.goalLabel && RaceStateApi.goalLabel(goalId)) ||
+        rosterData.raceGoalLabel ||
         "Score";
       const winId =
-        (self.app.versus &&
-          (self.app.versus.winnerClientId || self.app.versus.leaderClientId)) ||
+        (self.app.race &&
+          (self.app.race.winnerClientId || self.app.race.leaderClientId)) ||
         rosterData.leaderClientId ||
         null;
 
@@ -1342,7 +1458,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           " spec" +
           (rosterData.mode ? " · " + rosterData.mode : "")
         : "Not connected";
-      if (rosterData.mode === "versus" && winId && (matchOver || hasScores)) {
+      if (rosterData.mode === "race" && winId && (matchOver || hasScores)) {
         const c = clients.find(function (x) {
           return x.clientId === winId;
         });
@@ -1351,13 +1467,13 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           String(winId).slice(0, 6);
         const tag = matchOver ? "Winner" : "Leading";
         const winSc =
-          (self.app.versus &&
-            self.app.versus.scores &&
-            self.app.versus.scores[winId]) ||
+          (self.app.race &&
+            self.app.race.scores &&
+            self.app.race.scores[winId]) ||
           {};
         const detail =
-          VersusStateApi && VersusStateApi.formatGoalDetail
-            ? VersusStateApi.formatGoalDetail(winSc, goalId)
+          RaceStateApi && RaceStateApi.formatGoalDetail
+            ? RaceStateApi.formatGoalDetail(winSc, goalId)
             : goalLabel;
         hint = tag + ": " + nm + " · " + detail + " — " + hint;
       }
@@ -1366,9 +1482,9 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       const myId = self.app.client && self.app.client.clientId;
 
       const focusId =
-        (self.app.versus && self.app.versus.focusClientId) || null;
+        (self.app.race && self.app.race.focusClientId) || null;
       const spectateMode =
-        (self.app.versus && self.app.versus.spectateMode) || "focus";
+        (self.app.race && self.app.race.spectateMode) || "focus";
       const structKey = rosterStructureKey(
         rosterData,
         isAdmin,
@@ -1378,7 +1494,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         spectateMode
       );
       if (structKey === self._rosterStructKey && roster.childNodes.length) {
-        // Same seats/roles — only refresh score lines
+        // Same seats/roles — refresh score lines + color dots
         self.updateRosterScores();
         return;
       }
@@ -1397,7 +1513,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         row.setAttribute("data-mp-row", c.clientId);
         const watching =
           amSpectator &&
-          isVersus &&
+          isRace &&
           c.role === "player" &&
           focusId &&
           focusId === c.clientId;
@@ -1406,7 +1522,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 
         const nameRow = el("div", "mp-roster-name");
         const canWatch =
-          amSpectator && isVersus && c.role === "player";
+          amSpectator && isRace && c.role === "player";
         if (canWatch) {
           nameRow.classList.add("mp-roster-name-watch");
           nameRow.setAttribute("data-mp-act", "focus");
@@ -1629,17 +1745,17 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 
     this.hud.style.display = "block";
     let html = "<h4>" + (r.mode || "").toUpperCase() + "</h4>";
-    if (r.mode === "versus" && app.versus) {
-      const VersusState = root.VersusState;
+    if (r.mode === "race" && app.race) {
+      const RaceState = root.RaceState;
       const goal =
-        app.versus.versusGoal || r.versusGoal || "score";
+        app.race.raceGoal || r.raceGoal || "score";
       const goalLabel =
-        (VersusState && VersusState.goalLabel && VersusState.goalLabel(goal)) ||
-        r.versusGoalLabel ||
+        (RaceState && RaceState.goalLabel && RaceState.goalLabel(goal)) ||
+        r.raceGoalLabel ||
         "Score";
-      const scores = app.versus.scores || {};
+      const scores = app.race.scores || {};
       const matchOver = !!(
-        app.versus.expired ||
+        app.race.expired ||
         r.attemptExpired ||
         (r.allowNewRuns === false && Object.keys(scores).length)
       );
@@ -1649,17 +1765,17 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         r.attemptExpired &&
         r.sessionActive &&
         (r.finishOngoingRuns !== false ||
-          (app.versus && app.versus.finishOngoing))
+          (app.race && app.race.finishOngoing))
       );
       if (
         r.sessionActive &&
-        app.versus.attemptRemainingMs != null &&
-        !app.versus.expired &&
+        app.race.attemptRemainingMs != null &&
+        !app.race.expired &&
         !r.attemptExpired
       ) {
         const s = Math.max(
           0,
-          Math.ceil(Number(app.versus.attemptRemainingMs) / 1000)
+          Math.ceil(Number(app.race.attemptRemainingMs) / 1000)
         );
         html +=
           '<div class="mp-hud-meta">Attempt: ' +
@@ -1674,10 +1790,10 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       }
 
       const winId =
-        app.versus.winnerClientId ||
-        app.versus.leaderClientId ||
-        (VersusState && VersusState.pickLeader
-          ? VersusState.pickLeader(scores, goal)
+        app.race.winnerClientId ||
+        app.race.leaderClientId ||
+        (RaceState && RaceState.pickLeader
+          ? RaceState.pickLeader(scores, goal)
           : null);
 
       if (matchOver && !finishingRuns && Object.keys(scores).length) {
@@ -1685,8 +1801,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         if (winId) {
           const winSc = scores[winId] || {};
           const detail =
-            VersusState && VersusState.formatGoalDetail
-              ? VersusState.formatGoalDetail(winSc, goal)
+            RaceState && RaceState.formatGoalDetail
+              ? RaceState.formatGoalDetail(winSc, goal)
               : goalLabel;
           html +=
             '<div class="mp-hud-winner">Winner: ' +
@@ -1701,20 +1817,20 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       } else if (winId) {
         html +=
           "<div><strong>Leading: " + nameOf(winId) + "</strong></div>";
-      } else if (app.versus.expired || r.allowNewRuns === false) {
+      } else if (app.race.expired || r.allowNewRuns === false) {
         html += "<div>No new runs</div>";
       }
 
       const ordered =
-        VersusState && VersusState.rankPlayers
-          ? VersusState.rankPlayers(scores, goal)
+        RaceState && RaceState.rankPlayers
+          ? RaceState.rankPlayers(scores, goal)
           : Object.keys(scores);
       ordered.forEach(function (id, idx) {
         const sc = scores[id];
         if (!sc) return;
         const bestLine =
-          VersusState && VersusState.formatGoalBest
-            ? VersusState.formatGoalBest(sc, goal)
+          RaceState && RaceState.formatGoalBest
+            ? RaceState.formatGoalBest(sc, goal)
             : sc.bestScore != null
               ? String(sc.bestScore)
               : "—";
@@ -1744,10 +1860,10 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           line +
           "</div>";
       });
-      if (app.versus.focusClientId) {
+      if (app.race.focusClientId) {
         html +=
           '<div class="mp-hud-meta">Focus: ' +
-          nameOf(app.versus.focusClientId) +
+          nameOf(app.race.focusClientId) +
           "</div>";
       }
       if (
@@ -1757,7 +1873,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       ) {
         html +=
           '<div class="mp-hud-meta">View: ' +
-          (app.versus.spectateMode === "mosaic" ? "mosaic" : "focus") +
+          (app.race.spectateMode === "mosaic" ? "mosaic" : "focus") +
           "</div>";
       }
     }
@@ -1801,7 +1917,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     if (!page) {
       const me = this.app && this.app.client && this.app.client.me && this.app.client.me();
       if (me && me.role === "spectator") page = "roster";
-      else page = root.__mpSettingsSubPage || "connect";
+      else page = root.__mpSettingsSubPage || "control";
     }
     showSubPage(page);
     if (typeof root.remixPaintSettingsTabs === "function") {

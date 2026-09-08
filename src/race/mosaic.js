@@ -1,5 +1,5 @@
 /**
- * Versus mosaic spectate — mini-board grid over all players.
+ * Race mosaic spectate — mini-board grid over all players.
  * Installed onto MultiplayerApp.
  */
 (function (root) {
@@ -8,7 +8,7 @@
     App.__mpMosaicInstalled = true;
 
     const Gsm = root.MultiplayerGsm;
-    const VersusState = root.VersusState;
+    const RaceState = root.RaceState;
 
     // Beyond this a pip row stops being readable in a mosaic cell — show a count.
     const CAT_PIP_LIMIT = 12;
@@ -91,7 +91,7 @@
       const self = this;
       function frame() {
         if (!self._mosaicAnimRaf) return;
-        if (!self.versus || self.versus.spectateMode !== "mosaic") {
+        if (!self.race || self.race.spectateMode !== "mosaic") {
           self._mosaicAnimRaf = 0;
           return;
         }
@@ -121,7 +121,7 @@
           (cell && cell.__mpCanvas) ||
           (cell && cell.querySelector ? cell.querySelector("canvas") : null);
         if (!canvas || !Gsm.snakeMotionActive(canvas)) return;
-        const board = self.versus.boards[id];
+        const board = self.race.boards[id];
         if (!board) return;
         Gsm.drawBoardOnCanvas(
           canvas,
@@ -144,13 +144,13 @@
       const self = this;
       if (typeof window !== "undefined") {
         window.__mpMosaicRepaint = function () {
-          if (self.versus && self.versus.spectateMode === "mosaic") {
+          if (self.race && self.race.spectateMode === "mosaic") {
             self.renderMosaic();
           }
         };
         if (!this._mosaicResizeBound) {
           this._mosaicResizeBound = function () {
-            if (self.versus && self.versus.spectateMode === "mosaic") {
+            if (self.race && self.race.spectateMode === "mosaic") {
               self.renderMosaic();
             }
           };
@@ -178,7 +178,7 @@
       let gridH = 15;
       let chrome = 28; // label + flex gaps
       for (let i = 0; i < players.length; i++) {
-        const b = this.versus && this.versus.boards[players[i].clientId];
+        const b = this.race && this.race.boards[players[i].clientId];
         if (b && b.width > 0 && b.height > 0) {
           gridW = b.width | 0;
           gridH = b.height | 0;
@@ -256,10 +256,10 @@
       const isSpec =
         me &&
         me.role === "spectator" &&
-        (mode === "versus" || mode === "coop");
+        (mode === "race" || mode === "coop");
       const sessionOn = !!(this.client.roster && this.client.roster.sessionActive);
-      // Versus mosaic only — co-op spectators use the shared native board
-      const mosaicOn = this.versus.spectateMode === "mosaic" && mode === "versus";
+      // Race mosaic only — co-op spectators use the shared native board
+      const mosaicOn = this.race.spectateMode === "mosaic" && mode === "race";
       if (!isSpec || !mosaicOn || !sessionOn) {
         el.style.display = "none";
         if (typeof this._stopMosaicLabelTick === "function") {
@@ -272,7 +272,7 @@
         this._ensureMosaicLabelTick();
       }
       this._ensureMosaicAnim();
-      if (!labelsOnly) this._leaveVersusFocusSpectate();
+      if (!labelsOnly) this._leaveRaceFocusSpectate();
 
       const players = (this.client.roster.clients || []).filter(function (c) {
         return c.role === "player";
@@ -285,12 +285,12 @@
 
       if (!labelsOnly) {
         let chromeBorder = null;
-        const focusBoard = this.versus.boards[this.versus.focusClientId];
+        const focusBoard = this.race.boards[this.race.focusClientId];
         if (focusBoard && focusBoard.themeColors && focusBoard.themeColors.border) {
           chromeBorder = focusBoard.themeColors.border;
         } else {
           for (let i = 0; i < players.length; i++) {
-            const b = this.versus.boards[players[i].clientId];
+            const b = this.race.boards[players[i].clientId];
             if (b && b.themeColors && b.themeColors.border) {
               chromeBorder = b.themeColors.border;
               break;
@@ -303,14 +303,14 @@
       const seen = {};
       const self = this;
       const goal =
-        (this.versus && this.versus.versusGoal) ||
-        (this.client.roster && this.client.roster.versusGoal) ||
+        (this.race && this.race.raceGoal) ||
+        (this.client.roster && this.client.roster.raceGoal) ||
         "score";
       const leadId =
-        (this.versus &&
-          (this.versus.winnerClientId || this.versus.leaderClientId)) ||
-        (VersusState && VersusState.pickLeader
-          ? VersusState.pickLeader(this.versus.scores, goal)
+        (this.race &&
+          (this.race.winnerClientId || this.race.leaderClientId)) ||
+        (RaceState && RaceState.pickLeader
+          ? RaceState.pickLeader(this.race.scores, goal)
           : null);
       players.forEach(function (p) {
         seen[p.clientId] = true;
@@ -350,10 +350,10 @@
             p.displayName ||
             p.colorName ||
             p.clientId.slice(0, 6);
-          const boardForTime = self.versus.boards[p.clientId];
-          const sc = self.versus.scores && self.versus.scores[p.clientId];
+          const boardForTime = self.race.boards[p.clientId];
+          const sc = self.race.scores && self.race.scores[p.clientId];
           const runClock =
-            self.versus.runClocks && self.versus.runClocks[p.clientId];
+            self.race.runClocks && self.race.runClocks[p.clientId];
           const fallbackMs =
             sc && sc.timeMs != null && Number.isFinite(Number(sc.timeMs))
               ? Number(sc.timeMs)
@@ -363,18 +363,18 @@
                 ? Number(boardForTime.timeMs)
                 : null;
           const timeMs =
-            VersusState && VersusState.resolveRunClockMs
-              ? VersusState.resolveRunClockMs(runClock, Date.now(), fallbackMs)
+            RaceState && RaceState.resolveRunClockMs
+              ? RaceState.resolveRunClockMs(runClock, Date.now(), fallbackMs)
               : fallbackMs;
           const clock =
-            VersusState && VersusState.formatRunClock
-              ? VersusState.formatRunClock(timeMs)
+            RaceState && RaceState.formatRunClock
+              ? RaceState.formatRunClock(timeMs)
               : timeMs == null
                 ? "—"
                 : String(Math.floor(timeMs / 1000)) + "s";
           const best =
-            VersusState && VersusState.formatGoalBest
-              ? VersusState.formatGoalBest(sc, goal)
+            RaceState && RaceState.formatGoalBest
+              ? RaceState.formatGoalBest(sc, goal)
               : sc && sc.bestScore != null
                 ? String(sc.bestScore)
                 : "—";
@@ -385,18 +385,18 @@
         }
         cell.classList.toggle(
           "mp-mosaic-focus",
-          p.clientId === self.versus.focusClientId
+          p.clientId === self.race.focusClientId
         );
         paintCatLives(
           cell.querySelector(".mp-mosaic-cat"),
-          self.versus.boards[p.clientId]
+          self.race.boards[p.clientId]
         );
         const canvas = cell.querySelector("canvas");
         if (canvas) {
           self._sizeMosaicCanvas(canvas, boardCss.w, boardCss.h);
         }
         if (labelsOnly) return;
-        const board = self.versus.boards[p.clientId];
+        const board = self.race.boards[p.clientId];
         const colorInfo = self._colorForClient(p.clientId);
         if (canvas && board) {
           Gsm.drawBoardOnCanvas(

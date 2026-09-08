@@ -32,6 +32,17 @@ pub enum MsgType {
     BoardDelta,
     BoardSnapshot,
     SpectateFocus,
+    SnakeDelta,
+    CollectablesDelta,
+    CoopPlayerDead,
+    CoopGoal,
+    CoopTimerStart,
+    CoopInput,
+    CoopState,
+    CoopEvent,
+    CoopBoardInit,
+    CoopBoardReady,
+    CoopSpeedTransition,
     Error,
     Ping,
     Pong,
@@ -100,7 +111,9 @@ mod tests {
     #[test]
     fn rejects_bad_version() {
         let raw = r#"{"v":99,"type":"HELLO","payload":{}}"#;
-        assert!(parse_envelope(raw).unwrap_err().contains("version_mismatch"));
+        assert!(parse_envelope(raw)
+            .unwrap_err()
+            .contains("version_mismatch"));
     }
 
     #[test]

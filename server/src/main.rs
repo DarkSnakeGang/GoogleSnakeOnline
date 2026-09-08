@@ -23,7 +23,10 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
-#[command(name = "multiplayer-server", about = "Google Snake LAN multiplayer room server")]
+#[command(
+    name = "multiplayer-server",
+    about = "Google Snake LAN multiplayer room server"
+)]
 struct Args {
     /// Bind address (LAN: 0.0.0.0:7777)
     #[arg(long, env = "MULTIPLAYER_BIND", default_value = "0.0.0.0:7777")]
@@ -44,12 +47,17 @@ struct Args {
     /// Optional PEM private key for native wss:// (required with --tls-cert)
     #[arg(long, env = "MULTIPLAYER_TLS_KEY")]
     tls_key: Option<PathBuf>,
+
+    /// Experimental native co-op relay (default keeps the Rust server simulation)
+    #[arg(long, env = "MULTIPLAYER_COOP_NATIVE_RELAY", default_value_t = false)]
+    coop_native_relay: bool,
 }
 
 struct AppState {
     rooms: Mutex<HashMap<String, Room>>,
     clients: Mutex<HashMap<String, mpsc::UnboundedSender<String>>>,
     membership: Mutex<HashMap<String, String>>,
+    coop_native_relay: bool,
 }
 
 const MAX_WS_TEXT_BYTES: usize = 256 * 1024;
@@ -75,15 +83,18 @@ fn sanitize_display_name(raw: Option<String>) -> Option<String> {
 fn is_valid_room_code(code: &str) -> bool {
     let bytes = code.as_bytes();
     bytes.len() == 4
-        && bytes.iter().all(|b| matches!(b, b'A'..=b'H' | b'J'..=b'N' | b'P'..=b'Z' | b'2'..=b'9'))
+        && bytes
+            .iter()
+            .all(|b| matches!(b, b'A'..=b'H' | b'J'..=b'N' | b'P'..=b'Z' | b'2'..=b'9'))
 }
 
 impl AppState {
-    fn new() -> Self {
+    fn new(coop_native_relay: bool) -> Self {
         Self {
             rooms: Mutex::new(HashMap::new()),
             clients: Mutex::new(HashMap::new()),
             membership: Mutex::new(HashMap::new()),
+            coop_native_relay,
         }
     }
 
@@ -101,7 +112,10 @@ impl AppState {
         } else {
             code.to_string()
         };
-        rooms.insert(c.clone(), Room::new(c.clone()));
+        rooms.insert(
+            c.clone(),
+            Room::new_with_coop_native_relay(c.clone(), self.coop_native_relay),
+        );
         info!(roomId = %c, event = "room_create");
         c
     }
@@ -211,7 +225,16 @@ async fn main() {
         }
     };
 
-    let state = Arc::new(AppState::new());
+    let state = Arc::new(AppState::new(args.coop_native_relay));
+    info!(
+        coopNativeRelay = args.coop_native_relay,
+        coopAuthority = if args.coop_native_relay {
+            "native-relay-v1"
+        } else {
+            "server-sim-v1"
+        },
+        event = "coop_authority_config"
+    );
     if !args.default_room.is_empty() {
         state.get_or_create_room(&args.default_room);
     }
@@ -448,7 +471,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
             match join_result {
                 Ok(()) => {
-                    state.membership.lock().insert(client_id.clone(), code.clone());
+                    state
+                        .membership
+                        .lock()
+                        .insert(client_id.clone(), code.clone());
                     room_code = Some(code.clone());
                     state.flush_outbox(&code);
                 }

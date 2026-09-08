@@ -539,7 +539,7 @@ describe("GSM hook harness", () => {
     assert.equal(typeof win.__remixGame.wa.ka[0].pos.clone, "function");
   });
 
-  it("applySpectateState apple.pos.clone works when fruit list was empty (versus Focus)", () => {
+  it("applySpectateState apple.pos.clone works when fruit list was empty (Race Focus)", () => {
     // Repro: spectator Play starts with wa.ka=[], BOARD_DELTA grows apples with
     // plain {x,y} pos → native L3E.render throws `b.pos.clone is not a function`.
     win.__remixGame.oa.ka = [];
@@ -588,8 +588,8 @@ describe("GSM hook harness", () => {
       this.nj = true;
     };
     win.__remixGame.nj = false;
-    win.__mpVersusFocusSpectate = true;
-    win.__mpVersusFocusBoard = {
+    win.__mpRaceFocusSpectate = true;
+    win.__mpRaceFocusBoard = {
       alive: true,
       body: [
         { x: 5, y: 5 },
@@ -597,24 +597,24 @@ describe("GSM hook harness", () => {
       ],
       dir: "RIGHT",
     };
-    Gsm.applySpectateState(null, win.__mpVersusFocusBoard);
+    Gsm.applySpectateState(null, win.__mpRaceFocusBoard);
     assert.equal(win.__remixGame.__mpFocusDieGuarded, true);
     win.__remixGame.die();
     assert.equal(realDie, 0, "false local death must not run");
     assert.equal(win.__remixGame.nj, false);
-    win.__mpVersusFocusBoard = {
+    win.__mpRaceFocusBoard = {
       alive: false,
       body: [{ x: 5, y: 5 }],
       dir: "RIGHT",
     };
-    Gsm.applySpectateState(null, win.__mpVersusFocusBoard);
+    Gsm.applySpectateState(null, win.__mpRaceFocusBoard);
     assert.equal(win.__remixGame.nj, true, "remote death must mark dead");
     win.__remixGame.die();
     assert.equal(realDie, 0, "Focus must never call native die (endscreen)");
   });
 
   it("Focus revive clears stuck death when remote alive after false", () => {
-    win.__mpVersusFocusSpectate = true;
+    win.__mpRaceFocusSpectate = true;
     win.__remixGame.nj = true;
     win.__remixGame.dead = true;
     win.timeKeeper._dead = true;
@@ -642,7 +642,7 @@ describe("GSM hook harness", () => {
   });
 
   it("Focus start inject seats remote body not local spawn leftovers", () => {
-    win.__mpVersusFocusSpectate = true;
+    win.__mpRaceFocusSpectate = true;
     win.__mpFocusSeated = false;
     win.__remixGame.oa.ka = [
       { x: 0, y: 0 },
@@ -664,7 +664,7 @@ describe("GSM hook harness", () => {
   });
 
   it("Focus after seat writes full remote body (connected trail)", () => {
-    win.__mpVersusFocusSpectate = true;
+    win.__mpRaceFocusSpectate = true;
     win.__mpFocusSeated = false;
     win.timeKeeper.playing = false;
     win.timeKeeper._lastTimeMs = 0;
@@ -700,7 +700,7 @@ describe("GSM hook harness", () => {
   });
 
   it("Focus length change after seat reseats full remote body (connected)", () => {
-    win.__mpVersusFocusSpectate = true;
+    win.__mpRaceFocusSpectate = true;
     win.__mpFocusSeated = false;
     Gsm.applySpectateState(null, {
       alive: true,
@@ -739,7 +739,7 @@ describe("GSM hook harness", () => {
   });
 
   it("Focus empty apples while remote alive parks fruit (no ALL/nj loop)", () => {
-    win.__mpVersusFocusSpectate = true;
+    win.__mpRaceFocusSpectate = true;
     win.__mpFocusSeated = false;
     win.__remixGame.nj = false;
     win.__remixGame.wa.ka = [
@@ -784,7 +784,7 @@ describe("GSM hook harness", () => {
   });
 
   it("Focus tick guard reseats connected body after local physics crawl", () => {
-    win.__mpVersusFocusSpectate = true;
+    win.__mpRaceFocusSpectate = true;
     win.__mpFocusSeated = false;
     win.__remixGame.tick = function () {
       this.oa.ka[0].x += 1;
@@ -806,7 +806,7 @@ describe("GSM hook harness", () => {
   });
 
   it("Focus inject methods: head-only fragments; follow and full-body stay connected", () => {
-    win.__mpVersusFocusSpectate = true;
+    win.__mpRaceFocusSpectate = true;
     win.__mpFocusSeated = false;
     const seat = [
       { x: 2, y: 5 },
@@ -875,7 +875,7 @@ describe("GSM hook harness", () => {
   });
 
   it("Focus unchanged pose does not rewrite body (avoids flicker)", () => {
-    win.__mpVersusFocusSpectate = true;
+    win.__mpRaceFocusSpectate = true;
     win.__mpFocusSeated = false;
     Gsm.applySpectateState(null, {
       alive: true,
@@ -906,7 +906,7 @@ describe("GSM hook harness", () => {
     overlay.style.visibility = "hidden";
     win.document.body.appendChild(overlay);
     win.timeKeeper = { _dead: false, playing: false };
-    win.__mpVersusFocusSpectate = true;
+    win.__mpRaceFocusSpectate = true;
     win.__mpFocusRequirePlay = true;
     win.__mpLastPlayClickAt = 0;
     assert.equal(Gsm.isNativeRunLive(), false, "hidden overlay alone is not live");
@@ -1216,6 +1216,48 @@ describe("GSM hook harness", () => {
     delete win.__multiplayerApp;
   });
 
+  it("applyCollectables never leaves fruit nba as null (tick .has crash)", () => {
+    win.__remixGame.wa.ka = [
+      {
+        pos: {
+          x: 1,
+          y: 1,
+          clone: function () {
+            return { x: this.x, y: this.y };
+          },
+        },
+        type: 0,
+        nba: null,
+        Oba: null,
+      },
+    ];
+    assert.equal(
+      Gsm.applyCollectables({
+        apples: [{ x: 4, y: 5, type: 0 }],
+      }),
+      true
+    );
+    const a = win.__remixGame.wa.ka[0];
+    assert.ok(a.nba instanceof Set, "nba must be a Set, never null");
+    assert.equal(a.nba.size, 0);
+    assert.equal(
+      Gsm.applyCollectables({
+        apples: [{ x: 4, y: 5, type: 0, shields: ["UP", "LEFT"] }],
+      }),
+      true
+    );
+    assert.ok(a.nba instanceof Set);
+    assert.equal(a.nba.has("UP"), true);
+    assert.equal(
+      Gsm.applyCollectables({
+        apples: [{ x: 4, y: 5, type: 0, shields: [] }],
+      }),
+      true
+    );
+    assert.ok(a.nba instanceof Set);
+    assert.equal(a.nba.size, 0);
+  });
+
   it("applyCoopSpawnOffset writes centered body with oy", () => {
     win.__remixGame.oa.ka = [{ x: 0, y: 0 }];
     win.__remixGame.oa.direction = "UP";
@@ -1228,13 +1270,30 @@ describe("GSM hook harness", () => {
     assert.equal(win.__remixGame.oa.direction, "UP");
   });
 
-  it("applyCoopSpawnOffset keeps center+oy even if wall cells exist", () => {
+  it("applyCoopSpawnOffset prefers server absolute seat when board matches", () => {
+    win.__remixGame.oa.ka = [{ x: 0, y: 0 }];
+    win.__remixGame.oa.wa = [true];
+    const ok = Gsm.applyCoopSpawnOffset(1, {
+      slot: 1,
+      x: 8,
+      y: 9,
+      dir: "RIGHT",
+      boardWidth: 17,
+      boardHeight: 15,
+    });
+    assert.equal(ok, true);
+    assert.equal(win.__remixGame.oa.ka[0].x, 8);
+    assert.equal(win.__remixGame.oa.ka[0].y, 9);
+    assert.equal(win.__remixGame.oa.ka.length, 3);
+    assert.equal(win.__remixGame.oa.wa.length, 3, "dimension flags track body length");
+  });
+
+  it("applyCoopSpawnOffset slides seat off solid wall cells", () => {
     const w = 17;
     const h = 15;
     const cx = Math.floor(w / 2);
     const cy = Math.floor(h / 2);
-    // Wall mode starts empty; even if mid-run walls appear, seats stay fixed
-    win.__remixGame.Ca = { wa: [] };
+    win.__remixGame.Ca = { wa: [], Aa: new Map() };
     for (let y = 0; y < h; y++) {
       win.__remixGame.Ca.wa[y] = [];
       for (let x = 0; x < w; x++) win.__remixGame.Ca.wa[y][x] = 0;
@@ -1247,14 +1306,28 @@ describe("GSM hook harness", () => {
     const ok = Gsm.applyCoopSpawnOffset(0);
     assert.equal(ok, true);
     const head = win.__remixGame.oa.ka[0];
-    assert.equal(head.x, cx, "exact center x");
-    assert.equal(head.y, cy, "exact center y");
+    assert.ok(
+      head.x !== cx || head.y !== cy,
+      "seat must slide off blocked center"
+    );
+    win.__remixGame.oa.ka.forEach(function (p) {
+      assert.notEqual(
+        win.__remixGame.Ca.wa[p.y][p.x],
+        1,
+        "body not on solid wall"
+      );
+    });
   });
 
   it("applyCoopSpawnOffset clamps oy onto small boards", () => {
     // Small size (~7×7): server oy ±4 would paint off the grid
     const w = 7;
     const h = 7;
+    win.__remixGame.Ca = { wa: [], Aa: new Map() };
+    for (let y = 0; y < h; y++) {
+      win.__remixGame.Ca.wa[y] = [];
+      for (let x = 0; x < w; x++) win.__remixGame.Ca.wa[y][x] = 0;
+    }
     win.__remixGame.oa.oa = { width: w, height: h };
     if (win.__remixGame.wa && win.__remixGame.wa.oa) {
       win.__remixGame.wa.oa.oa = { width: w, height: h };
@@ -1263,12 +1336,16 @@ describe("GSM hook harness", () => {
     win.__remixGame.oa.direction = null;
     assert.equal(Gsm.clampCoopSpawnOy(4, h), 3);
     assert.equal(Gsm.clampCoopSpawnOy(-4, h), -3);
-    const ok = Gsm.applyCoopSpawnOffset(4, { slot: 0 });
+    const ok = Gsm.applyCoopSpawnOffset(1, { slot: 0 });
     assert.equal(ok, true);
     const head = win.__remixGame.oa.ka[0];
     assert.ok(head.x >= 0 && head.x < w, "x in bounds got " + head.x);
     assert.ok(head.y >= 0 && head.y < h, "y in bounds got " + head.y);
-    assert.equal(head.y, Math.floor(h / 2) + 3);
+    // Prefer clamped center+oy when clear; clear-seat may nudge off dead-ends
+    assert.ok(
+      Math.abs(head.y - (Math.floor(h / 2) + 1)) <= 2,
+      "near preferred row got y=" + head.y
+    );
     win.__remixGame.oa.ka.forEach(function (p) {
       assert.ok(p.x >= 0 && p.x < w && p.y >= 0 && p.y < h, "body in bounds");
     });
@@ -1279,14 +1356,14 @@ describe("GSM hook harness", () => {
     }
   });
 
-  it("locks match menus while Ready (title + play stay gated)", () => {
+  it("setNativeMenusLocked never blocks match or cosmetic rows", () => {
     Gsm.setNativeMenusLocked(true);
     const trophy = win.document.getElementById("trophy");
-    assert.equal(trophy.style.pointerEvents, "none");
-    assert.equal(trophy.title, "Unready to change settings");
+    assert.equal(trophy.style.pointerEvents, "");
+    assert.equal(trophy.title, "");
     const play = Gsm.playButton();
-    assert.equal(play.style.pointerEvents, "none");
-    assert.match(play.title, /Start match/i);
+    // Menu lock no longer dims Play — Start Match paint owns that button
+    assert.equal(play.style.pointerEvents, "");
     // Cosmetics stay clickable
     ["color", "apple", "graphics", "theme"].forEach((id) => {
       const row = win.document.getElementById(id);
@@ -1568,6 +1645,26 @@ describe("GSM hook harness", () => {
     assert.equal(!!win.pauseGame, false);
   });
 
+  it("quitNativeRunForMenus marks dead and opens overlay menu", () => {
+    const overlay = win.document.createElement("div");
+    overlay.className = "wjOYOd";
+    const menu = win.document.createElement("div");
+    menu.style.visibility = "hidden";
+    overlay.appendChild(menu);
+    win.document.body.appendChild(overlay);
+    win.__remixGame.nj = false;
+    win.__remixGame.dead = false;
+    win.timeKeeper = { _dead: false, playing: true };
+    Gsm.setLocalPaused(false);
+    assert.equal(Gsm.quitNativeRunForMenus({ skipEscapeDispatch: true }), true);
+    assert.equal(!!win.pauseGame, true);
+    assert.equal(win.__remixGame.nj, true);
+    assert.equal(win.timeKeeper._dead, true);
+    assert.equal(overlay.style.visibility, "visible");
+    assert.equal(menu.style.visibility, "visible");
+    overlay.remove();
+  });
+
   it("showDeathScreen pauses run and reveals overlay", () => {
     const overlay = win.document.createElement("div");
     overlay.className = "wjOYOd";
@@ -1671,10 +1768,10 @@ describe("GSM hook harness", () => {
   });
 });
 
-describe("mosaic / focus versus state", () => {
+describe("mosaic / focus race state", () => {
   it("toggles spectate mode and lists boards", () => {
-    const VersusState = require(path.join(ROOT, "src/versus/scoreboard.js"));
-    const v = new VersusState();
+    const RaceState = require(path.join(ROOT, "src/race/scoreboard.js"));
+    const v = new RaceState();
     v.onBoardDelta({ clientId: "p1", board: { score: 1, body: [] } });
     v.onBoardDelta({ clientId: "p2", board: { score: 2, body: [] } });
     assert.equal(v.spectateMode, "focus");
@@ -1684,8 +1781,8 @@ describe("mosaic / focus versus state", () => {
   });
 
   it("stores player themeColors on board delta", () => {
-    const VersusState = require(path.join(ROOT, "src/versus/scoreboard.js"));
-    const v = new VersusState();
+    const RaceState = require(path.join(ROOT, "src/race/scoreboard.js"));
+    const v = new RaceState();
     v.onBoardDelta({
       clientId: "p1",
       board: {
@@ -1700,8 +1797,8 @@ describe("mosaic / focus versus state", () => {
   });
 
   it("stores live Sc/Yc/colorSet on board delta for mosaic colors", () => {
-    const VersusState = require(path.join(ROOT, "src/versus/scoreboard.js"));
-    const v = new VersusState();
+    const RaceState = require(path.join(ROOT, "src/race/scoreboard.js"));
+    const v = new RaceState();
     v.onBoardDelta({
       clientId: "p1",
       board: {
@@ -1728,14 +1825,15 @@ describe("mosaic / focus versus state", () => {
         "shared/protocol.js",
         "runtime/bridge.js",
         "session/ready.js",
-        "versus/scoreboard.js",
+        "race/scoreboard.js",
         "coop/state.js",
+        "coop/session.js",
         "coop/native.js",
         "hooks/gsm.js",
         "net/client.js",
         "ui/settingsTab.js",
-        "versus/focus.js",
-        "versus/mosaic.js",
+        "race/focus.js",
+        "race/mosaic.js",
         "mod.js",
       ].forEach(function (rel) {
         const p = require.resolve(path.join(ROOT, "src", rel));
@@ -1745,7 +1843,7 @@ describe("mosaic / focus versus state", () => {
       return win.MultiplayerApp || require(path.join(ROOT, "src/mod.js")).MultiplayerApp;
     })();
     const app = Object.create(MultiplayerApp.prototype);
-    app.versus = {
+    app.race = {
       boards: {
         p1: {
           colorId: 35,
@@ -1772,8 +1870,8 @@ describe("mosaic / focus versus state", () => {
   });
 
   it("mosaic click path sets focusClientId and focus mode", () => {
-    const VersusState = require(path.join(ROOT, "src/versus/scoreboard.js"));
-    const v = new VersusState();
+    const RaceState = require(path.join(ROOT, "src/race/scoreboard.js"));
+    const v = new RaceState();
     v.setSpectateMode("mosaic");
     v.setFocus("p2");
     v.setSpectateMode("focus");
@@ -1794,14 +1892,15 @@ describe("mosaic / focus versus state", () => {
         "shared/protocol.js",
         "runtime/bridge.js",
         "session/ready.js",
-        "versus/scoreboard.js",
+        "race/scoreboard.js",
         "coop/state.js",
+        "coop/session.js",
         "coop/native.js",
         "hooks/gsm.js",
         "net/client.js",
         "ui/settingsTab.js",
-        "versus/focus.js",
-        "versus/mosaic.js",
+        "race/focus.js",
+        "race/mosaic.js",
         "mod.js",
       ].forEach(function (rel) {
         const p = require.resolve(path.join(ROOT, "src", rel));
@@ -1811,32 +1910,32 @@ describe("mosaic / focus versus state", () => {
       return win.MultiplayerApp || require(path.join(ROOT, "src/mod.js")).MultiplayerApp;
     })();
     const app = new MultiplayerApp();
-    app.versus.setSpectateMode("mosaic");
-    app.versus.boards = {};
+    app.race.setSpectateMode("mosaic");
+    app.race.boards = {};
     const players = [];
     for (let i = 0; i < 4; i++) {
       const id = "p" + (i + 1);
       players.push({ clientId: id, role: "player", displayName: id });
-      app.versus.boards[id] = {
+      app.race.boards[id] = {
         width: 17,
         height: 15,
         body: [],
         apples: [],
         timeMs: 1000,
       };
-      app.versus.scores[id] = { score: i, bestScore: i, alive: true };
+      app.race.scores[id] = { score: i, bestScore: i, alive: true };
     }
     app.client = {
       me: function () {
         return { role: "spectator", clientId: "spec" };
       },
       roster: {
-        mode: "versus",
+        mode: "race",
         sessionActive: true,
         clients: players.concat([{ clientId: "spec", role: "spectator" }]),
       },
     };
-    app._leaveVersusFocusSpectate = function () {};
+    app._leaveRaceFocusSpectate = function () {};
     app._colorForClient = function () {
       return { primary: "#00f", secondary: "#00a" };
     };
@@ -1889,14 +1988,15 @@ describe("mosaic / focus versus state", () => {
         "shared/protocol.js",
         "runtime/bridge.js",
         "session/ready.js",
-        "versus/scoreboard.js",
+        "race/scoreboard.js",
         "coop/state.js",
+        "coop/session.js",
         "coop/native.js",
         "hooks/gsm.js",
         "net/client.js",
         "ui/settingsTab.js",
-        "versus/focus.js",
-        "versus/mosaic.js",
+        "race/focus.js",
+        "race/mosaic.js",
         "mod.js",
       ].forEach(function (rel) {
         const p = require.resolve(path.join(ROOT, "src", rel));
@@ -1905,21 +2005,21 @@ describe("mosaic / focus versus state", () => {
       });
       return win.MultiplayerApp || require(path.join(ROOT, "src/mod.js")).MultiplayerApp;
     })();
-    const VersusState = win.VersusState;
+    const RaceState = win.RaceState;
     const app = new MultiplayerApp();
-    app.versus.setSpectateMode("mosaic");
-    app.versus.versusGoal = "score";
-    app.versus.leaderClientId = "p1";
+    app.race.setSpectateMode("mosaic");
+    app.race.raceGoal = "score";
+    app.race.leaderClientId = "p1";
     const started = Date.now() - 12300;
-    app.versus.scores = {
+    app.race.scores = {
       p1: { score: 3, timeMs: 99999, alive: true, bestScore: 15, bestTimeMs: 40000 },
       p2: { score: 1, timeMs: 5000, alive: false, bestScore: 8, bestTimeMs: 20000 },
     };
-    app.versus.runClocks = {
+    app.race.runClocks = {
       p1: { startedAtMs: started, liveMs: 12300, syncedAtMs: Date.now(), frozenMs: null },
       p2: { startedAtMs: started - 100000, liveMs: 5000, frozenMs: 5000 },
     };
-    app.versus.boards = {
+    app.race.boards = {
       p1: { width: 17, height: 15, body: [], apples: [], timeMs: 10000 },
       p2: { width: 17, height: 15, body: [], apples: [], timeMs: 5000 },
     };
@@ -1928,9 +2028,9 @@ describe("mosaic / focus versus state", () => {
         return { role: "spectator", clientId: "spec" };
       },
       roster: {
-        mode: "versus",
+        mode: "race",
         sessionActive: true,
-        versusGoal: "score",
+        raceGoal: "score",
         clients: [
           { clientId: "p1", role: "player", displayName: "Blue" },
           { clientId: "p2", role: "player", displayName: "Red" },
@@ -1938,7 +2038,7 @@ describe("mosaic / focus versus state", () => {
         ],
       },
     };
-    app._leaveVersusFocusSpectate = function () {};
+    app._leaveRaceFocusSpectate = function () {};
     app._colorForClient = function () {
       return { primary: "#00f", secondary: "#00a" };
     };
@@ -1956,7 +2056,7 @@ describe("mosaic / focus versus state", () => {
       assert.match(label2.textContent, /^Red · 5\.00s · best 8$/);
       assert.equal(app._mosaicCells.p2.classList.contains("mp-mosaic-lead"), false);
       // Live in-game timeMs pulse advances the mosaic clock
-      app.versus.onScorePulse({
+      app.race.onScorePulse({
         clientId: "p1",
         score: 4,
         timeMs: 45600,
@@ -1964,17 +2064,17 @@ describe("mosaic / focus versus state", () => {
         bestScore: 15,
         runStartedAtMs: started,
       });
-      app.versus.leaderClientId = "p2";
+      app.race.leaderClientId = "p2";
       app.renderMosaic({ labelsOnly: true });
       assert.match(label1.textContent, /^Blue · 45\.60s · best 15$/);
       assert.match(label2.textContent, /^★ Red · 5\.00s · best 8$/);
-      assert.equal(VersusState.formatRunClock(12300), "12.30s");
+      assert.equal(RaceState.formatRunClock(12300), "12.30s");
       assert.equal(
-        VersusState.resolveRunClockMs({ liveMs: 2500, frozenMs: null }, 3500),
+        RaceState.resolveRunClockMs({ liveMs: 2500, frozenMs: null }, 3500),
         2500
       );
       assert.equal(
-        VersusState.resolveRunClockMs({ startedAtMs: 1000, frozenMs: 900 }, 9999),
+        RaceState.resolveRunClockMs({ startedAtMs: 1000, frozenMs: 900 }, 9999),
         900
       );
     } finally {
@@ -1995,14 +2095,15 @@ describe("mosaic / focus versus state", () => {
         "shared/protocol.js",
         "runtime/bridge.js",
         "session/ready.js",
-        "versus/scoreboard.js",
+        "race/scoreboard.js",
         "coop/state.js",
+        "coop/session.js",
         "coop/native.js",
         "hooks/gsm.js",
         "net/client.js",
         "ui/settingsTab.js",
-        "versus/focus.js",
-        "versus/mosaic.js",
+        "race/focus.js",
+        "race/mosaic.js",
         "mod.js",
       ].forEach(function (rel) {
         const p = require.resolve(path.join(ROOT, "src", rel));
@@ -2012,10 +2113,10 @@ describe("mosaic / focus versus state", () => {
       return win.MultiplayerApp || require(path.join(ROOT, "src/mod.js")).MultiplayerApp;
     })();
     const app = new MultiplayerApp();
-    app.versus.setSpectateMode("mosaic");
-    app.versus.scores = {};
-    app.versus.runClocks = {};
-    app.versus.boards = {
+    app.race.setSpectateMode("mosaic");
+    app.race.scores = {};
+    app.race.runClocks = {};
+    app.race.boards = {
       // Cat player: 3 of 9 lives left, grace ticking
       p1: {
         width: 17, height: 15, body: [], apples: [],
@@ -2029,7 +2130,7 @@ describe("mosaic / focus versus state", () => {
         return { role: "spectator", clientId: "spec" };
       },
       roster: {
-        mode: "versus",
+        mode: "race",
         sessionActive: true,
         clients: [
           { clientId: "p1", role: "player", displayName: "Blue" },
@@ -2038,7 +2139,7 @@ describe("mosaic / focus versus state", () => {
         ],
       },
     };
-    app._leaveVersusFocusSpectate = function () {};
+    app._leaveRaceFocusSpectate = function () {};
     app._colorForClient = function () {
       return { primary: "#00f", secondary: "#00a" };
     };
@@ -2071,7 +2172,7 @@ describe("mosaic / focus versus state", () => {
       assert.equal(cat2.querySelectorAll(".mp-mosaic-cat-pip").length, 0);
 
       // Spending a life repaints; grace ending drops the countdown
-      app.versus.boards.p1 = {
+      app.race.boards.p1 = {
         width: 17, height: 15, body: [], apples: [],
         catLives: 2, catLivesMax: 9,
       };
@@ -2081,7 +2182,7 @@ describe("mosaic / focus versus state", () => {
       assert.equal(cat1.querySelector(".mp-mosaic-cat-grace"), null);
 
       // Cat mode ending hides the strip again
-      delete app.versus.boards.p1.catLives;
+      delete app.race.boards.p1.catLives;
       app.renderMosaic({ labelsOnly: true });
       assert.equal(cat1.style.display, "none");
 
@@ -2111,7 +2212,7 @@ describe("mosaic / focus versus state", () => {
   });
 });
 
-describe("versus Focus spectate (mosaic view)", () => {
+describe("Race Focus spectate (mosaic view)", () => {
   function loadApp(win) {
     global.window = win;
     global.document = win.document;
@@ -2132,14 +2233,15 @@ describe("versus Focus spectate (mosaic view)", () => {
       "shared/protocol.js",
       "runtime/bridge.js",
       "session/ready.js",
-      "versus/scoreboard.js",
+      "race/scoreboard.js",
       "coop/state.js",
+      "coop/session.js",
       "coop/native.js",
       "hooks/gsm.js",
       "net/client.js",
       "ui/settingsTab.js",
-      "versus/focus.js",
-      "versus/mosaic.js",
+      "race/focus.js",
+      "race/mosaic.js",
       "mod.js",
     ].forEach(function (rel) {
       const p = require.resolve(path.join(ROOT, "src", rel));
@@ -2162,9 +2264,9 @@ describe("versus Focus spectate (mosaic view)", () => {
         return { clientId: "spec", role: "spectator" };
       },
       roster: {
-        mode: "versus",
+        mode: "race",
         sessionActive: true,
-        versusGoal: "score",
+        raceGoal: "score",
         clients: [
           { clientId: "admin", role: "player", colorId: 4, resolvedName: "Ada" },
           { clientId: "spec", role: "spectator" },
@@ -2177,9 +2279,9 @@ describe("versus Focus spectate (mosaic view)", () => {
     app._colorForClient = function () {
       return { primary: "#4e7cf6", secondary: "#3b5fd0" };
     };
-    app.versus.spectateMode = "focus";
-    app.versus.focusClientId = "admin";
-    if (board) app.versus.boards.admin = board;
+    app.race.spectateMode = "focus";
+    app.race.focusClientId = "admin";
+    if (board) app.race.boards.admin = board;
     return app;
   }
 
@@ -2257,7 +2359,7 @@ describe("versus Focus spectate (mosaic view)", () => {
       assert.equal(view.style.display, "block");
       assert.equal(draws.length, 1);
       assert.equal(draws[0].canvas.className, "mp-focus-canvas");
-      assert.equal(draws[0].board, app.versus.boards.admin);
+      assert.equal(draws[0].board, app.race.boards.admin);
       // Sits exactly on the game canvas, with a border frame around the board
       assert.equal(view.style.left, "40px");
       assert.equal(view.style.top, "60px");
@@ -2272,12 +2374,12 @@ describe("versus Focus spectate (mosaic view)", () => {
       assert.equal(nativeRuns, 0, "focus must not seat a native run");
       assert.equal(playClicks, 0, "focus must not click Play");
       assert.equal(death.style.visibility, "visible", "endscreen untouched");
-      assert.equal(win.__mpVersusFocusWatch, true);
-      assert.equal(win.__mpVersusFocusSpectate, false, "engine inject stays off");
+      assert.equal(win.__mpRaceFocusWatch, true);
+      assert.equal(win.__mpRaceFocusSpectate, false, "engine inject stays off");
       assert.deepEqual(win.__remixGame.oa.ka, [{ x: 1, y: 1 }]);
       assert.equal(win.__remixGame.oa.direction, "LEFT");
     } finally {
-      app._leaveVersusFocusSpectate();
+      app._leaveRaceFocusSpectate();
     }
   });
 
@@ -2288,10 +2390,10 @@ describe("versus Focus spectate (mosaic view)", () => {
     stubGameCanvasBox(win, { left: 0, top: 0, width: 612, height: 540 });
     const app = makeSpectatorApp(win, MultiplayerApp, liveBoard());
     const started = Date.now() - 4200;
-    app.versus.scores = {
+    app.race.scores = {
       admin: { score: 6, bestScore: 12, timeMs: 4200, alive: true },
     };
-    app.versus.runClocks = {
+    app.race.runClocks = {
       admin: { startedAtMs: started, liveMs: 4200, frozenMs: null },
     };
     try {
@@ -2299,8 +2401,8 @@ describe("versus Focus spectate (mosaic view)", () => {
       const label = win.document.querySelector("#mp-focus-view .mp-focus-label");
       assert.match(label.textContent, /^Ada · 6 · 4\.20s · best 12$/);
       assert.equal(label.classList.contains("mp-focus-dead"), false);
-      app.versus.boards.admin = liveBoard({ alive: false, score: 9 });
-      app.versus.runClocks.admin = {
+      app.race.boards.admin = liveBoard({ alive: false, score: 9 });
+      app.race.runClocks.admin = {
         startedAtMs: started,
         liveMs: 4300,
         frozenMs: 4300,
@@ -2309,7 +2411,7 @@ describe("versus Focus spectate (mosaic view)", () => {
       assert.match(label.textContent, /^Ada · 9 · 4\.30s · best 12 · dead$/);
       assert.ok(label.classList.contains("mp-focus-dead"));
     } finally {
-      app._leaveVersusFocusSpectate();
+      app._leaveRaceFocusSpectate();
     }
   });
 
@@ -2326,12 +2428,12 @@ describe("versus Focus spectate (mosaic view)", () => {
       win.__mpSpectateAllowMenus = true;
       app.renderFocusBoard();
       assert.equal(view.style.display, "none", "peek must expose the native UI");
-      assert.equal(app._versusFocusSpectate, true, "still watching");
+      assert.equal(app._raceFocusSpectate, true, "still watching");
       win.__mpSpectateAllowMenus = false;
       app.renderFocusBoard();
       assert.equal(view.style.display, "block");
     } finally {
-      app._leaveVersusFocusSpectate();
+      app._leaveRaceFocusSpectate();
     }
   });
 
@@ -2350,21 +2452,21 @@ describe("versus Focus spectate (mosaic view)", () => {
       assert.equal(draws.length, 1);
       assert.ok(app._focusAnimRaf, "animation loop runs while watching");
       // Each frame repaints the canvas for the player being watched
-      assert.equal(app._animateVersusFocus(), true);
+      assert.equal(app._animateRaceFocus(), true);
       assert.equal(draws.length, 2);
       assert.equal(draws[1].canvas.className, "mp-focus-canvas");
       // Landed on the cell: nothing left to animate
       active = false;
-      assert.equal(app._animateVersusFocus(), false);
+      assert.equal(app._animateRaceFocus(), false);
       assert.equal(draws.length, 2);
       // Peeking at the menus: the view is hidden, so do not paint it
       active = true;
       win.__mpSpectateAllowMenus = true;
-      assert.equal(app._animateVersusFocus(), false);
+      assert.equal(app._animateRaceFocus(), false);
       assert.equal(draws.length, 2);
       win.__mpSpectateAllowMenus = false;
     } finally {
-      app._leaveVersusFocusSpectate();
+      app._leaveRaceFocusSpectate();
       assert.ok(!app._focusAnimRaf, "loop stops with the view");
     }
   });
@@ -2382,22 +2484,22 @@ describe("versus Focus spectate (mosaic view)", () => {
     try {
       app.renderFocusBoard();
       const view = win.document.getElementById("mp-focus-view");
-      assert.ok(app._versusFocusTimer, "label tick runs while watching");
-      app.versus.spectateMode = "mosaic";
+      assert.ok(app._raceFocusTimer, "label tick runs while watching");
+      app.race.spectateMode = "mosaic";
       app.renderFocusBoard();
       assert.equal(view.style.display, "none");
-      assert.equal(app._versusFocusSpectate, false);
-      assert.ok(!app._versusFocusTimer, "label tick stopped");
-      assert.equal(win.__mpVersusFocusWatch, false);
+      assert.equal(app._raceFocusSpectate, false);
+      assert.ok(!app._raceFocusTimer, "label tick stopped");
+      assert.equal(win.__mpRaceFocusWatch, false);
       assert.ok(restored >= 1, "death screen handed back");
     } finally {
-      app._leaveVersusFocusSpectate();
+      app._leaveRaceFocusSpectate();
     }
   });
 });
 
 describe("Multiplayer settings tab layout", () => {
-  it("escapes display names in versus HUD innerHTML", () => {
+  it("escapes display names in race HUD innerHTML", () => {
     const { JSDOM } = require("jsdom");
     const dom = new JSDOM(`<!DOCTYPE html><html><body>
       <div id="settings-popup-pudding">
@@ -2415,7 +2517,7 @@ describe("Multiplayer settings tab layout", () => {
     win.button_color = "#1155CC";
     win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
     win.MultiplayerSession = require(path.join(ROOT, "src/session/ready.js"));
-    win.VersusState = require(path.join(ROOT, "src/versus/scoreboard.js"));
+    win.RaceState = require(path.join(ROOT, "src/race/scoreboard.js"));
     const uiPath = require.resolve(path.join(ROOT, "src/ui/settingsTab.js"));
     delete require.cache[uiPath];
     require(path.join(ROOT, "src/ui/settingsTab.js"));
@@ -2425,7 +2527,7 @@ describe("Multiplayer settings tab layout", () => {
       client: {
         connected: true,
         roster: {
-          mode: "versus",
+          mode: "race",
           sessionActive: true,
           clients: [
             {
@@ -2440,7 +2542,7 @@ describe("Multiplayer settings tab layout", () => {
           return { clientId: "spec", role: "spectator" };
         },
       },
-      versus: {
+      race: {
         spectateMode: "focus",
         scores: { evil: { score: 3, bestScore: 3 } },
         winnerClientId: "evil",
@@ -2473,7 +2575,7 @@ describe("Multiplayer settings tab layout", () => {
     global.document = win.document;
     win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
     win.MultiplayerSession = require(path.join(ROOT, "src/session/ready.js"));
-    win.VersusState = require(path.join(ROOT, "src/versus/scoreboard.js"));
+    win.RaceState = require(path.join(ROOT, "src/race/scoreboard.js"));
     const uiPath = require.resolve(path.join(ROOT, "src/ui/settingsTab.js"));
     delete require.cache[uiPath];
     require(path.join(ROOT, "src/ui/settingsTab.js"));
@@ -2529,7 +2631,7 @@ describe("Multiplayer settings tab layout", () => {
     assert.ok(ui.hud.innerHTML.indexOf("Ended by admin") >= 0);
   });
 
-  it("versus HUD announces ranked last-match results to all players", () => {
+  it("race HUD announces ranked last-match results to all players", () => {
     const { JSDOM } = require("jsdom");
     const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>");
     const win = dom.window;
@@ -2537,7 +2639,7 @@ describe("Multiplayer settings tab layout", () => {
     global.document = win.document;
     win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
     win.MultiplayerSession = require(path.join(ROOT, "src/session/ready.js"));
-    win.VersusState = require(path.join(ROOT, "src/versus/scoreboard.js"));
+    win.RaceState = require(path.join(ROOT, "src/race/scoreboard.js"));
     const uiPath = require.resolve(path.join(ROOT, "src/ui/settingsTab.js"));
     delete require.cache[uiPath];
     require(path.join(ROOT, "src/ui/settingsTab.js"));
@@ -2546,11 +2648,11 @@ describe("Multiplayer settings tab layout", () => {
       client: {
         connected: true,
         roster: {
-          mode: "versus",
+          mode: "race",
           sessionActive: false,
           attemptExpired: true,
           allowNewRuns: false,
-          versusGoal: "score",
+          raceGoal: "score",
           clients: [
             {
               clientId: "p1",
@@ -2570,9 +2672,9 @@ describe("Multiplayer settings tab layout", () => {
           return { clientId: "p2", role: "player" };
         },
       },
-      versus: {
+      race: {
         spectateMode: "focus",
-        versusGoal: "score",
+        raceGoal: "score",
         expired: true,
         winnerClientId: "p1",
         leaderClientId: "p1",
@@ -2599,7 +2701,7 @@ describe("Multiplayer settings tab layout", () => {
     assert.ok(html.indexOf("mp-hud-lead") >= 0);
   });
 
-  it("mounts as own top tab with Connect/Match/Roster sub-tabs", () => {
+  it("mounts as own top tab with Control/Roster sub-tabs", () => {
     const { JSDOM } = require("jsdom");
     const dom = new JSDOM(`<!DOCTYPE html><html><body>
       <div id="settings-popup-pudding">
@@ -2632,7 +2734,7 @@ describe("Multiplayer settings tab layout", () => {
     delete require.cache[uiPath];
     require(path.join(ROOT, "src/ui/settingsTab.js"));
     const UI = win.MultiplayerUI;
-    const ui = new UI({ client: null, versus: { spectateMode: "focus" } });
+    const ui = new UI({ client: null, race: { spectateMode: "focus" } });
     ui.mountSettingsTab();
 
     const tab = win.document.getElementById("ultra-settings-tab-multiplayer");
@@ -2646,13 +2748,20 @@ describe("Multiplayer settings tab layout", () => {
       "Settings"
     );
     assert.ok(pager.classList.contains("ultra-pager-grid"));
-    assert.equal(win.document.getElementById("mp-subpager").children.length, 3);
-    assert.ok(win.document.getElementById("mp-panel-connect"));
-    assert.ok(win.document.getElementById("mp-panel-match"));
+    assert.equal(win.document.getElementById("mp-subpager").children.length, 2);
+    assert.ok(win.document.getElementById("mp-panel-control"));
+    assert.ok(win.document.getElementById("mp-subtab-control"));
+    assert.equal(win.document.getElementById("mp-panel-connect"), null);
+    assert.equal(win.document.getElementById("mp-panel-match"), null);
     assert.ok(win.document.getElementById("mp-panel-roster"));
     assert.equal(win.document.getElementById("mp-panel-spectate"), null);
     assert.ok(win.document.getElementById("mp-roster-spectate-bar"));
     assert.ok(win.document.getElementById("mp-mosaic-toggle"));
+    assert.equal(
+      win.document.querySelector("#mp-player-box .pudding-settings-section-title"),
+      null,
+      "Player section title removed"
+    );
     const mosaicCss = Array.from(win.document.querySelectorAll("style"))
       .map(function (s) { return s.textContent || ""; })
       .join("\n");
@@ -2674,7 +2783,7 @@ describe("Multiplayer settings tab layout", () => {
       "mosaic should fit all boards without scrolling"
     );
     assert.ok(
-      win.document.getElementById("mp-panel-connect").classList.contains("mp-panel-on")
+      win.document.getElementById("mp-panel-control").classList.contains("mp-panel-on")
     );
     // Setup must not contain multiplayer host
     assert.equal(
@@ -2705,7 +2814,7 @@ describe("Multiplayer settings tab layout", () => {
     win.remixShowSettingsPage = function () {};
     win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
     win.MultiplayerSession = require(path.join(ROOT, "src/session/ready.js"));
-    win.VersusState = require(path.join(ROOT, "src/versus/scoreboard.js"));
+    win.RaceState = require(path.join(ROOT, "src/race/scoreboard.js"));
     const uiPath = require.resolve(path.join(ROOT, "src/ui/settingsTab.js"));
     delete require.cache[uiPath];
     require(path.join(ROOT, "src/ui/settingsTab.js"));
@@ -2723,7 +2832,7 @@ describe("Multiplayer settings tab layout", () => {
           return { clientId: "p1", role: role, ready: true };
         },
         roster: {
-          mode: "versus",
+          mode: "race",
           roomCode: "ABCD",
           sessionActive: false,
           clients: [
@@ -2732,13 +2841,13 @@ describe("Multiplayer settings tab layout", () => {
           ],
         },
       },
-      versus: { scores: {}, spectateMode: "focus", focusClientId: "admin" },
+      race: { scores: {}, spectateMode: "focus", focusClientId: "admin" },
       focusSpectatePlayer: function (id) {
-        this.versus.focusClientId = id;
-        this.versus.spectateMode = "focus";
+        this.race.focusClientId = id;
+        this.race.spectateMode = "focus";
       },
       setSpectateMode: function (mode) {
-        this.versus.spectateMode = mode;
+        this.race.spectateMode = mode;
       },
     };
     const ui = new UI(app);
@@ -2788,7 +2897,7 @@ describe("Multiplayer settings tab layout", () => {
     assertSpectateUi(false);
   });
 
-  it("hides versus duration in coop and swaps Start/End on sessionActive", () => {
+  it("hides race duration in coop and swaps End on sessionActive", () => {
     const { JSDOM } = require("jsdom");
     const dom = new JSDOM(`<!DOCTYPE html><html><body>
       <div id="settings-popup-pudding">
@@ -2810,7 +2919,7 @@ describe("Multiplayer settings tab layout", () => {
     win.remixShowSettingsPage = function () {};
     win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
     win.MultiplayerSession = require(path.join(ROOT, "src/session/ready.js"));
-    win.VersusState = require(path.join(ROOT, "src/versus/scoreboard.js"));
+    win.RaceState = require(path.join(ROOT, "src/race/scoreboard.js"));
     const uiPath = require.resolve(path.join(ROOT, "src/ui/settingsTab.js"));
     delete require.cache[uiPath];
     require(path.join(ROOT, "src/ui/settingsTab.js"));
@@ -2827,69 +2936,66 @@ describe("Multiplayer settings tab layout", () => {
         },
         roster: null,
       },
-      versus: { scores: {}, spectateMode: "focus" },
+      race: { scores: {}, spectateMode: "focus" },
     };
     const ui = new UI(app);
     ui.mountSettingsTab();
 
     const durField = win.document.getElementById("mp-duration-field");
-    const goalField = win.document.getElementById("mp-versus-goal-field");
+    const goalField = win.document.getElementById("mp-race-goal-field");
     const endBtn = win.document.getElementById("mp-end");
-    const startBtn = win.document.getElementById("mp-start");
     assert.ok(durField);
     assert.ok(goalField);
     assert.ok(endBtn);
-    assert.ok(startBtn);
+    assert.equal(
+      win.document.getElementById("mp-start"),
+      null,
+      "Start match lives on the native Play button"
+    );
 
     ui.renderRoster({
-      mode: "versus",
+      mode: "race",
       roomCode: "ABCD",
       sessionActive: false,
       clients: [{ clientId: "admin", role: "player", ready: true }],
       allowNewRuns: true,
-      versusGoal: "best50",
+      raceGoal: "best50",
     });
     assert.notEqual(durField.style.display, "none");
     assert.notEqual(goalField.style.display, "none");
     assert.equal(endBtn.style.display, "none");
-    assert.notEqual(startBtn.style.display, "none");
-    assert.equal(win.document.getElementById("mp-versus-goal").value, "best50");
+    assert.equal(win.document.getElementById("mp-race-goal").value, "best50");
 
     ui.renderRoster({
-      mode: "versus",
+      mode: "race",
       roomCode: "ABCD",
       sessionActive: true,
       clients: [{ clientId: "admin", role: "player", ready: true }],
       allowNewRuns: true,
     });
     assert.notEqual(endBtn.style.display, "none");
-    assert.equal(startBtn.style.display, "none", "no Start while a match runs");
 
-    // Attempt ran out with finish-ongoing grace: session stays live → Start stays hidden
+    // Attempt ran out with finish-ongoing grace: session stays live → End stays
     ui.renderRoster({
-      mode: "versus",
+      mode: "race",
       roomCode: "ABCD",
       sessionActive: true,
       attemptExpired: true,
       clients: [{ clientId: "admin", role: "player", ready: true }],
       allowNewRuns: false,
     });
-    assert.equal(
-      startBtn.style.display,
-      "none",
-      "Start stays hidden while finish-ongoing grace keeps sessionActive"
-    );
+    assert.notEqual(endBtn.style.display, "none");
 
-    // After the session fully ends, Start comes back for the next match
+    // After the session fully ends, End hides again
     ui.renderRoster({
-      mode: "versus",
+      mode: "race",
       roomCode: "ABCD",
       sessionActive: false,
       attemptExpired: true,
       clients: [{ clientId: "admin", role: "player", ready: true }],
       allowNewRuns: false,
     });
-    assert.notEqual(startBtn.style.display, "none");
+    assert.equal(endBtn.style.display, "none");
 
     ui.renderRoster({
       mode: "coop",
@@ -2901,7 +3007,6 @@ describe("Multiplayer settings tab layout", () => {
     assert.equal(durField.style.display, "none");
     assert.equal(goalField.style.display, "none");
     assert.notEqual(endBtn.style.display, "none");
-    assert.equal(startBtn.style.display, "none");
 
     ui.renderRoster({
       mode: "coop",
@@ -2912,7 +3017,6 @@ describe("Multiplayer settings tab layout", () => {
     });
     assert.equal(durField.style.display, "none");
     assert.equal(endBtn.style.display, "none");
-    assert.notEqual(startBtn.style.display, "none");
 
     // Stuck co-op: server session flag dropped or a peer never died, but this
     // client is still injected — End match stays so the admin can quit out.
@@ -2977,7 +3081,7 @@ describe("Multiplayer settings tab layout", () => {
           ],
         },
       },
-      versus: { scores: {}, spectateMode: "focus" },
+      race: { scores: {}, spectateMode: "focus" },
     };
     const ui = new UI(app);
     ui.mountSettingsTab();
@@ -3043,7 +3147,7 @@ describe("Multiplayer settings tab layout", () => {
           return { role: "spectator" };
         },
       },
-      versus: { spectateMode: "focus" },
+      race: { spectateMode: "focus" },
     };
     app.ui = new UI(app);
     app.ui.mountSettingsTab();
@@ -3093,9 +3197,10 @@ describe("Multiplayer settings tab layout", () => {
     );
   });
 
-  it("Start match pushes Versus attempt minutes from the textbox", () => {
+  it("Start match pushes Race attempt minutes from the textbox", () => {
     const { JSDOM } = require("jsdom");
     const dom = new JSDOM(`<!DOCTYPE html><html><body>
+      <button jsname="NSjDf" aria-label="Play"><svg></svg><span>Play</span></button>
       <div id="settings-popup-pudding">
         <span>Pudding Mod Settings</span>
         <div id="ultra-settings-pager">
@@ -3115,61 +3220,78 @@ describe("Multiplayer settings tab layout", () => {
     win.remixShowSettingsPage = function () {};
     win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
     win.MultiplayerSession = require(path.join(ROOT, "src/session/ready.js"));
-    const uiPath = require.resolve(path.join(ROOT, "src/ui/settingsTab.js"));
-    delete require.cache[uiPath];
-    require(path.join(ROOT, "src/ui/settingsTab.js"));
-    const UI = win.MultiplayerUI;
+    win.RaceState = require(path.join(ROOT, "src/race/scoreboard.js"));
+    [
+      "shared/protocol.js",
+      "runtime/bridge.js",
+      "coop/state.js",
+      "coop/session.js",
+      "coop/native.js",
+      "hooks/gsm.js",
+      "net/client.js",
+      "ui/settingsTab.js",
+      "race/focus.js",
+      "race/mosaic.js",
+      "mod.js",
+    ].forEach(function (rel) {
+      const p = require.resolve(path.join(ROOT, "src", rel));
+      delete require.cache[p];
+      require(path.join(ROOT, "src", rel));
+    });
+    const MultiplayerApp =
+      win.MultiplayerApp || require(path.join(ROOT, "src/mod.js")).MultiplayerApp;
     let durationSent = null;
     let sessionStarted = false;
     let sessionPayload = null;
-    const app = {
-      client: {
-        connected: true,
-        clientId: "admin",
-        isAdmin: function () {
-          return true;
-        },
-        me: function () {
-          return { clientId: "admin", role: "player", ready: true };
-        },
-        roster: {
-          mode: "versus",
-          sessionActive: false,
-          allowNewRuns: true,
-          clients: [
-            { clientId: "admin", role: "player", ready: true },
-            { clientId: "p2", role: "player", ready: true },
-          ],
-        },
-        allowNewRuns: function () {
-          return true;
-        },
-        setDuration: function (mins) {
-          durationSent = mins;
-        },
-        setVersusGoal: function () {},
-        sessionStart: function (payload) {
-          sessionStarted = true;
-          sessionPayload = payload || {};
-        },
+    const app = new MultiplayerApp();
+    app.client = {
+      connected: true,
+      clientId: "admin",
+      isAdmin: function () {
+        return true;
       },
-      versus: { scores: {}, spectateMode: "focus" },
-      syncMySettingsAsAdmin: function () {
-        return { trophy: 0, count: 1, speed: 0, size: 0 };
+      me: function () {
+        return { clientId: "admin", role: "player", ready: true };
+      },
+      roster: {
+        mode: "race",
+        sessionActive: false,
+        allowNewRuns: true,
+        clients: [
+          { clientId: "admin", role: "player", ready: true },
+          { clientId: "p2", role: "player", ready: true },
+        ],
+      },
+      allowNewRuns: function () {
+        return true;
+      },
+      setDuration: function (mins) {
+        durationSent = mins;
+      },
+      setRaceGoal: function () {},
+      sessionStart: function (payload) {
+        sessionStarted = true;
+        sessionPayload = payload || {};
       },
     };
-    const ui = new UI(app);
-    ui.mountSettingsTab();
+    app.syncMySettingsAsAdmin = function () {
+      return { trophy: 0, count: 1, speed: 0, size: 0 };
+    };
+    app.ui = new win.MultiplayerUI(app);
+    app.ui.mountSettingsTab();
     const dur = win.document.getElementById("mp-duration");
-    const startBtn = win.document.getElementById("mp-start");
     dur.value = "7";
-    ui.renderRoster(app.client.roster);
-    startBtn.disabled = false;
-    startBtn.click();
+    app.ui.renderRoster(app.client.roster);
+    assert.equal(app.startMatchAsAdmin(), true);
     assert.equal(durationSent, 7);
     assert.equal(sessionStarted, true);
     assert.ok(sessionPayload && sessionPayload.settings);
     assert.equal(sessionPayload.settings.count, 1);
+    const play = win.document.querySelector('[jsname="NSjDf"]');
+    app._paintPlayAsStartMatch();
+    assert.equal(play.getAttribute("aria-label"), "Start Race");
+    assert.ok(play.querySelector("svg"), "Play icon preserved");
+    assert.match(play.textContent, /Start Race/);
   });
 });
 
@@ -3190,14 +3312,15 @@ describe("spectator / admin menu access", () => {
       "shared/protocol.js",
       "runtime/bridge.js",
       "session/ready.js",
-      "versus/scoreboard.js",
+      "race/scoreboard.js",
       "coop/state.js",
+      "coop/session.js",
       "coop/native.js",
       "hooks/gsm.js",
       "net/client.js",
       "ui/settingsTab.js",
-      "versus/focus.js",
-      "versus/mosaic.js",
+      "race/focus.js",
+      "race/mosaic.js",
       "mod.js",
     ].forEach(function (rel) {
       const p = require.resolve(path.join(ROOT, "src", rel));
@@ -3251,7 +3374,7 @@ describe("spectator / admin menu access", () => {
         return { clientId: "spec", role: "spectator" };
       },
       roster: {
-        mode: "versus",
+        mode: "race",
         sessionActive: false,
         adminId: "admin",
         clients: [
@@ -3262,8 +3385,8 @@ describe("spectator / admin menu access", () => {
       spectateFocus: function () {},
     };
     app.ui = { updateHud: function () {}, renderRoster: function () {} };
-    app.versus.spectateMode = "focus";
-    app.versus.focusClientId = "admin";
+    app.race.spectateMode = "focus";
+    app.race.focusClientId = "admin";
 
     app.applyControlLocks();
     assert.equal(win.document.getElementById("trophy").style.pointerEvents, "");
@@ -3273,13 +3396,13 @@ describe("spectator / admin menu access", () => {
 
     // Lobby: must not enter focus seat / hide death
     app.renderFocusBoard();
-    assert.equal(!!app._versusFocusSpectate, false);
+    assert.equal(!!app._raceFocusSpectate, false);
     const death = win.document.getElementsByClassName("wjOYOd")[0];
     assert.notEqual(death.style.visibility, "hidden");
     assertPersonalClickable(win.document);
   });
 
-  it("Ready player locks match menus; Unready unlocks", () => {
+  it("Ready player does not lock match menus", () => {
     const win = menuDom();
     const MultiplayerApp = loadApp(win);
     const me = { clientId: "p1", role: "player", ready: true };
@@ -3294,19 +3417,17 @@ describe("spectator / admin menu access", () => {
         return me;
       },
       roster: {
-        mode: "versus",
+        mode: "race",
         sessionActive: false,
         adminId: "admin",
         clients: [me],
       },
     };
     app.ui = { updateHud: function () {}, renderRoster: function () {} };
+    app.ensureLobbyMatchMenusInteractive = function () {};
     app.applyControlLocks();
-    assert.equal(win.document.getElementById("trophy").style.pointerEvents, "none");
-    assert.equal(
-      win.document.getElementById("trophy").title,
-      "Unready to change settings"
-    );
+    assert.equal(win.document.getElementById("trophy").style.pointerEvents, "");
+    assert.equal(win.document.getElementById("theme").style.pointerEvents, "");
     me.ready = false;
     app.applyControlLocks();
     assert.equal(win.document.getElementById("trophy").style.pointerEvents, "");
@@ -3316,11 +3437,11 @@ describe("spectator / admin menu access", () => {
     const win = menuDom();
     const MultiplayerApp = loadApp(win);
     const Gsm = win.MultiplayerGsm;
-    let deathFull = 0;
-    const prevShow = Gsm.showDeathScreen;
-    Gsm.showDeathScreen = function (opts) {
-      if (!opts || !opts.skipEscapeDispatch) deathFull++;
-      if (prevShow) return prevShow.apply(this, arguments);
+    let quitCalls = 0;
+    const prevQuit = Gsm.quitNativeRunForMenus;
+    Gsm.quitNativeRunForMenus = function () {
+      quitCalls++;
+      if (prevQuit) return prevQuit.apply(this, arguments);
     };
     const me = { clientId: "admin", role: "player", ready: false };
     const app = new MultiplayerApp();
@@ -3335,7 +3456,7 @@ describe("spectator / admin menu access", () => {
         return me;
       },
       roster: {
-        mode: "versus",
+        mode: "race",
         sessionActive: false,
         adminId: "admin",
         clients: [me],
@@ -3351,7 +3472,7 @@ describe("spectator / admin menu access", () => {
 
     // Promote-to-player / lobby path must quit the engine so rows click
     app.clearSpectatorSeat();
-    assert.ok(deathFull >= 1, "engine quit so trophy rows accept clicks");
+    assert.ok(quitCalls >= 1, "engine quit so trophy rows accept clicks");
 
     app.hookEscapeForAdmin();
     win.document.dispatchEvent(
@@ -3367,7 +3488,7 @@ describe("spectator / admin menu access", () => {
 
     me.ready = true;
     app.applyControlLocks();
-    assert.equal(win.document.getElementById("trophy").style.pointerEvents, "none");
+    assert.equal(win.document.getElementById("trophy").style.pointerEvents, "");
     me.ready = false;
     app.applyControlLocks();
     assert.equal(win.document.getElementById("trophy").style.pointerEvents, "");
@@ -3387,7 +3508,7 @@ describe("spectator / admin menu access", () => {
         return { clientId: "admin", role: "spectator" };
       },
       roster: {
-        mode: "versus",
+        mode: "race",
         sessionActive: false,
         adminId: "admin",
         clients: [{ clientId: "admin", role: "spectator" }],
@@ -3400,14 +3521,14 @@ describe("spectator / admin menu access", () => {
     assert.equal(win.document.getElementById("trophy").title, "");
     assertPersonalClickable(win.document);
     app.renderFocusBoard();
-    assert.equal(!!app._versusFocusSpectate, false);
+    assert.equal(!!app._raceFocusSpectate, false);
     assertPersonalClickable(win.document);
   });
 
   /** Roster as the server leaves it once the attempt is spent. */
   function overRoster(role) {
     return {
-      mode: "versus",
+      mode: "race",
       sessionActive: false,
       attemptExpired: true,
       allowNewRuns: false,
@@ -3480,7 +3601,7 @@ describe("spectator / admin menu access", () => {
     const live = seatedApp(win, MultiplayerApp, {
       admin: true,
       role: "player",
-      roster: { mode: "versus", sessionActive: true, adminId: "admin", clients: [] },
+      roster: { mode: "race", sessionActive: true, adminId: "admin", clients: [] },
     });
     live.returnToMenus({});
     await nextTick();
@@ -3534,7 +3655,7 @@ describe("spectator / admin menu access", () => {
     assert.equal(win.document.getElementById("trophy").style.pointerEvents, "");
   });
 
-  it("versus focus during match: endscreen left alone, Escape peeks menus", async () => {
+  it("race focus during match: endscreen left alone, Escape peeks menus", async () => {
     const win = menuDom();
     const MultiplayerApp = loadApp(win);
     const Gsm = win.MultiplayerGsm;
@@ -3549,7 +3670,7 @@ describe("spectator / admin menu access", () => {
         return { clientId: "spec", role: "spectator" };
       },
       roster: {
-        mode: "versus",
+        mode: "race",
         sessionActive: true,
         adminId: "admin",
         clients: [
@@ -3560,9 +3681,9 @@ describe("spectator / admin menu access", () => {
       spectateFocus: function () {},
     };
     app.ui = { updateHud: function () {}, renderRoster: function () {} };
-    app.versus.spectateMode = "focus";
-    app.versus.focusClientId = "admin";
-    app.versus.boards.admin = { width: 2, height: 2, body: [], apples: [] };
+    app.race.spectateMode = "focus";
+    app.race.focusClientId = "admin";
+    app.race.boards.admin = { width: 2, height: 2, body: [], apples: [] };
 
     let nativeRuns = 0;
     Gsm.triggerPlay = function () {};
@@ -3571,7 +3692,7 @@ describe("spectator / admin menu access", () => {
     };
     Gsm.drawBoardOnCanvas = function () {};
     app.renderFocusBoard();
-    assert.equal(app._versusFocusSpectate, true);
+    assert.equal(app._raceFocusSpectate, true);
     const death = win.document.getElementsByClassName("wjOYOd")[0];
     const view = win.document.getElementById("mp-focus-view");
     assert.equal(view.style.display, "block");
@@ -3602,7 +3723,7 @@ describe("spectator / admin menu access", () => {
     assert.notEqual(death.style.visibility, "hidden");
     assert.equal(view.style.display, "none");
     assert.equal(nativeRuns, 0);
-    app._leaveVersusFocusSpectate();
+    app._leaveRaceFocusSpectate();
   });
 
   it("click capture blocks sync menus only while Ready, not cosmetics", () => {
@@ -3707,7 +3828,7 @@ describe("spectator / admin menu access", () => {
         app.__readySent = v;
       },
       roster: {
-        mode: "versus",
+        mode: "race",
         clients: [{ clientId: "p1", role: "player", ready: false }],
       },
     };

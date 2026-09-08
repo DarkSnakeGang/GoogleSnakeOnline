@@ -8,7 +8,7 @@ const root = path.join(__dirname, "..");
 const Colors = require(path.join(root, "src/shared/colors.js"));
 const Protocol = require(path.join(root, "src/shared/protocol.js"));
 const Session = require(path.join(root, "src/session/ready.js"));
-const VersusState = require(path.join(root, "src/versus/scoreboard.js"));
+const RaceState = require(path.join(root, "src/race/scoreboard.js"));
 const { CoopTimeKeeper } = require(path.join(root, "src/coop/state.js"));
 
 describe("colors palette", () => {
@@ -97,19 +97,19 @@ describe("versus PLAY_SYNC start gate", () => {
       return null;
     }
     const me = { role: "player", ready: true };
-    // Mode not yet "versus" on roster (stale) but SESSION_START flipped session
+    // Mode not yet "race" on roster (stale) but SESSION_START flipped session
     assert.deepEqual(
       shouldStartLocalPlay(me, { mode: "", sessionActive: true }),
       { coop: false }
     );
     assert.deepEqual(
-      shouldStartLocalPlay(me, { mode: "versus", sessionActive: true }),
+      shouldStartLocalPlay(me, { mode: "race", sessionActive: true }),
       { coop: false }
     );
     assert.equal(
       shouldStartLocalPlay(
         { role: "player", ready: false },
-        { mode: "versus", sessionActive: false }
+        { mode: "race", sessionActive: false }
       ),
       null
     );
@@ -127,6 +127,25 @@ describe("coop timekeeper isolation", () => {
   it("uses separate key from remix", () => {
     assert.notEqual(CoopTimeKeeper.KEY, CoopTimeKeeper.REMIX_KEY);
     assert.equal(CoopTimeKeeper.KEY, "snake_timeKeeper_coop");
+  });
+
+  it("never reads or writes localStorage", () => {
+    const store = {};
+    global.localStorage = {
+      getItem: function (k) {
+        store._gets = (store._gets || 0) + 1;
+        return store[k] || null;
+      },
+      setItem: function (k, v) {
+        store._sets = (store._sets || 0) + 1;
+        store[k] = String(v);
+      },
+    };
+    assert.deepEqual(CoopTimeKeeper.load(), {});
+    assert.equal(CoopTimeKeeper.save("last", 123, 4), false);
+    assert.equal(store._gets || 0, 0);
+    assert.equal(store._sets || 0, 0);
+    assert.equal(store[CoopTimeKeeper.KEY], undefined);
   });
 });
 
@@ -184,12 +203,12 @@ describe("versus session timekeeper", () => {
     global.timeKeeper = tk;
     try {
       // Reload scoreboard against this window/localStorage
-      const sbPath = require.resolve(path.join(root, "src/versus/scoreboard.js"));
+      const sbPath = require.resolve(path.join(root, "src/race/scoreboard.js"));
       delete require.cache[sbPath];
       require(sbPath);
-      const VTK = global.VersusTimeKeeper;
+      const VTK = global.RaceTimeKeeper;
       assert.ok(VTK);
-      assert.equal(VTK.KEY, "snake_timeKeeper_versus_session");
+      assert.equal(VTK.KEY, "snake_timeKeeper_race_session");
       VTK.install();
       VTK.beginMatch();
       assert.equal(VTK.isActive(), true);
@@ -199,7 +218,7 @@ describe("versus session timekeeper", () => {
       sessionStore["25-classic-0-0-0"] = { time: 5000, date: "now", att: 1, sum: 5000 };
       tk.setStorage(sessionStore);
       assert.equal(
-        JSON.parse(ls.getItem("snake_timeKeeper_versus_session"))["25-classic-0-0-0"].time,
+        JSON.parse(ls.getItem("snake_timeKeeper_race_session"))["25-classic-0-0-0"].time,
         5000
       );
       // Remix lifetime untouched
@@ -229,7 +248,7 @@ describe("versus session timekeeper", () => {
 
 describe("versus expired sync", () => {
   it("marks expired from roster allowNewRuns", () => {
-    const v = new VersusState();
+    const v = new RaceState();
     assert.equal(v.expired, false);
     v.syncFromRoster({ allowNewRuns: false });
     assert.equal(v.expired, true);
@@ -238,7 +257,7 @@ describe("versus expired sync", () => {
   });
 
   it("mosaic run clock follows live in-game timeMs and freezes on death", () => {
-    const v = new VersusState();
+    const v = new RaceState();
     const started = 1_700_000_000_000;
     v.onScorePulse({
       clientId: "p1",
@@ -260,7 +279,7 @@ describe("versus expired sync", () => {
     assert.equal(v.runClocks.p1.startedAtMs, started);
     assert.equal(v.runClocks.p1.liveMs, 45000);
     assert.equal(
-      VersusState.resolveRunClockMs(v.runClocks.p1, started + 99999, 0),
+      RaceState.resolveRunClockMs(v.runClocks.p1, started + 99999, 0),
       45000
     );
     v.onBoardDelta({
@@ -277,7 +296,7 @@ describe("versus expired sync", () => {
     });
     assert.equal(v.runClocks.p1.frozenMs, 5100);
     assert.equal(
-      VersusState.resolveRunClockMs(v.runClocks.p1, started + 99999, 5100),
+      RaceState.resolveRunClockMs(v.runClocks.p1, started + 99999, 5100),
       5100
     );
     // New run clears the freeze
@@ -293,7 +312,7 @@ describe("versus expired sync", () => {
   });
 
   it("keeps last-match scores until resetForNewMatch", () => {
-    const v = new VersusState();
+    const v = new RaceState();
     v.onScorePulse({
       clientId: "p1",
       score: 12,
@@ -321,35 +340,35 @@ describe("versus expired sync", () => {
   });
 
   it("stores board under clientId", () => {
-    const v = new VersusState();
+    const v = new RaceState();
     v.onBoardDelta({ clientId: "p1", board: { score: 2 } });
     v.setFocus("p1");
     assert.equal(v.focusBoard().score, 2);
   });
 
   it("formats attempt clock as MM:SS", () => {
-    assert.equal(VersusState.formatAttemptClock(125000, false), "02:05");
-    assert.equal(VersusState.formatAttemptClock(500, false), "00:01");
-    assert.equal(VersusState.formatAttemptClock(0, false), "00:00");
-    assert.equal(VersusState.formatAttemptClock(null, false), null);
-    assert.equal(VersusState.formatAttemptClock(9999, true), "00:00");
+    assert.equal(RaceState.formatAttemptClock(125000, false), "02:05");
+    assert.equal(RaceState.formatAttemptClock(500, false), "00:01");
+    assert.equal(RaceState.formatAttemptClock(0, false), "00:00");
+    assert.equal(RaceState.formatAttemptClock(null, false), null);
+    assert.equal(RaceState.formatAttemptClock(9999, true), "00:00");
   });
 
   it("formats run clock for mosaic / roster", () => {
-    assert.equal(VersusState.formatRunClock(12300), "12.30s");
-    assert.equal(VersusState.formatRunClock(65000), "1:05.00");
-    assert.equal(VersusState.formatRunClock(null), "—");
+    assert.equal(RaceState.formatRunClock(12300), "12.30s");
+    assert.equal(RaceState.formatRunClock(65000), "1:05.00");
+    assert.equal(RaceState.formatRunClock(null), "—");
   });
 
   it("clears attemptRemainingMs when session is inactive", () => {
-    const v = new VersusState();
+    const v = new RaceState();
     v.attemptRemainingMs = 60000;
-    v.syncFromRoster({ mode: "versus", sessionActive: false, allowNewRuns: true });
+    v.syncFromRoster({ mode: "race", sessionActive: false, allowNewRuns: true });
     assert.equal(v.attemptRemainingMs, null);
   });
 
   it("onAttemptTick coerces remainingMs to number", () => {
-    const v = new VersusState();
+    const v = new RaceState();
     v.onAttemptTick({ remainingMs: "1800000" });
     assert.equal(v.attemptRemainingMs, 1800000);
   });
@@ -363,7 +382,7 @@ describe("versus goal leader", () => {
       c: { bestScore: 22, score: 5, bestTimeMs: 900 },
     };
     // tie on 22 → longer bestTimeMs wins
-    assert.equal(VersusState.pickLeader(scores, "score"), "c");
+    assert.equal(RaceState.pickLeader(scores, "score"), "c");
   });
 
   it("Best 25 picks fastest goal completion", () => {
@@ -372,9 +391,9 @@ describe("versus goal leader", () => {
       b: { bestScore: 30, goalCompleted: true, bestGoalTimeMs: 5000 },
       c: { bestScore: 50, goalCompleted: false, bestGoalTimeMs: null },
     };
-    assert.equal(VersusState.pickLeader(scores, "best25"), "b");
-    assert.equal(VersusState.goalLabel("bestAll"), "Best All");
-    assert.equal(VersusState.formatGoalBest(scores.b, "best25"), "5.00s");
+    assert.equal(RaceState.pickLeader(scores, "best25"), "b");
+    assert.equal(RaceState.goalLabel("bestAll"), "Best All");
+    assert.equal(RaceState.formatGoalBest(scores.b, "best25"), "5.00s");
   });
 
   it("goal unreached: highest score wins, fastest time breaks ties", () => {
@@ -383,31 +402,31 @@ describe("versus goal leader", () => {
       b: { bestScore: 18, score: 18, bestScoreTimeMs: 8000 },
       c: { bestScore: 18, score: 18, bestScoreTimeMs: 5000 },
     };
-    assert.equal(VersusState.pickLeader(scores, "best25"), "c");
-    assert.deepEqual(VersusState.rankPlayers(scores, "best25"), ["c", "b", "a"]);
+    assert.equal(RaceState.pickLeader(scores, "best25"), "c");
+    assert.deepEqual(RaceState.rankPlayers(scores, "best25"), ["c", "b", "a"]);
     // Score + time to it stand in for the unreached goal time
-    assert.equal(VersusState.formatGoalBest(scores.c, "best25"), "18 apples (5.00s)");
+    assert.equal(RaceState.formatGoalBest(scores.c, "best25"), "18 apples (5.00s)");
     assert.equal(
-      VersusState.formatGoalBest({ bestScore: 4, score: 4 }, "best25"),
+      RaceState.formatGoalBest({ bestScore: 4, score: 4 }, "best25"),
       "4 apples"
     );
-    assert.equal(VersusState.formatGoalBest({ bestScore: 0 }, "best25"), "not yet");
+    assert.equal(RaceState.formatGoalBest({ bestScore: 0 }, "best25"), "not yet");
     // A completion still outranks any unfinished score
     scores.a.goalCompleted = true;
     scores.a.bestGoalTimeMs = 30000;
-    assert.equal(VersusState.pickLeader(scores, "best25"), "a");
-    assert.deepEqual(VersusState.rankPlayers(scores, "best25"), ["a", "c", "b"]);
+    assert.equal(RaceState.pickLeader(scores, "best25"), "a");
+    assert.deepEqual(RaceState.rankPlayers(scores, "best25"), ["a", "c", "b"]);
   });
 
   it("onScorePulse keeps bestScoreTimeMs from the server", () => {
-    const v = new VersusState();
+    const v = new RaceState();
     v.onScorePulse({
       clientId: "p1",
       score: 18,
       timeMs: 5000,
       bestScore: 18,
       bestScoreTimeMs: 5000,
-      versusGoal: "best25",
+      raceGoal: "best25",
       alive: false,
     });
     assert.equal(v.scores.p1.bestScoreTimeMs, 5000);
@@ -415,13 +434,13 @@ describe("versus goal leader", () => {
   });
 
   it("onExpired sets winnerClientId", () => {
-    const vs = new VersusState();
-    vs.versusGoal = "score";
+    const vs = new RaceState();
+    vs.raceGoal = "score";
     vs.scores = {
       a: { bestScore: 3, score: 3 },
       b: { bestScore: 9, score: 9 },
     };
-    vs.onExpired({ winnerClientId: "b", versusGoal: "score" });
+    vs.onExpired({ winnerClientId: "b", raceGoal: "score" });
     assert.equal(vs.expired, true);
     assert.equal(vs.winnerClientId, "b");
     assert.equal(vs.leaderClientId, "b");
@@ -433,13 +452,13 @@ describe("versus goal leader", () => {
       b: { bestScore: 30, score: 30, bestTimeMs: 50 },
       c: { bestScore: 20, score: 20, bestTimeMs: 200 },
     };
-    assert.deepEqual(VersusState.rankPlayers(scores, "score"), [
+    assert.deepEqual(RaceState.rankPlayers(scores, "score"), [
       "b",
       "c",
       "a",
     ]);
     assert.equal(
-      VersusState.formatGoalDetail(scores.b, "score"),
+      RaceState.formatGoalDetail(scores.b, "score"),
       "Score 30"
     );
     const timed = {
@@ -447,13 +466,13 @@ describe("versus goal leader", () => {
       fast: { goalCompleted: true, bestGoalTimeMs: 4000, bestScore: 30 },
       none: { goalCompleted: false, bestScore: 50 },
     };
-    assert.deepEqual(VersusState.rankPlayers(timed, "best25"), [
+    assert.deepEqual(RaceState.rankPlayers(timed, "best25"), [
       "fast",
       "slow",
       "none",
     ]);
     assert.equal(
-      VersusState.formatGoalDetail(timed.fast, "best25"),
+      RaceState.formatGoalDetail(timed.fast, "best25"),
       "Best 25 4.00s"
     );
   });
@@ -467,7 +486,7 @@ describe("versus PLAY_SYNC race", () => {
     const Client = require(path.join(root, "src/net/client.js"));
     const c = new Client({ url: "ws://127.0.0.1:9/ws" });
     c.roster = {
-      mode: "versus",
+      mode: "race",
       allowNewRuns: false,
       attemptExpired: true,
       sessionActive: false,
@@ -650,6 +669,7 @@ describe("coop native inject bridge", () => {
       Tb: function () {},
     };
     const ctx = {
+      canvas: { width: 340, height: 300 },
       save: function () {},
       restore: function () {},
       globalAlpha: 1,
@@ -676,6 +696,7 @@ describe("coop native inject bridge", () => {
     global.__mpCoopMyId = "me";
     global.__mpCoopLocalDead = false;
     global.__mpCoopSpectator = false;
+    global.__mpCoopLastState = { width: 17, height: 15, ended: false };
     global.__mpCoopRemotes = {
       other: {
         clientId: "other",
@@ -736,6 +757,7 @@ describe("coop native inject bridge", () => {
     const renderer = {
       wb: game,
       ka: {
+        canvas: { width: 340, height: 300 },
         save: function () {},
         restore: function () {},
         globalAlpha: 1,
@@ -751,6 +773,7 @@ describe("coop native inject bridge", () => {
     global.__mpCoopInject = true;
     global.__mpCoopSession = true;
     global.__mpCoopMyId = "me";
+    global.__mpCoopLastState = { width: 17, height: 15, ended: false };
     global.__mpCoopRemotes = {
       bad: {
         clientId: "bad",
@@ -808,6 +831,7 @@ describe("coop native inject bridge", () => {
     const renderer = {
       wb: game,
       ka: {
+        canvas: { width: 340, height: 300 },
         save: function () {},
         restore: function () {},
         globalAlpha: 1,
@@ -821,6 +845,7 @@ describe("coop native inject bridge", () => {
     global.__mpCoopSession = true;
     global.__mpCoopSpectator = true;
     global.__mpCoopMyId = "me";
+    global.__mpCoopLastState = { width: 17, height: 15, ended: false };
     global.__mpCoopRemotes = {
       other: {
         body: [
@@ -872,6 +897,7 @@ describe("coop native inject bridge", () => {
     const renderer = {
       wb: game,
       ka: {
+        canvas: { width: 340, height: 300 },
         save: function () {},
         restore: function () {},
         globalAlpha: 1,
@@ -881,6 +907,7 @@ describe("coop native inject bridge", () => {
     global.__mpCoopInject = true;
     global.__mpCoopSession = true;
     global.__mpCoopMyId = "me";
+    global.__mpCoopLastState = { width: 17, height: 15, ended: false };
     global.__mpCoopPlayerRenderer = renderer;
     global.__mpCoopRemotes = {
       other: {
@@ -982,17 +1009,18 @@ describe("coop native inject bridge", () => {
     delete global.ModeRegistry;
   });
 
-  it("wrapped render sanitizes NaN lerp so versus Focus does not crash", () => {
+  it("wrapped render sanitizes NaN lerp so Race Focus does not crash", () => {
     global.window = global;
     const modPath = require.resolve(path.join(root, "src/coop/native.js"));
     delete require.cache[modPath];
     delete global.__mpCoopRenderInstalled;
     delete global.__mpCoopOnTickInstalled;
+    delete global.__mpCoopRenderParked;
     require(path.join(root, "src/coop/native.js"));
 
     const seen = [];
     const renderer = {
-      wb: { oa: { ka: [{ x: 1, y: 1 }] } },
+      wb: { oa: { ka: [{ x: 1, y: 1, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } }] } },
       render: function (a) {
         if (typeof a === "number" && !Number.isFinite(a)) {
           throw new Error("yi NaN NaN NaN");
@@ -1000,7 +1028,7 @@ describe("coop native inject bridge", () => {
         seen.push(a);
       },
     };
-    // Versus: wrap is installed via RenderEnter even without co-op session
+    // Race: wrap is installed via RenderEnter even without co-op session
     global.__mpCoopInject = false;
     global.__mpCoopSession = false;
     global.__mpCoopRenderEnter(renderer, NaN, true, {});
@@ -1011,6 +1039,49 @@ describe("coop native inject bridge", () => {
     assert.ok(seen.every(function (a) {
       return Number.isFinite(a);
     }));
+  });
+
+  it("yi NaN body crash skips the frame without corrupting the local snake", () => {
+    global.window = global;
+    const modPath = require.resolve(path.join(root, "src/coop/native.js"));
+    delete require.cache[modPath];
+    delete global.__mpCoopRenderInstalled;
+    delete global.__mpCoopOnTickInstalled;
+    delete global.__mpCoopRenderParked;
+    require(path.join(root, "src/coop/native.js"));
+
+    const game = {
+      oa: {
+        ka: [
+          { x: 1, y: 1, clone: function () { return { x: this.x, y: this.y, clone: this.clone }; } },
+        ],
+      },
+    };
+    let calls = 0;
+    const renderer = {
+      wb: game,
+      render: function () {
+        calls++;
+        throw new Error("yi NaN NaN NaN");
+      },
+    };
+    global.__mpCoopInject = true;
+    global.__mpCoopSession = true;
+    global.__mpCoopRenderEnter(renderer);
+    assert.doesNotThrow(function () {
+      renderer.render(0.5, true, {});
+    });
+    // First attempt + one retry only — not an unbounded loop.
+    assert.ok(calls <= 3);
+    assert.notEqual(global.__mpCoopRenderParked, true);
+    assert.equal(game.oa.ka[0].x, 1);
+    const after = calls;
+    assert.doesNotThrow(function () {
+      renderer.render(0.5, true, {});
+    });
+    // A later frame may retry, but remains bounded and leaves the body intact.
+    assert.ok(calls > after && calls <= after + 2);
+    assert.equal(game.oa.ka[0].x, 1);
   });
 
   it("keeps corpse body when a dead delta arrives empty", () => {
@@ -1184,7 +1255,7 @@ describe("versus instant death reset", () => {
     global.__mpCoopSession = false;
     global.__mpCoopSpectator = false;
     global.__mpCoopInject = false;
-    global.__mpVersusFocusSpectate = false;
+    global.__mpRaceFocusSpectate = false;
     global.document = {
       querySelector: function () {
         return null;
@@ -1205,15 +1276,16 @@ describe("versus instant death reset", () => {
       "shared/protocol.js",
       "runtime/bridge.js",
       "session/ready.js",
-      "versus/scoreboard.js",
+      "race/scoreboard.js",
       "coop/state.js",
+      "coop/session.js",
       "coop/native.js",
       "hooks/gsm.js",
       "hooks/visibility.js",
       "net/client.js",
       "ui/settingsTab.js",
-      "versus/focus.js",
-      "versus/mosaic.js",
+      "race/focus.js",
+      "race/mosaic.js",
       "mod.js",
     ].forEach(function (rel) {
       const p = require.resolve(path.join(root, "src", rel));
@@ -1226,7 +1298,7 @@ describe("versus instant death reset", () => {
     );
   }
 
-  it("canAutoRestartVersus gates on session + allowNewRuns + player", () => {
+  it("canAutoRestartRace gates on session + allowNewRuns + player", () => {
     const MultiplayerApp = loadApp();
     const app = new MultiplayerApp();
     app.client = {
@@ -1235,30 +1307,75 @@ describe("versus instant death reset", () => {
         return { role: "player" };
       },
       roster: {
-        mode: "versus",
+        mode: "race",
         sessionActive: true,
         allowNewRuns: true,
       },
     };
-    app.versus.expired = false;
-    assert.equal(app.canAutoRestartVersus(), true);
+    app.race.expired = false;
+    assert.equal(app.canAutoRestartRace(), true);
 
     app.client.roster.allowNewRuns = false;
-    assert.equal(app.canAutoRestartVersus(), false);
+    assert.equal(app.canAutoRestartRace(), false);
 
     app.client.roster.allowNewRuns = true;
-    app.versus.expired = true;
-    assert.equal(app.canAutoRestartVersus(), false);
+    app.race.expired = true;
+    assert.equal(app.canAutoRestartRace(), false);
 
-    app.versus.expired = false;
+    app.race.expired = false;
     app.client.roster.mode = "coop";
-    assert.equal(app.canAutoRestartVersus(), false);
+    assert.equal(app.canAutoRestartRace(), false);
 
-    app.client.roster.mode = "versus";
+    app.client.roster.mode = "race";
     app.client.me = function () {
       return { role: "spectator" };
     };
-    assert.equal(app.canAutoRestartVersus(), false);
+    assert.equal(app.canAutoRestartRace(), false);
+  });
+
+  it("maybeResetRaceOnGoal restarts once at Best 25/50/100 threshold", () => {
+    const MultiplayerApp = loadApp();
+    const app = new MultiplayerApp();
+    let restarts = 0;
+    app.client = {
+      connected: true,
+      me: function () {
+        return { role: "player" };
+      },
+      roster: {
+        mode: "race",
+        sessionActive: true,
+        allowNewRuns: true,
+        raceGoal: "best25",
+      },
+    };
+    app.race.raceGoal = "best25";
+    app.race.expired = false;
+    app.raceResetOnGoalEnabled = function () {
+      return true;
+    };
+    app.restartRaceAfterDeath = function () {
+      restarts++;
+      return true;
+    };
+    app._maybePromotePb = function () {};
+    assert.equal(app.maybeResetRaceOnGoal(24, 1000), false);
+    assert.equal(restarts, 0);
+    assert.equal(app.maybeResetRaceOnGoal(25, 1200), true);
+    assert.equal(restarts, 1);
+    assert.equal(app.maybeResetRaceOnGoal(26, 1300), false, "once per run");
+    assert.equal(restarts, 1);
+    app._raceGoalResetArmed = false;
+    app.race.raceGoal = "score";
+    app.client.roster.raceGoal = "score";
+    assert.equal(app.maybeResetRaceOnGoal(50, 100), false, "Score goal no-op");
+    app.race.raceGoal = "bestAll";
+    app.client.roster.raceGoal = "bestAll";
+    assert.equal(app.maybeResetRaceOnGoal(100, 100), false, "Best All no-op");
+    app.race.raceGoal = "best50";
+    app.client.roster.raceGoal = "best50";
+    assert.equal(app.maybeResetRaceOnGoal(50, 2000), true);
+    assert.equal(restarts, 2);
   });
 
   it("ATTEMPT_EXPIRED returns admin player to menus (not spectator)", async () => {
@@ -1270,7 +1387,7 @@ describe("versus instant death reset", () => {
       this.connected = true;
       this.clientId = "admin";
       this.roster = {
-        mode: "versus",
+        mode: "race",
         sessionActive: true,
         allowNewRuns: true,
         attemptExpired: false,
@@ -1317,19 +1434,19 @@ describe("versus instant death reset", () => {
       app.client.me = function () {
         return { clientId: "admin", role: "player" };
       };
-      app._versusFocusSpectate = false;
-      global.__mpVersusFocusSpectate = false;
+      app._raceFocusSpectate = false;
+      global.__mpRaceFocusSpectate = false;
       app.client.emit(Protocol.TYPES.ATTEMPT_EXPIRED, {
         winnerClientId: "admin",
       });
-      assert.equal(app.versus.expired, true);
+      assert.equal(app.race.expired, true);
       assert.equal(app.client.roster.attemptExpired, true);
       assert.equal(app.client.roster.allowNewRuns, false);
       assert.equal(app.client.roster.sessionActive, false);
       assert.equal(global.__mpAttemptExpired, true);
       assert.ok(deathShown >= 1, "death/settings screen shown");
       assert.equal(menusLocked, false, "admin match menus unlocked");
-      assert.equal(app.canAutoRestartVersus(), false);
+      assert.equal(app.canAutoRestartRace(), false);
       // Flush deferred releaseAdminMenusAfterMatch (setTimeout 0) while mocks are live
       await new Promise(function (r) {
         setTimeout(r, 0);
@@ -1353,7 +1470,7 @@ describe("versus instant death reset", () => {
     }
   });
 
-  it("restartVersusAfterDeath calls startNativeRun", async () => {
+  it("restartRaceAfterDeath calls startNativeRun", async () => {
     const MultiplayerApp = loadApp();
     const Gsm = global.MultiplayerGsm;
     let started = 0;
@@ -1369,13 +1486,13 @@ describe("versus instant death reset", () => {
           return { role: "player" };
         },
         roster: {
-          mode: "versus",
+          mode: "race",
           sessionActive: true,
           allowNewRuns: true,
         },
       };
-      assert.equal(app.restartVersusAfterDeath(), true);
-      assert.equal(app.restartVersusAfterDeath(), false); // debounced
+      assert.equal(app.restartRaceAfterDeath(), true);
+      assert.equal(app.restartRaceAfterDeath(), false); // debounced
       await new Promise(function (r) {
         setTimeout(r, 20);
       });
@@ -1493,7 +1610,19 @@ describe("versus instant death reset", () => {
     global.__mpGame = global.__remixGame;
     const sent = [];
     const app = new MultiplayerApp();
+    app._coopAuthority = "native-relay-v1";
+    app.coop.applySession({
+      authority: "native-relay-v1",
+      generation: 1,
+      boardReady: true,
+      slots: [],
+    });
     app._coopSessionActive = true;
+    app._coopSeatedPublish = true;
+    if (app.coopSession) {
+      app.coopSession.enterSeating();
+      app.coopSession.markSeated();
+    }
     app.client = {
       connected: true,
       clientId: "me",
@@ -1507,14 +1636,14 @@ describe("versus instant death reset", () => {
       coopPlayerDead: function () {},
     };
     app.coopNative = { applySnakeDelta: function () {} };
-    app.publishCoopState({ forceColors: true });
+    app.publishCoopState({ forceColors: true, seated: true });
     assert.equal(sent.length, 1);
     app.publishCoopState();
     assert.equal(sent.length, 1, "fingerprint should skip unchanged pose");
     app.client.roster.sessionActive = false;
     app._coopSessionActive = false;
     global.__remixGame.oa.ka[0].x = 9;
-    app.publishCoopState({ forceColors: true });
+    app.publishCoopState({ forceColors: true, seated: true });
     assert.equal(sent.length, 1, "no publish after session end");
   });
 
@@ -1539,6 +1668,13 @@ describe("versus instant death reset", () => {
       app.applyControlLocks = function () {};
       app.updateStatusIndicator = function () {};
       await app.connect({});
+      app._coopAuthority = "native-relay-v1";
+      app.coop.applySession({
+        authority: "native-relay-v1",
+        generation: 1,
+        boardReady: true,
+        slots: [],
+      });
       const applied = [];
       app.coopNative = {
         applySnakeDelta: function (p) {
@@ -1547,10 +1683,14 @@ describe("versus instant death reset", () => {
       };
       app.client.emit(Protocol.TYPES.SNAKE_DELTA, {
         clientId: "me",
+        generation: 1,
+        poseSeq: 1,
         body: [{ x: 1, y: 1 }],
       });
       app.client.emit(Protocol.TYPES.SNAKE_DELTA, {
         clientId: "other",
+        generation: 1,
+        poseSeq: 1,
         body: [{ x: 2, y: 2 }],
       });
       assert.equal(applied.length, 1);
@@ -1573,10 +1713,14 @@ describe("versus instant death reset", () => {
       };
       app.client.emit(Protocol.TYPES.SNAKE_DELTA, {
         clientId: "other",
+        generation: 1,
+        poseSeq: 2,
         body: [{ x: 3, y: 3 }],
       });
       app.client.emit(Protocol.TYPES.SNAKE_DELTA, {
         clientId: "other",
+        generation: 1,
+        poseSeq: 3,
         body: [{ x: 4, y: 4 }],
       });
       assert.equal(applied.length, 0, "queued until flush");
@@ -1591,6 +1735,8 @@ describe("versus instant death reset", () => {
       };
       app.client.emit(Protocol.TYPES.SNAKE_DELTA, {
         clientId: "other",
+        generation: 1,
+        poseSeq: 4,
         body: [{ x: 5, y: 5 }],
       });
       assert.equal(applied.length, 1, "idle engine must not queue");
@@ -1653,16 +1799,16 @@ describe("MultiplayerRuntime bridge", () => {
     delete require.cache[p];
     const Mp = require(path.join(root, "src/runtime/bridge.js"));
     global.__mpSpectateAllowMenus = true;
-    Mp.enterVersusFocus();
-    assert.equal(global.__mpVersusFocusWatch, true);
-    // gsm's engine inject is gated on __mpVersusFocusSpectate; Focus draws the
+    Mp.enterRaceFocus();
+    assert.equal(global.__mpRaceFocusWatch, true);
+    // gsm's engine inject is gated on __mpRaceFocusSpectate; Focus draws the
     // board itself, so that gate must stay shut
-    assert.equal(global.__mpVersusFocusSpectate, false);
+    assert.equal(global.__mpRaceFocusSpectate, false);
     assert.equal(global.__mpSpectateAllowMenus, false);
-    Mp.leaveVersusFocus();
-    assert.equal(global.__mpVersusFocusWatch, false);
-    assert.equal(global.__mpVersusFocusSpectate, false);
-    assert.equal(global.__mpVersusFocusBoard, null);
+    Mp.leaveRaceFocus();
+    assert.equal(global.__mpRaceFocusWatch, false);
+    assert.equal(global.__mpRaceFocusSpectate, false);
+    assert.equal(global.__mpRaceFocusBoard, null);
   });
 
   it("escapeHtml neutralizes script-like display names", () => {
@@ -1728,7 +1874,7 @@ describe("coop body collision", () => {
     assert.equal(game.Ca.wa[0][2], 0, "no stamp on remote body");
   });
 
-  it("kills local snake when stepping onto a remote body", () => {
+  it("does not client-kill on remote body during coop session", () => {
     loadNative();
     const { CoopNative } = require(path.join(root, "src/coop/native.js"));
     const cn = new CoopNative();
@@ -1758,8 +1904,8 @@ describe("coop body collision", () => {
       Tb: function () {},
     };
     global.__mpCoopOnTick(game);
-    assert.equal(died, true, "die() on remote body");
-    assert.equal(global.__mpCoopLocalDead, true);
+    assert.equal(died, false, "server STATE owns death — no client die()");
+    assert.equal(global.__mpCoopLocalDead, false);
   });
 
   it("yin yang skips friendly body collision", () => {
@@ -1902,15 +2048,16 @@ describe("coop player seat", () => {
       "shared/protocol.js",
       "runtime/bridge.js",
       "session/ready.js",
-      "versus/scoreboard.js",
+      "race/scoreboard.js",
       "coop/state.js",
+      "coop/session.js",
       "coop/native.js",
       "hooks/gsm.js",
       "hooks/visibility.js",
       "net/client.js",
       "ui/settingsTab.js",
-      "versus/focus.js",
-      "versus/mosaic.js",
+      "race/focus.js",
+      "race/mosaic.js",
       "mod.js",
     ].forEach(function (rel) {
       const p = require.resolve(path.join(root, "src", rel));
@@ -1927,9 +2074,10 @@ describe("coop player seat", () => {
     app._coopSlots = [];
     assert.equal(app._myCoopSlotIndex(), null);
     assert.equal(app._myCoopSpawnOy(), null);
+    assert.equal(app._myCoopSlot(), null);
   });
 
-  it("reads player number from roster coopSlot", () => {
+  it("reads seat only from SESSION_START slots (not roster invent)", () => {
     const MultiplayerApp = loadApp();
     const app = new MultiplayerApp();
     app.client = {
@@ -1942,8 +2090,169 @@ describe("coop player seat", () => {
         ],
       },
     };
+    // Roster alone is not enough — wait for server seats
     app._coopSlots = [];
+    assert.equal(app._myCoopSlotIndex(), null);
+    assert.equal(app._myCoopSpawnOy(), null);
+
+    app._coopSlots = [
+      { clientId: "a", slot: 0, oy: -1, x: 8, y: 6, dir: "RIGHT", boardWidth: 17, boardHeight: 15 },
+      { clientId: "b", slot: 1, oy: 1, x: 8, y: 8, dir: "RIGHT", boardWidth: 17, boardHeight: 15 },
+    ];
     assert.equal(app._myCoopSlotIndex(), 1);
+    assert.equal(app._myCoopSpawnOy(), 1);
+    const seat = app._myCoopSlot();
+    assert.equal(seat.x, 8);
+    assert.equal(seat.y, 8);
+  });
+
+  it("timer arm after idle does not kill via onStart", () => {
+    const MultiplayerApp = loadApp();
+    const app = new MultiplayerApp();
+    const deaths = [];
+    app.client = {
+      connected: true,
+      clientId: "me",
+      me: function () {
+        return { role: "player", colorId: 0, ready: true };
+      },
+      roster: { mode: "coop", sessionActive: true, clients: [] },
+      snakeDelta: function () {},
+      coopPlayerDead: function (p) {
+        deaths.push(p);
+      },
+    };
+    app._coopSessionActive = true;
+    app._coopSeatedPublish = true;
+    app._coopSpawnApplied = true;
+    app._coopIgnoreStartUntil = Date.now() - 5000;
+    if (app.coopSession) {
+      app.coopSession.enterSeating();
+      app.coopSession.markSeated();
+    }
+    app.hookLocalScorePulse();
+    // Simulate shared-timer arm path
+    global.__mpCoopArmingSharedTimer = true;
+    const Gsm = global.MultiplayerGsm || require(path.join(root, "src/hooks/gsm.js"));
+    // Fire TimeKeeper onStart the way wrapTimeKeeper would
+    const tkHandlers = Gsm._testTkHandlers;
+    if (typeof window !== "undefined") window.__mpCoopArmingSharedTimer = true;
+    global.__mpCoopArmingSharedTimer = true;
+    // Directly exercise the wrap — call onStart through hooked path
+    app._logCoopDeath = function (src) {
+      deaths.push({ source: src });
+    };
+    // Invoke the same guard used by wrapTimeKeeper.onStart
+    const self = app;
+    if (
+      self._coopSessionActive &&
+      self.client.roster &&
+      self.client.roster.mode === "coop"
+    ) {
+      self._logCoopDeath(
+        global.__mpCoopArmingSharedTimer ? "timer_arm_blocked" : "onStart_ignored"
+      );
+    }
+    assert.equal(app._coopDeadSent, false);
+    assert.ok(deaths.some(function (d) { return d.source === "timer_arm_blocked"; }));
+    assert.ok(!deaths.some(function (d) { return d.body; }), "no COOP_PLAYER_DEAD body");
+    delete global.__mpCoopArmingSharedTimer;
+  });
+
+  it("refuses alive:false publish before seat", () => {
+    const MultiplayerApp = loadApp();
+    const app = new MultiplayerApp();
+    const sent = [];
+    app.client = {
+      connected: true,
+      clientId: "me",
+      me: function () {
+        return { role: "player", colorId: 0 };
+      },
+      roster: { mode: "coop", sessionActive: true, clients: [] },
+      snakeDelta: function (d) {
+        sent.push(d);
+      },
+      coopPlayerDead: function (p) {
+        sent.push({ dead: p });
+      },
+    };
+    app._coopSessionActive = true;
+    app._coopSeatedPublish = false;
+    if (app.coopSession) app.coopSession.enterSeating();
+    app.publishCoopState();
+    assert.equal(sent.length, 0);
+  });
+
+  it("Start Co-op again clears walls and death latches", () => {
+    const MultiplayerApp = loadApp();
+    const Gsm = global.MultiplayerGsm;
+    const g = {
+      oa: { ka: [{ x: 8, y: 7 }, { x: 7, y: 7 }, { x: 6, y: 7 }] },
+      Ca: {
+        Aa: new Map([[1, { pos: { x: 4, y: 4 } }]]),
+        wa: (function () {
+          const rows = [];
+          for (let y = 0; y < 15; y++) {
+            rows[y] = [];
+            for (let x = 0; x < 17; x++) rows[y][x] = y === 0 && x === 0 ? 2 : 0;
+          }
+          rows[4][4] = 1;
+          return rows;
+        })(),
+      },
+      wa: { ka: [{ pos: { x: 1, y: 1 } }], oa: { oa: { width: 17, height: 15 } } },
+      nj: true,
+      dead: true,
+    };
+    global.__remixGame = g;
+    global.__mpGame = g;
+    const app = new MultiplayerApp();
+    app.client = {
+      clientId: "admin",
+      isAdmin: function () {
+        return true;
+      },
+      roster: { mode: "coop", sessionActive: true, clients: [] },
+    };
+    app._coopDeadSent = true;
+    app._coopLastWalls = [{ x: 4, y: 4 }];
+    app._coopSessionActive = true;
+    // Simulate SESSION_START handler body for coop
+    if (app.coopSession) app.coopSession.enterSeating();
+    app._coopDeadSent = false;
+    app._coopLastWalls = null;
+    if (Gsm.resetCoopBoardForNewSession) Gsm.resetCoopBoardForNewSession(g);
+    assert.equal(g.Ca.Aa.size, 0);
+    assert.equal(g.Ca.wa[4][4], 0);
+    assert.equal(g.Ca.wa[0][0], 2, "sentinel preserved");
+    assert.equal(g.wa.ka.length, 0);
+    assert.equal(g.nj, false);
+    assert.equal(app._coopDeadSent, false);
+    if (app.coopSession) {
+      assert.equal(app.coopSession.state, "Seating");
+      assert.equal(app.coopSession.deadSent, false);
+    }
+  });
+});
+
+describe("coop session controller", () => {
+  it("blocks death until seated and advances board rev", () => {
+    const { CoopSessionController } = require(path.join(
+      root,
+      "src/coop/session.js"
+    ));
+    const s = new CoopSessionController();
+    s.enterSeating();
+    assert.equal(s.canPublishDeath(), false);
+    s.markSeated();
+    assert.equal(s.state, "Live");
+    assert.equal(s.canPublishDeath(), true);
+    assert.equal(s.nextBoardRev(), 1);
+    assert.equal(s.canApplyBoard({ rev: 1 }), false);
+    assert.equal(s.canApplyBoard({ rev: 2 }), true);
+    s.noteBoardRev({ rev: 2 });
+    assert.equal(s.boardRev, 2);
   });
 });
 

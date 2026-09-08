@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Co-op wall grow chrome fixture</title>
+  <style>
+    body { margin: 0; font-family: Roboto, Arial, sans-serif; background: #202124; color: #fff; }
+    #settings-popup-pudding { padding: 12px; }
+    #mp-settings-host { margin-top: 8px; }
+    #game-canvas { width: 200px; height: 160px; background: #333; display: block; margin: 12px; }
+    #status-log { white-space: pre-wrap; font-size: 12px; padding: 8px; color: #9aa0a6; }
+  </style>
+</head>
+<body>
+  <div id="settings-popup-pudding">
+    <span>Pudding Mod Settings</span>
+    <div id="ultra-settings-pager">
+      <button type="button" id="ultra-settings-tab-play" class="ultra-settings-tab">Play</button>
+      <button type="button" id="ultra-settings-tab-setup" class="ultra-settings-tab">Setup</button>
+      <button type="button" id="ultra-settings-tab-custom" class="ultra-settings-tab">Custom</button>
+    </div>
+    <div id="ultra-settings-page-play" class="ultra-settings-page ultra-page-on"></div>
+    <div id="ultra-settings-page-setup" class="ultra-settings-page"></div>
+    <div id="ultra-settings-page-custom" class="ultra-settings-page"></div>
+  </div>
+  <canvas id="game-canvas" width="200" height="160"></canvas>
+  <div id="status-log"></div>
+  <script>
+    window.__fixtureLog = function (msg) {
+      const el = document.getElementById("status-log");
+      el.textContent += msg + "\n";
+      console.info("[fixture]", msg);
+    };
+    window.__fixtureErrors = [];
+    window.addEventListener("error", function (ev) {
+      window.__fixtureErrors.push(String(ev.message || ev.error));
+      window.__fixtureLog("ERROR " + (ev.message || ev.error));
+    });
+  </script>
+</body>
+</html>

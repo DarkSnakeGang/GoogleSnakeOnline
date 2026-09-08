@@ -185,6 +185,41 @@
   }
 
   /**
+   * Force match rules (trophy/count/speed/size) into the live menu for Play.
+   * Play bakes W/H from settings size index (Ua→Aa) — must be correct before
+   * the first NSjDf click. Ignores __mpStartingMatch quiet-only path.
+   */
+  function forceMatchSettingsForPlay(settings) {
+    if (!settings || typeof settings !== "object") return false;
+    root.__mpApplyingSettings = true;
+    try {
+      const keys = SYNC_KEYS.slice();
+      if (settings.apple != null) keys.push("apple");
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        if (settings[key] == null) continue;
+        const idx = Number(settings[key]);
+        if (Number.isNaN(idx)) continue;
+        selectMenu(key, idx);
+      }
+      // Persist so a later settings restore cannot re-bake Standard
+      try {
+        const saved =
+          root.pudding_settings && root.pudding_settings.SavedGameSettings;
+        if (saved && typeof saved === "object") {
+          SYNC_KEYS.forEach(function (k) {
+            if (settings[k] != null) saved[k] = Number(settings[k]);
+          });
+          if (settings.apple != null) saved.apple = Number(settings.apple);
+        }
+      } catch (eSave) { /* ignore */ }
+    } finally {
+      root.__mpApplyingSettings = false;
+    }
+    return settingsMatchLocal(settings);
+  }
+
+  /**
    * Apply synced settings. Prefer quiet puddingMenuSelect first so lobby
    * changes apply without opening menus; open panel only if DOM still mismatches.
    * Delayed retries are aborted if Start match begins (__mpStartingMatch).
@@ -214,7 +249,7 @@
       if (!needed) return true;
       return ok || settingsMatchLocal(settings);
     }
-    // Don't yank the settings panel open while a co-op/versus run is starting
+    // Don't yank the settings panel open while a co-op/race run is starting
     if (root.__mpStartingMatch || root.__mpCoopSession) {
       return quietApply();
     }
@@ -336,13 +371,19 @@
     delete overlay.dataset.mpDeathPrevOp;
     overlay.style.visibility = "";
     overlay.style.opacity = "";
+    overlay.style.pointerEvents = "";
     const menu = overlay.children && overlay.children[0];
-    if (menu) menu.style.visibility = "";
+    if (menu) {
+      menu.style.visibility = "";
+      menu.style.pointerEvents = "";
+    }
   }
 
   /**
    * After Start-match Play: dismiss end overlay without sticky restore state.
    * (showDeathScreen's inline visible:1 was trapping non-admins on the endscreen.)
+   * pointer-events:none while hidden — a full-bleed invisible overlay must not
+   * steal clicks from settings if quit fails to restore visibility.
    */
   function dismissDeathOverlayForRun() {
     clearDeathOverlayOverrides();
@@ -350,8 +391,12 @@
     if (!overlay) return;
     overlay.style.visibility = "hidden";
     overlay.style.opacity = "0";
+    overlay.style.pointerEvents = "none";
     const menu = overlay.children && overlay.children[0];
-    if (menu) menu.style.visibility = "hidden";
+    if (menu) {
+      menu.style.visibility = "hidden";
+      menu.style.pointerEvents = "none";
+    }
   }
 
   function isDeathOverlayVisible() {
@@ -415,17 +460,19 @@
   }
 
   /**
-   * Keep clicking Play until a live run starts (or attempts exhausted).
-   * Used by Start match so non-admins leave the endscreen.
+   * Start a native Play run once the death/menu chrome is up.
+   * Cancellable via bumping __mpStartNativeRunGen (SESSION_END / abort).
+   * Keep attempts low — nested 80× Play spam felt like an infinite spawn loop.
    * @param {{maxAttempts?:number,intervalMs?:number,onDone?:function(boolean),requirePlayClick?:boolean,deferTimer?:boolean}} opts
    */
   function startNativeRun(opts) {
     opts = opts || {};
-    const maxAttempts = opts.maxAttempts != null ? opts.maxAttempts : 50;
-    const intervalMs = opts.intervalMs != null ? opts.intervalMs : 40;
+    const maxAttempts = opts.maxAttempts != null ? opts.maxAttempts : 12;
+    const intervalMs = opts.intervalMs != null ? opts.intervalMs : 50;
     const onDone = typeof opts.onDone === "function" ? opts.onDone : null;
     const requirePlayClick = opts.requirePlayClick === true;
     const deferTimer = opts.deferTimer === true;
+    const gen = (root.__mpStartNativeRunGen = (root.__mpStartNativeRunGen | 0) + 1);
     root.__mpStartingMatch = true;
     root.__mpApplySettingsGen = (root.__mpApplySettingsGen || 0) + 1;
     if (requirePlayClick) root.__mpFocusRequirePlay = true;
@@ -437,20 +484,45 @@
     }
     let attempts = 0;
     let playClicks = 0;
+    function finish(ok) {
+      if (ok) {
+        dismissDeathOverlayForRun();
+        if (requirePlayClick) root.__mpFocusRequirePlay = false;
+        if (deferTimer && root.timeKeeper) {
+          try {
+            root.timeKeeper.playing = false;
+            root.timeKeeper._lastTimeMs = 0;
+          } catch (e3) { /* ignore */ }
+        }
+      }
+      if (typeof setTimeout === "function") {
+        setTimeout(function () {
+          if (gen === root.__mpStartNativeRunGen) {
+            root.__mpStartingMatch = false;
+          }
+        }, 400);
+      } else if (gen === root.__mpStartNativeRunGen) {
+        root.__mpStartingMatch = false;
+      }
+      if (onDone) onDone(ok);
+    }
     function tick() {
+      if (gen !== root.__mpStartNativeRunGen) {
+        // Cancelled (SESSION_END / newer Start) — do not call onDone(true)
+        if (onDone) onDone(false);
+        return;
+      }
       attempts++;
       try {
         const needClick =
           !isNativeRunLive() || (requirePlayClick && playClicks < 1);
         if (needClick) {
           closeSettingsPanel();
-          // Undo spectate/hideDeathScreen so the Play control is hittable
           clearDeathOverlayOverrides();
           if (triggerPlay()) playClicks++;
           // After several clicks, force-clear dead flag if Play didn't (some skins)
           if (attempts >= 8 && root.timeKeeper && root.timeKeeper._dead) {
             root.timeKeeper._dead = false;
-            // Focus: do not start the run clock until the remote player moves
             if (!deferTimer && typeof root.timeKeeper.start === "function") {
               try {
                 root.timeKeeper.start();
@@ -458,39 +530,37 @@
             }
           }
         }
-        // Engine started but sticky inline CSS left the endscreen up
         if (root.timeKeeper && !root.timeKeeper._dead) {
           dismissDeathOverlayForRun();
         }
       } catch (e) { /* ignore */ }
-      const live =
-        isNativeRunLive() && (!requirePlayClick || playClicks >= 1);
+      // Same-turn seat as soon as Play creates oa — before rAF paints center.
+      if (
+        root.__mpCoopServerAuth &&
+        isNativeRunLive() &&
+        typeof root.__mpCoopSeatOnPlayLive === "function"
+      ) {
+        try {
+          root.__mpCoopSeatOnPlayLive();
+        } catch (eSeat) { /* ignore */ }
+      } else if (
+        root.__mpCoopServerAuth &&
+        isNativeRunLive() &&
+        root.CoopBinder &&
+        typeof root.CoopBinder.reapplyLastState === "function"
+      ) {
+        try {
+          root.CoopBinder.reapplyLastState();
+        } catch (eRe) { /* ignore */ }
+      }
+      const live = isNativeRunLive() && playClicks >= 1;
       if (live || attempts >= maxAttempts) {
-        const ok = live;
-        if (ok) {
-          dismissDeathOverlayForRun();
-          if (requirePlayClick) root.__mpFocusRequirePlay = false;
-          // Focus seats: keep clock stopped until remote actually moves
-          if (deferTimer && root.timeKeeper) {
-            try {
-              root.timeKeeper.playing = false;
-              root.timeKeeper._lastTimeMs = 0;
-            } catch (e3) { /* ignore */ }
-          }
-        }
-        if (typeof setTimeout === "function") {
-          setTimeout(function () {
-            root.__mpStartingMatch = false;
-          }, 800);
-        } else {
-          root.__mpStartingMatch = false;
-        }
-        if (onDone) onDone(ok);
+        finish(!!live);
         return;
       }
       setTimeout(tick, intervalMs);
     }
-    setTimeout(tick, intervalMs);
+    setTimeout(tick, 0);
   }
 
   function gameInstance() {
@@ -673,6 +743,11 @@
         if (!template) template = snake.ka[i];
       }
     }
+    // Dimension flags (snake.wa) are parallel to ka — keep lengths matched so
+    // tick never indexes a stale shorter array after a co-op seat rewrite.
+    try {
+      ensureSnakeSegmentFlags(snake);
+    } catch (eWa) { /* ignore */ }
     return true;
   }
 
@@ -773,10 +848,11 @@
               if (nba.has(d)) dirs.push(d);
             } catch (eDir) { /* ignore */ }
           });
-          if (dirs.length) shields = dirs;
-        } else if (Array.isArray(nba) && nba.length) {
+          // Always emit an array (possibly empty) so peers keep a real Set
+          shields = dirs;
+        } else if (Array.isArray(nba)) {
           shields = nba.map(String);
-        } else if (Array.isArray(a.shields) && a.shields.length) {
+        } else if (Array.isArray(a.shields)) {
           shields = a.shields.map(String);
         }
       }
@@ -808,7 +884,7 @@
         y: pos.y != null ? pos.y : 0,
         type: type,
         poison: poison || undefined,
-        shields: shields || undefined,
+        shields: shields != null ? shields : undefined,
         isPiece: isPiece,
         chessPiece: chessPiece,
         chessColor: chessColor,
@@ -981,24 +1057,222 @@
   }
 
   /**
-   * Normal wall-mode spawns never land in the 2×2 at each board corner
-   * (escape routes for border fruit). Temp walls / keyblocks / hotdog may.
+   * Wall-mode freePos rejects cells that turn a board corner into a 1×1 dead
+   * end: the two edge-adjacent tiles beside each corner. The corner cell itself
+   * and the inward diagonal are legal wall spawns.
+   *
+   * Top-left example (illegal = X, legal corner/diagonal = ·):
+   *   · X .
+   *   X · .
+   *   . . .
    */
   function isIllegalNormalWallCell(x, y, width, height) {
-    const xi = Number(x);
-    const yi = Number(y);
+    const xi = Number(x) | 0;
+    const yi = Number(y) | 0;
     const w = Number(width);
     const h = Number(height);
     if (!Number.isFinite(xi) || !Number.isFinite(yi)) return true;
     if (!Number.isFinite(w) || !Number.isFinite(h) || w < 2 || h < 2) return false;
-    const left = xi <= 1;
-    const right = xi >= w - 2;
-    const top = yi <= 1;
-    const bottom = yi >= h - 2;
-    return (left && top) || (right && top) || (left && bottom) || (right && bottom);
+    // Top-left: (1,0) and (0,1)
+    if ((xi === 1 && yi === 0) || (xi === 0 && yi === 1)) return true;
+    // Top-right: (w-2,0) and (w-1,1)
+    if ((xi === w - 2 && yi === 0) || (xi === w - 1 && yi === 1)) return true;
+    // Bottom-left: (1,h-1) and (0,h-2)
+    if ((xi === 1 && yi === h - 1) || (xi === 0 && yi === h - 2)) return true;
+    // Bottom-right: (w-2,h-1) and (w-1,h-2)
+    if ((xi === w - 2 && yi === h - 1) || (xi === w - 1 && yi === h - 2)) {
+      return true;
+    }
+    return false;
   }
 
-  /** Drop phantom corner walls from scrape/mosaic; keep temp/lock/hotdog. */
+  /** Native wall Map key: (x << 16) | y — Remix mexico/tempWalls / p6E. */
+  function wallSerialKey(x, y) {
+    return ((Number(x) | 0) << 16) | ((Number(y) | 0) & 65535);
+  }
+
+  /**
+   * Native wall grow (p6E) does `Ca.Aa.add(wall)` with no null check.
+   * freePos / checkWall use `Aa.has(serial)` — must be a real Map, never {}.
+   * Keep a Map (serial keys for scrape/write) and polyfill `.add` so p6E works.
+   */
+  function ensureNativeWallMap(wallHost) {
+    if (!wallHost) return null;
+    let map = wallHost.Aa;
+    // Plain objects / arrays / null crash as "a.has is not a function"
+    if (
+      !map ||
+      typeof map.forEach !== "function" ||
+      typeof map.has !== "function" ||
+      typeof map.set !== "function"
+    ) {
+      const prev = map;
+      map = new Map();
+      // Best-effort migrate array / object values that look like wall entries
+      try {
+        if (Array.isArray(prev)) {
+          prev.forEach(function (obj) {
+            if (!obj) return;
+            const pos = obj.pos || obj;
+            if (pos && pos.x != null && pos.y != null) {
+              map.set(wallSerialKey(pos.x, pos.y), obj);
+            }
+          });
+        } else if (prev && typeof prev === "object" && typeof prev.forEach !== "function") {
+          Object.keys(prev).forEach(function (k) {
+            const obj = prev[k];
+            if (!obj) return;
+            const pos = obj.pos || obj;
+            if (pos && pos.x != null && pos.y != null) {
+              map.set(wallSerialKey(pos.x, pos.y), obj);
+            }
+          });
+        }
+      } catch (eMig) { /* ignore */ }
+      wallHost.Aa = map;
+    }
+    if (typeof map.add !== "function") {
+      try {
+        Object.defineProperty(map, "add", {
+          configurable: true,
+          enumerable: false,
+          writable: true,
+          value: function (obj) {
+            if (!obj) return this;
+            const pos = obj.pos || obj;
+            if (pos && pos.x != null && pos.y != null && typeof this.set === "function") {
+              this.set(wallSerialKey(pos.x, pos.y), obj);
+            }
+            return this;
+          },
+        });
+      } catch (eAdd) {
+        map.add = function (obj) {
+          if (!obj) return this;
+          const pos = obj.pos || obj;
+          if (pos && pos.x != null && pos.y != null && typeof this.set === "function") {
+            this.set(wallSerialKey(pos.x, pos.y), obj);
+          }
+          return this;
+        };
+      }
+    }
+    return map;
+  }
+
+  /** Every fruit nba must be a real Set (or absent). Plain {} / arrays crash
+   * freePos / eat as "a.has is not a function". Null is also unsafe on
+   * some stock paths — normalize to Set.
+   */
+  function ensureFruitShieldSets(g) {
+    try {
+      const list = g && g.wa && g.wa.ka;
+      if (!list || !list.length) return;
+      for (let i = 0; i < list.length; i++) {
+        const a = list[i];
+        if (!a) continue;
+        if (a.nba == null) {
+          a.nba = new Set();
+          continue;
+        }
+        if (typeof a.nba.has !== "function") {
+          a.nba = Array.isArray(a.nba) ? new Set(a.nba) : new Set();
+        }
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  /**
+   * Native tick / y4E / p6E do `Ca.wa[y][x]` with no row guard.
+   * Sparse or short grids → "Cannot read properties of undefined (reading '0')".
+   */
+  function ensureWallGridDense(wallHost, width, height) {
+    if (!wallHost) return null;
+    let grid = wallHost.wa;
+    if (!Array.isArray(grid)) {
+      grid = [];
+      wallHost.wa = grid;
+    }
+    let w = width | 0;
+    let h = height | 0;
+    if (!(w > 0) || !(h > 0)) {
+      if (grid.length && Array.isArray(grid[0])) {
+        h = h > 0 ? h : grid.length;
+        w = w > 0 ? w : grid[0].length;
+      }
+    }
+    if (!(w > 0)) w = 17;
+    if (!(h > 0)) h = 15;
+    // Shrink when server board is smaller than a leftover Play grid
+    if (grid.length > h) {
+      grid.length = h;
+    }
+    while (grid.length < h) {
+      const row = [];
+      for (let x = 0; x < w; x++) row.push(0);
+      grid.push(row);
+    }
+    for (let y = 0; y < h; y++) {
+      let row = grid[y];
+      if (!Array.isArray(row)) {
+        row = [];
+        grid[y] = row;
+      }
+      if (row.length > w) row.length = w;
+      while (row.length < w) row.push(0);
+    }
+    return grid;
+  }
+
+  /**
+   * Dimension / segment flags (`snake.wa`) stay parallel to `snake.ka`.
+   * After apple growth, a missing or short flags array → tick `wa[0]` crash.
+   */
+  function ensureSnakeSegmentFlags(snake) {
+    if (!snake || !Array.isArray(snake.ka)) return;
+    const n = snake.ka.length;
+    if (!Array.isArray(snake.wa) || (snake.wa.length && typeof snake.wa[0] !== "boolean")) {
+      // Don't overwrite a wall-style nested grid accidentally assigned here
+      if (Array.isArray(snake.wa) && snake.wa.length && Array.isArray(snake.wa[0])) {
+        return;
+      }
+      snake.wa = [];
+    }
+    while (snake.wa.length > n) snake.wa.pop();
+    while (snake.wa.length < n) snake.wa.push(true);
+  }
+
+  /** Repair all hosts native tick / freePos / wall-grow touch. */
+  function ensureCoopTickHosts(g) {
+    if (!g) return;
+    try {
+      if (g.Ca) {
+        ensureNativeWallMap(g.Ca);
+        let w = 0;
+        let h = 0;
+        try {
+          const sz =
+            (g.oa && g.oa.oa) ||
+            (g.wa && g.wa.oa && g.wa.oa.oa) ||
+            null;
+          if (sz) {
+            w = Number(sz.width) | 0;
+            h = Number(sz.height) | 0;
+          }
+        } catch (eSz) { /* ignore */ }
+        ensureWallGridDense(g.Ca, w, h);
+      }
+      ensureFruitShieldSets(g);
+      if (g.oa) ensureSnakeSegmentFlags(g.oa);
+      if (g.Ra) ensureSnakeSegmentFlags(g.Ra);
+    } catch (e) { /* ignore */ }
+  }
+
+  /**
+   * Drop scrape phantom walls that can never be real normal walls (1×1
+   * dead-end edge cells). Keep temp/lock/hotdog, and keep real corner /
+   * diagonal walls so mosaic matches the player's board.
+   */
   function filterMosaicWalls(walls, width, height) {
     if (!walls || !walls.length) return walls || [];
     const w = width != null ? width : 17;
@@ -1017,31 +1291,44 @@
     return out;
   }
 
-  /** Walls with lock/hotdog metadata from Ca.Aa Map or Ca.wa grid. */
+  /**
+   * Real walls live on Ca.Aa (Map keyed by wallSerialKey). Ca.wa also holds
+   * corner sentinel markers (value 2) that must never ship as walls — merging
+   * them used to stamp huge wrong solids on every co-op client.
+   */
   function scrapeWalls(g) {
     const out = [];
     const wallHost = g && g.Ca;
     if (!wallHost) return out;
-    // Live grid meta first: g.settings / g.width are absent on the native game,
-    // and a null size makes the corner filter below assume 17×15. On a smaller
-    // board only the top-left corner then matches, so the other three leak
-    // sentinel cells into the wall list peers stamp as solid walls.
+    // Prefer live Ca.wa dims; meta only when the grid is missing (never silent 17×15).
     const meta =
       (g && g.wa && g.wa.oa && g.wa.oa.oa) ||
       (g && g.oa && g.oa.oa) ||
       (g && g.settings && g.settings.grid) ||
       {};
-    const bw =
-      firstNumber(meta.width, meta.W) ||
-      (g && g.settings && (g.settings.width || g.settings.boardWidth)) ||
-      (g && g.width) ||
-      null;
-    const bh =
-      firstNumber(meta.height, meta.H) ||
-      (g && g.settings && (g.settings.height || g.settings.boardHeight)) ||
-      (g && g.height) ||
-      null;
-    // Co-op: scrape real walls only (snakes are never walls)
+    let bw = null;
+    let bh = null;
+    try {
+      const wa = wallHost.wa || wallHost.oa;
+      if (Array.isArray(wa) && wa.length) {
+        bw = wa[0] && wa[0].length;
+        bh = wa.length;
+      }
+    } catch (eSz) { /* ignore */ }
+    if (bw == null) {
+      bw =
+        firstNumber(meta.width, meta.W) ||
+        (g && g.settings && (g.settings.width || g.settings.boardWidth)) ||
+        (g && g.width) ||
+        null;
+    }
+    if (bh == null) {
+      bh =
+        firstNumber(meta.height, meta.H) ||
+        (g && g.settings && (g.settings.height || g.settings.boardHeight)) ||
+        (g && g.height) ||
+        null;
+    }
     let result = out;
     try {
       const byKey = Object.create(null);
@@ -1053,7 +1340,6 @@
           byKey[key] = p;
           return;
         }
-        // Prefer the entry with richer metadata (lock / temp / hotdog)
         if (
           (p.lock || p.lockType != null || p.temp || p.hotdog) &&
           !(prev.lock || prev.lockType != null || prev.temp || prev.hotdog)
@@ -1085,18 +1371,27 @@
           });
         }
       } catch (eAa) { /* ignore */ }
+      // Exact grid solids (value 1) only — never corner sentinels (value 2) or
+      // empty (0/3). Plain walls sometimes exist only on wa; locks live on Aa.
       try {
         const wa = wallHost.wa || wallHost.oa;
-        if (wa) {
-          const mapped = mapPointList(wa);
-          for (let i = 0; i < mapped.length; i++) addWall(mapped[i]);
+        if (Array.isArray(wa) && wa.length && Array.isArray(wa[0])) {
+          for (let y = 0; y < wa.length; y++) {
+            const row = wa[y];
+            if (!row) continue;
+            for (let x = 0; x < row.length; x++) {
+              const cell = row[x];
+              if (typeof cell === "object" && cell) continue;
+              if ((cell | 0) !== 1) continue;
+              addWall({ x: x, y: y });
+            }
+          }
         }
       } catch (eWa) { /* ignore */ }
       const merged = [];
       Object.keys(byKey).forEach(function (k) {
         merged.push(byKey[k]);
       });
-      // Drop corner sentinels from wa-only cells; keep temp/lock/hotdog
       result = filterMosaicWalls(merged, bw, bh);
       return result;
     } catch (eScr) {
@@ -1305,9 +1600,89 @@
     });
   }
 
+  const POSE_DIRECTIONS = {
+    UP: true,
+    DOWN: true,
+    LEFT: true,
+    RIGHT: true,
+  };
+
+  function normalizePoseDirection(value) {
+    const dir = String(value || "").toUpperCase();
+    return POSE_DIRECTIONS[dir] ? dir : null;
+  }
+
+  /**
+   * One safe adapter for native facing fields. Ca/Ga are considered only when
+   * they themselves (or an explicit `.direction`/`.dir`) contain a known
+   * direction; unknown obfuscated shapes are ignored rather than guessed.
+   */
+  function readNativeDirection(snake) {
+    if (!snake) return null;
+    const candidates = [
+      snake.direction,
+      snake.dir,
+      snake.Ca,
+      snake.Ga,
+      snake.Ca && snake.Ca.direction,
+      snake.Ca && snake.Ca.dir,
+      snake.Ga && snake.Ga.direction,
+      snake.Ga && snake.Ga.dir,
+    ];
+    for (let i = 0; i < candidates.length; i++) {
+      const dir = normalizePoseDirection(candidates[i]);
+      if (dir) return dir;
+    }
+    return null;
+  }
+
+  function reflectDirection(dir) {
+    return {
+      UP: "DOWN",
+      DOWN: "UP",
+      LEFT: "RIGHT",
+      RIGHT: "LEFT",
+    }[normalizePoseDirection(dir)] || null;
+  }
+
+  function findCompanionSnake(g, primary) {
+    const candidates = [];
+    try {
+      if (g && g.Ra && g.Ra.ka) candidates.push(g.Ra);
+      if (g && g.oa && g.oa.Ra && g.oa.Ra.ka) candidates.push(g.oa.Ra);
+      if (g && g.oa && g.oa.Sa && g.oa.Sa.ka &&
+          g.oa.Sa !== g.wa && g.oa.Sa !== g.oa) candidates.push(g.oa.Sa);
+    } catch (e) { /* ignore */ }
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      if (!candidate || candidate === primary || !candidate.ka) continue;
+      if (
+        primary &&
+        primary.ka &&
+        candidate.ka.length === primary.ka.length &&
+        candidate.ka[0] &&
+        primary.ka[0] &&
+        Number(candidate.ka[0].x) === Number(primary.ka[0].x) &&
+        Number(candidate.ka[0].y) === Number(primary.ka[0].y)
+      ) continue;
+      return candidate;
+    }
+    return null;
+  }
+
+  function segmentFlags(body) {
+    let any = false;
+    const flags = (body || []).map(function (point) {
+      const flag = point && point.otherDim ? 1 : 0;
+      if (flag) any = true;
+      return flag;
+    });
+    return any ? flags : undefined;
+  }
+
   /**
    * Extra board entities beyond fruit (walls, keys, mines, …) for co-op sync
-   * and versus mosaic. Best-effort against obfuscated engine fields.
+   * and race mosaic. Best-effort against obfuscated engine fields.
    */
   function scrapeBoardEntities(g) {
     g = g || gameInstance();
@@ -1452,8 +1827,20 @@
       (g.wa && g.wa.oa && g.wa.oa.oa) ||
       (g.oa && g.oa.oa) ||
       {};
-    const bw = firstNumber(meta.width, meta.W, 17) || 17;
-    const bh = firstNumber(meta.height, meta.H, 15) || 15;
+    // Same size order on every client: payload → live Ca.wa → meta → default
+    let bw = firstNumber(entities.width, entities.boardWidth) || null;
+    let bh = firstNumber(entities.height, entities.boardHeight) || null;
+    try {
+      const wa = g.Ca && (g.Ca.wa || g.Ca.oa);
+      if (Array.isArray(wa) && wa.length) {
+        if (bw == null) bw = wa[0] && wa[0].length;
+        if (bh == null) bh = wa.length;
+      }
+    } catch (eSz) { /* ignore */ }
+    if (bw == null) bw = firstNumber(meta.width, meta.W) || null;
+    if (bh == null) bh = firstNumber(meta.height, meta.H) || null;
+    bw = bw || 17;
+    bh = bh || 15;
 
     function writeList(hostArr, list) {
       if (!Array.isArray(hostArr) || !Array.isArray(list)) return;
@@ -1670,17 +2057,126 @@
       applied = true;
     }
 
+    /**
+     * Write walls the way native / Remix do: Ca.Aa Map with serial keys +
+     * Ca.wa occupancy. Always ensure Aa exists — p6E does Aa.add/set and
+     * crashes if peers only stamped the numeric grid.
+     */
+    function writeWallsNative(wallHost, list) {
+      if (!wallHost || !Array.isArray(list)) return;
+      const map = ensureNativeWallMap(wallHost);
+      if (!map) return;
+      let template = null;
+      const oldByPos = Object.create(null);
+      try {
+        map.forEach(function (v) {
+          if (!v) return;
+          if (!template) template = v;
+          const pos = v.pos || v;
+          if (pos && pos.x != null && pos.y != null) {
+            oldByPos[(pos.x | 0) + "," + (pos.y | 0)] = v;
+          }
+        });
+      } catch (eT) { /* ignore */ }
+
+      const next = [];
+      for (let i = 0; i < list.length; i++) {
+        const src = list[i];
+        if (!src || src.x == null || src.y == null) continue;
+        const posKey = (src.x | 0) + "," + (src.y | 0);
+        let obj = oldByPos[posKey];
+        if (!obj) {
+          obj = {};
+          if (template) {
+            try {
+              Object.keys(template).forEach(function (k) {
+                if (k === "pos" || k === "__mpClaimed" || k === "__tempWall") {
+                  return;
+                }
+                obj[k] = template[k];
+              });
+            } catch (eC) { /* ignore */ }
+          }
+          // Match Remix tempWalls / mexico defaults for a plain solid cell
+          if (obj.wm == null) obj.wm = false;
+          if (obj.m0 == null) obj.m0 = false;
+          if (obj.Lh == null) obj.Lh = true;
+          obj.pos = makeNativePoint(
+            src.x,
+            src.y,
+            template && template.pos
+          );
+        } else if (obj.pos || (template && template.pos)) {
+          obj.pos = ensureNativePos(
+            obj.pos,
+            src.x,
+            src.y,
+            (template && template.pos) || obj.pos
+          );
+        } else {
+          obj.x = src.x;
+          obj.y = src.y;
+        }
+        paintEntityFields(obj, src);
+        next.push({
+          key: wallSerialKey(src.x, src.y),
+          obj: obj,
+        });
+      }
+
+      try {
+        if (typeof map.clear === "function") map.clear();
+        for (let n = 0; n < next.length; n++) {
+          const item = next[n];
+          if (typeof map.set === "function") {
+            map.set(item.key, item.obj);
+          } else if (typeof map.add === "function") {
+            map.add(item.obj);
+          }
+        }
+        applied = true;
+      } catch (eM) { /* ignore */ }
+
+      const grid = wallHost.wa;
+      // Never leave holes — native y4E/p6E index wa[y][x] without a row guard
+      ensureWallGridDense(
+        wallHost,
+        grid && grid[0] && grid[0].length,
+        grid && grid.length
+      );
+      const dense = wallHost.wa;
+      if (!Array.isArray(dense) || !dense.length) return;
+      const want = Object.create(null);
+      for (let i = 0; i < list.length; i++) {
+        const p = list[i];
+        if (!p || p.x == null || p.y == null) continue;
+        want[(p.x | 0) + "," + (p.y | 0)] = true;
+      }
+      for (let y = 0; y < dense.length; y++) {
+        const row = dense[y];
+        if (!row) continue;
+        for (let x = 0; x < row.length; x++) {
+          if (typeof row[x] === "object" && row[x]) continue;
+          const key = x + "," + y;
+          const v = row[x] | 0;
+          if (want[key]) {
+            // Plant a normal 1×1 solid; leave higher refcounts alone
+            if (v === 0 || v === 3 || v === 2) row[x] = 1;
+            else if (v < 1) row[x] = 1;
+            continue;
+          }
+          // Only clear our stamped 1s — keep corner sentinels (2) + temp counters
+          if (v === 1) row[x] = 0;
+        }
+      }
+      applied = true;
+    }
+
     try {
-      if (entities.walls != null) {
-        // Never stamp cells native itself keeps clear (the 2×2 board corners) —
-        // a sender on another board size would otherwise paint solid corners.
+      if (entities.walls != null && g.Ca) {
+        // Drop 1×1 dead-end phantoms only — corner/diagonal walls are legal.
         const walls = filterMosaicWalls(entities.walls, bw, bh);
-        if (g.Ca && Array.isArray(g.Ca.wa) && g.Ca.wa.length) {
-          writeNumericGrid(g.Ca.wa, walls, 0, 1);
-        }
-        if (g.Ca && g.Ca.Aa && typeof g.Ca.Aa.forEach === "function") {
-          writeMap(g.Ca.Aa, walls);
-        }
+        writeWallsNative(g.Ca, walls);
       }
     } catch (eW) { /* ignore */ }
     try {
@@ -2436,9 +2932,16 @@
     }
     if (st.fp !== fp) {
       const gap = t - st.at;
-      // Outside this window it is a stall, a resync or two updates in one
-      // frame — none of which should be stretched into a slide.
-      st.step = gap >= MOTION_MIN_STEP_MS && gap <= MOTION_MAX_STEP_MS ? gap : 0;
+      // Prefer server step interval when present (stable slides despite jitter)
+      const forced = Number(holder._lerpStepMs) || 0;
+      if (forced >= MOTION_MIN_STEP_MS && forced <= MOTION_MAX_STEP_MS) {
+        st.step = forced;
+      } else {
+        // Outside this window it is a stall, a resync or two updates in one
+        // frame — none of which should be stretched into a slide.
+        st.step =
+          gap >= MOTION_MIN_STEP_MS && gap <= MOTION_MAX_STEP_MS ? gap : 0;
+      }
       st.from = st.ends;
       st.ends = { head: motionEnd(head), tail: motionEnd(tail) };
       st.fp = fp;
@@ -3954,18 +4457,23 @@
   }
 
   /**
-   * Versus Focus: local GameInstance still simulates between injects and can
+   * Race Focus: local GameInstance still simulates between injects and can
    * call die() even when the remote player is alive. Never run native die UI —
    * Focus spectators must not flash the endscreen (that resets Play/seat).
+   *
+   * Co-op server-auth death matrix:
+   * - Mid-match dead → SVG corpse only (__mpCoopLocalCorpse); never nj / origDie / deathscreen
+   * - STATE alive → clear corpse flags + hideDeathScreen (kill false native flashes)
+   * - Match end → _handleCoopMatchEnded owns teardown (not this guard)
    */
   function installFocusDieGuard(g) {
     if (!g || g.__mpFocusDieGuarded) return;
     g.__mpFocusDieGuarded = true;
     const origDie = typeof g.die === "function" ? g.die : null;
     g.die = function () {
-      if (root.__mpVersusFocusSpectate) {
+      if (root.__mpRaceFocusSpectate) {
         try {
-          const b = root.__mpVersusFocusBoard;
+          const b = root.__mpRaceFocusBoard;
           if (b && b.alive === false) {
             this.nj = true;
             if (this.dead != null) this.dead = true;
@@ -3984,8 +4492,48 @@
         } catch (e) { /* ignore */ }
         return;
       }
+      if (root.__mpCoopServerAuth) {
+        try {
+          const state = root.__mpCoopLastState;
+          const myId = root.__mpCoopLastStateMyId || root.__mpCoopMyId;
+          let alive = true;
+          if (state && state.ended) alive = false;
+          else if (state && myId && Array.isArray(state.snakes)) {
+            for (let i = 0; i < state.snakes.length; i++) {
+              const s = state.snakes[i];
+              if (s && s.clientId === myId) {
+                alive = s.alive !== false;
+                break;
+              }
+            }
+          }
+          // Never arm native death animation under server-auth
+          this.nj = false;
+          if (this.dead != null) this.dead = false;
+          if (this.isDead != null) this.isDead = false;
+          if (alive) {
+            root.__mpCoopLocalCorpse = false;
+            if (root.timeKeeper) root.timeKeeper._dead = false;
+          } else if (!state || !state.ended) {
+            root.__mpCoopLocalCorpse = true;
+            if (root.timeKeeper) root.timeKeeper._dead = false;
+          } else {
+            root.__mpCoopLocalCorpse = true;
+          }
+          hideDeathScreen();
+          try {
+            dismissDeathOverlayForRun();
+          } catch (eDismiss) { /* ignore */ }
+        } catch (eAuth) { /* ignore */ }
+        return; // never origDie
+      }
       if (origDie) return origDie.apply(this, arguments);
     };
+  }
+
+  /** Alias — co-op install site. */
+  function installCoopDieGuard(g) {
+    installFocusDieGuard(g);
   }
 
   /** Grow local ka when remote is longer — never rewrite existing tail segments. */
@@ -4054,7 +4602,7 @@
     const origTick = g.tick;
     g.tick = function () {
       const ret = origTick.apply(this, arguments);
-      if (root.__mpVersusFocusSpectate) {
+      if (root.__mpRaceFocusSpectate) {
         try {
           reapplyFocusBody(this);
         } catch (e) { /* ignore */ }
@@ -4124,7 +4672,7 @@
    * snake/fruit renderers draw the spectated run.
    *
    * Dormant: Focus draws the watched board itself now, and every branch below
-   * is gated on __mpVersusFocusSpectate, which nothing sets. Kept with the rest
+   * is gated on __mpRaceFocusSpectate, which nothing sets. Kept with the rest
    * of the seat plumbing in case we go back — see archive/focus-native/.
    *
    * After the initial seat, each remote pose change writes the full body list
@@ -4215,7 +4763,7 @@
       }
 
       if (g && g.oa && cleanBody.length) {
-        if (root.__mpVersusFocusSpectate) {
+        if (root.__mpRaceFocusSpectate) {
           const poseFp = focusPoseFingerprint(board);
           const localLen = Array.isArray(g.oa.ka) ? g.oa.ka.length : 0;
           const forceFull = root.__mpFocusForceFullBody === true;
@@ -4275,7 +4823,7 @@
       }
       if (g && g.wa && Array.isArray(board.apples)) {
         if (
-          root.__mpVersusFocusSpectate &&
+          root.__mpRaceFocusSpectate &&
           board.alive !== false &&
           board.apples.length === 0
         ) {
@@ -4286,7 +4834,7 @@
           applyCollectables({ apples: board.apples });
         }
       }
-      if (g && root.__mpVersusFocusSpectate) {
+      if (g && root.__mpRaceFocusSpectate) {
         try {
           installFocusDieGuard(g);
           installFocusTickGuard(g);
@@ -4329,7 +4877,7 @@
             }
             if (!root.__mpSpectateAllowMenus) hideDeathScreen();
           }
-          // Do not overwrite the App latch of __mpVersusFocusRemoteAlive — the
+          // Do not overwrite the App latch of __mpRaceFocusRemoteAlive — the
           // caller owns the death/revive edge (see archive/focus-native/).
         } catch (eAlive) { /* ignore */ }
       }
@@ -4595,19 +5143,28 @@
     return parkLocalSnakeOffBoard();
   }
 
-  /** Co-op / versus Focus spectate — never persist TimeKeeper PBs or attempts. */
+  /** Co-op / Race Focus spectate — never persist TimeKeeper PBs or attempts. */
   function isSpectatingForTimeKeeper() {
     return !!(
       root.__mpCoopSpectator ||
-      root.__mpVersusFocusWatch ||
-      root.__mpVersusFocusSpectate
+      root.__mpRaceFocusWatch ||
+      root.__mpRaceFocusSpectate
+    );
+  }
+
+  /** Co-op session must never write remix / coop localStorage PBs. */
+  function isCoopTimeKeeperBlocked() {
+    return !!(
+      root.__mpCoopServerAuth ||
+      root.__mpCoopSession ||
+      isSpectatingForTimeKeeper()
     );
   }
 
   /**
    * Patch shouldTrack so Remix savePB / saveScore / addAttempt / gotAll never
-   * write while spectating. Handlers in mod.js already skip MP side-effects;
-   * without this, orig.gotAll still flushed impossible times (e.g. 135ms ALL).
+   * write while spectating or during co-op. Handlers in mod.js already skip MP
+   * side-effects; without this, orig.gotAll still flushed impossible times.
    */
   function installSpectatorTimeKeeperGuard() {
     const tk = root.timeKeeper;
@@ -4617,7 +5174,7 @@
     const origShouldTrack =
       typeof tk.shouldTrack === "function" ? tk.shouldTrack.bind(tk) : null;
     tk.shouldTrack = function (ctx) {
-      if (isSpectatingForTimeKeeper()) return false;
+      if (isCoopTimeKeeperBlocked()) return false;
       return origShouldTrack ? origShouldTrack(ctx) : true;
     };
     return true;
@@ -4642,19 +5199,39 @@
       tk[name] = function (timeMs, score) {
         tk._lastTimeMs = timeMs;
         tk._lastScore = score;
-        if (name === "death") tk._dead = true;
+        if (name === "death") {
+          // Server-auth: native death is not authority — binder owns _dead
+          if (!root.__mpCoopServerAuth) tk._dead = true;
+        }
         if (name === "start") tk._dead = false;
+        // Server-auth co-op: native gotApple/gotAll/death must not drive Remix
+        // endscreens, PB, or stop the shared timer mid-match. Match end stops
+        // the timer in _handleCoopMatchEnded.
+        if (
+          root.__mpCoopServerAuth &&
+          (name === "gotApple" || name === "gotAll" || name === "death")
+        ) {
+          try {
+            after && after(timeMs, score, name);
+          } catch (eAuth) {
+            console.warn("mp timeKeeper hook", eAuth);
+          }
+          return undefined;
+        }
         try {
           after && after(timeMs, score, name);
         } catch (e) {
           console.warn("mp timeKeeper hook", e);
         }
-        // Belt-and-suspenders: never invoke Remix save path while spectating
+        // Belt-and-suspenders: never invoke Remix save path while spectating / co-op
         if (
-          isSpectatingForTimeKeeper() &&
+          isCoopTimeKeeperBlocked() &&
           (name === "gotApple" || name === "gotAll" || name === "death")
         ) {
-          if (name === "death" || name === "gotAll") {
+          if (
+            !root.__mpCoopServerAuth &&
+            (name === "death" || name === "gotAll")
+          ) {
             tk.playing = false;
           }
           return undefined;
@@ -4680,7 +5257,7 @@
     let out = code;
     const coopTick =
       "try{window.__mpCoopOnTick&&window.__mpCoopOnTick(this);}catch(_mpCoop){}" +
-      "try{window.__mpVersusFocusOnTick&&window.__mpVersusFocusOnTick(this);}catch(_mpVf){}";
+      "try{window.__mpRaceFocusOnTick&&window.__mpRaceFocusOnTick(this);}catch(_mpVf){}";
     if (out.indexOf("window.__remixGame=this") !== -1) {
       out = out.replace(
         /window\.__remixGame=this/g,
@@ -4706,13 +5283,14 @@
       );
     }
 
-    // Sanitize NaN lerp *before* native body runs (wrap alone misses the first
-    // call). Skip native snake draw when local body is empty/parked spectator.
+    // Seat oa.ka from COOP_STATE *before* native body runs (wrap alone misses
+    // the first call). Pass renderer so we write renderer.wb, not a stale __mpGame.
+    // If seat still mismatches, skip native snake and draw auth board (local+peers).
     if (out.indexOf("__mpCoopRenderEnter") === -1) {
       if (/render\(a,b,c\)\{/.test(out)) {
         out = out.replace(
           /render\(a,b,c\)\{/g,
-          "render(a,b,c){try{if(typeof a===\"number\"&&!isFinite(a))a=0;if(a==null)a=0;}catch(_mpSA){}try{window.__mpCoopRenderEnter&&window.__mpCoopRenderEnter(this,a,b,c);}catch(_mpRE){}try{if(window.__mpCoopSkipNativeRender&&window.__mpCoopSkipNativeRender(this)){try{window.__mpCoopDrawRemotes&&window.__mpCoopDrawRemotes(this);}catch(_mpDR){}return;}}catch(_mpSK){}"
+          "render(a,b,c){try{if(typeof a===\"number\"&&!isFinite(a))a=0;if(a==null)a=0;}catch(_mpSA){}try{window.__mpCoopSeatBeforeRender&&window.__mpCoopSeatBeforeRender(this);}catch(_mpSB){}try{window.__mpCoopRenderEnter&&window.__mpCoopRenderEnter(this,a,b,c);}catch(_mpRE){}try{if(window.__mpCoopSkipNativeRender&&window.__mpCoopSkipNativeRender(this)){try{(window.__mpCoopDrawAuthBoard||window.__mpCoopDrawRemotes)&&(window.__mpCoopDrawAuthBoard||window.__mpCoopDrawRemotes)(this);}catch(_mpDR){}return;}}catch(_mpSK){}"
         );
       }
     }
@@ -4784,6 +5362,29 @@
     return o | 0;
   }
 
+  /**
+   * On small boards, distinct server oy values can clamp onto the same row.
+   * Nudge by slot so seats stay on different cells when height allows.
+   */
+  function distinctCoopSpawnY(slotIndex, oy, height, takenYs) {
+    const h = height | 0;
+    const cy0 = Math.floor(h / 2);
+    const clamped = clampCoopSpawnOy(oy, h);
+    let y = cy0 + clamped;
+    y = Math.max(0, Math.min(y, h - 1));
+    const taken = takenYs || Object.create(null);
+    if (!taken[y]) return y;
+    // Prefer alternating offsets from preferred y
+    for (let d = 1; d < h; d++) {
+      const up = y - d;
+      const down = y + d;
+      if (up >= 0 && !taken[up]) return up;
+      if (down < h && !taken[down]) return down;
+    }
+    // Last resort: slot modulo
+    return Math.max(0, Math.min((slotIndex | 0) % Math.max(1, h), h - 1));
+  }
+
   /** Seat pose from live board size (never trust a pose built for another size). */
   function coopSpawnPoseForSlot(slotIndex, oy, width, height, yinYang) {
     const w = width || 17;
@@ -4791,14 +5392,23 @@
     if (yinYang || coopIsYinYang()) {
       return coopYinYangCorner(slotIndex, w, h);
     }
-    const clampedOy = clampCoopSpawnOy(oy, h);
+    const taken = Object.create(null);
+    try {
+      const remotes = root.__mpCoopRemotes || {};
+      Object.keys(remotes).forEach(function (id) {
+        const r = remotes[id];
+        const head = r && r.body && r.body[0];
+        if (head && head.y != null) taken[head.y | 0] = true;
+      });
+    } catch (eT) { /* ignore */ }
+    const y = distinctCoopSpawnY(slotIndex, oy, h, taken);
     let x = Math.floor(w / 2);
     // Length-3 RIGHT body is x, x-1, x-2 — keep head at least 2 from left edge
     if (w >= 3) x = Math.max(2, Math.min(x, w - 1));
     else x = Math.max(0, Math.min(x, w - 1));
     return {
       x: x,
-      y: Math.floor(h / 2) + clampedOy,
+      y: y,
       dir: "RIGHT",
     };
   }
@@ -4836,22 +5446,83 @@
     opts = opts || {};
     const g = gameInstance();
     if (!g || !g.oa) return false;
+    // Clear sticky death from warmup / prior run before writing the seat
+    try {
+      g.nj = false;
+      if (g.dead != null) g.dead = false;
+      if (g.isDead != null) g.isDead = false;
+      if (root.timeKeeper) {
+        root.timeKeeper._dead = false;
+        root.timeKeeper.playing = true;
+      }
+      if (typeof window !== "undefined") {
+        window.__mpCoopLocalDead = false;
+      }
+    } catch (eClear) { /* ignore */ }
+    try {
+      ensureCoopTickHosts(g);
+    } catch (eAa) { /* ignore */ }
     const meta =
       (g.wa && g.wa.oa && g.wa.oa.oa) ||
       (g.oa && g.oa.oa) ||
       (g.settings && g.settings.grid) ||
       {};
-    const w = firstNumber(meta.width, meta.W, 17) || 17;
-    const h = firstNumber(meta.height, meta.H, 15) || 15;
-    // Always recompute from live w/h — opts.pose may be classic 17×15 while size is small
-    const pose = coopSpawnPoseForSlot(
-      opts.slot != null ? opts.slot : 0,
-      oy,
-      w,
-      h,
-      opts.yinYang
-    );
+    let w = firstNumber(meta.width, meta.W) || null;
+    let h = firstNumber(meta.height, meta.H) || null;
+    try {
+      const wa = g.Ca && g.Ca.wa;
+      if (Array.isArray(wa) && wa.length) {
+        if (w == null) w = wa[0] && wa[0].length;
+        if (h == null) h = wa.length;
+      }
+    } catch (eSz) { /* ignore */ }
+    w = w || 17;
+    h = h || 15;
+    let pose = null;
+    const sx = opts.x != null ? Number(opts.x) : NaN;
+    const sy = opts.y != null ? Number(opts.y) : NaN;
+    const refW =
+      opts.boardWidth != null ? Number(opts.boardWidth) : null;
+    const refH =
+      opts.boardHeight != null ? Number(opts.boardHeight) : null;
+    // Prefer server absolute seat when the live board matches the seat's board
+    // (or the server omitted a reference size). Otherwise scale via oy.
+    const boardMatches =
+      (refW == null || refH == null || !Number.isFinite(refW) || !Number.isFinite(refH)) ||
+      ((refW | 0) === (w | 0) && (refH | 0) === (h | 0));
+    if (
+      boardMatches &&
+      Number.isFinite(sx) &&
+      Number.isFinite(sy) &&
+      !(opts.yinYang || coopIsYinYang())
+    ) {
+      pose = {
+        x: Math.max(0, Math.min(Math.round(sx), w - 1)),
+        y: Math.max(0, Math.min(Math.round(sy), h - 1)),
+        dir: opts.dir || "RIGHT",
+      };
+    } else {
+      pose = coopSpawnPoseForSlot(
+        opts.slot != null ? opts.slot : 0,
+        oy,
+        w,
+        h,
+        opts.yinYang
+      );
+    }
     root.__mpLastCoopSpawnPose = pose;
+    // Slide off solids / peers / illegal dead-ends when possible
+    try {
+      const cleared = findClearCoopSpawnPose(pose, {
+        width: w,
+        height: h,
+        game: g,
+      });
+      if (cleared && cleared.x != null) {
+        pose = cleared;
+        root.__mpLastCoopSpawnPose = pose;
+      }
+    } catch (eClear) { /* keep original seat */ }
     const body = coopSpawnBodyFromPose(pose);
     try {
       // Keep native idle-until-key behavior: do not assign direction here.
@@ -4928,6 +5599,7 @@
     }
     overlay.style.visibility = "hidden";
     overlay.style.opacity = "0";
+    overlay.style.pointerEvents = "none";
   }
 
   function restoreDeathScreen() {
@@ -4935,31 +5607,26 @@
     if (!overlay || overlay.dataset.mpDeathPrevVis == null) return;
     overlay.style.visibility = overlay.dataset.mpDeathPrevVis;
     overlay.style.opacity = overlay.dataset.mpDeathPrevOp || "";
+    overlay.style.pointerEvents = "";
     delete overlay.dataset.mpDeathPrevVis;
     delete overlay.dataset.mpDeathPrevOp;
   }
 
   function setNativeMenusLocked(locked, playOnly) {
+    // Ready / lobby lock removed — always clear pointer-events so trophy,
+    // count, speed, size, theme, and color stay clickable while connected.
     if (!playOnly) {
       SYNC_KEYS.forEach(function (id) {
         const row = document.getElementById(id);
         if (!row) return;
-        row.style.pointerEvents = locked ? "none" : "";
-        row.style.opacity = locked ? "0.55" : "";
-        row.title = locked ? "Unready to change settings" : "";
+        row.style.pointerEvents = "";
+        row.style.opacity = "";
+        row.title = "";
       });
       unlockPersonalMenus();
     }
-    const play = playButton();
-    if (play) {
-      play.style.pointerEvents = locked ? "none" : "";
-      play.style.opacity = locked ? "0.55" : "";
-      play.title = locked
-        ? playOnly
-          ? "Use Start match in Multiplayer"
-          : "Use Start match in Multiplayer"
-        : "";
-    }
+    // Play is owned by MultiplayerApp._paintPlayAsStartMatch (admin Start Match /
+    // Start Co-op). Menu lock must not dim or disable it.
   }
 
   /** Cosmetics (theme/color/apple/graphics) must stay clickable for every role. */
@@ -4975,13 +5642,15 @@
     });
   }
 
-  /** Always disable Play while in a multiplayer room (Start match only). */
+  /** Always disable Play while in a multiplayer room (non-admin / mid-match). */
   function setPlayButtonLocked(locked) {
     const play = playButton();
     if (!play) return;
     play.style.pointerEvents = locked ? "none" : "";
     play.style.opacity = locked ? "0.55" : "";
-    play.title = locked ? "Use Start match in Multiplayer" : "";
+    if (locked && !play.title) {
+      play.title = "Waiting for the room admin to start";
+    }
   }
 
   /** Snapshot for SETTINGS_SYNC — match rules only, no personal cosmetics. */
@@ -5009,6 +5678,39 @@
     return saw;
   }
 
+  /** Live meta/grid size from GameInstance (after Play bake). */
+  function boardSizeFromGame(g) {
+    g = g || gameInstance();
+    if (!g) return null;
+    try {
+      const meta =
+        (g.oa && g.oa.oa) ||
+        (g.wa && g.wa.oa && g.wa.oa.oa) ||
+        null;
+      let w = meta ? firstNumber(meta.width, meta.W) : null;
+      let h = meta ? firstNumber(meta.height, meta.H) : null;
+      if (!(w > 0) || !(h > 0)) {
+        const wa = g.Ca && g.Ca.wa;
+        if (Array.isArray(wa) && wa.length && Array.isArray(wa[0])) {
+          h = wa.length;
+          w = wa[0].length;
+        }
+      }
+      if (!(w > 0) || !(h > 0)) return null;
+      return { width: w | 0, height: h | 0 };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** Size menu index → Classic board dims (matches server coop::board_dims). */
+  function boardDimsForSizeIndex(sizeIndex) {
+    const idx = Number(sizeIndex);
+    if (idx === 1) return { width: 10, height: 9 };
+    if (idx === 2) return { width: 24, height: 21 };
+    return { width: 17, height: 15 };
+  }
+
   function setLocalPaused(paused) {
     root.pauseGame = paused ? 1 : 0;
   }
@@ -5022,18 +5724,11 @@
     opts = opts || {};
     // Keep Focus menu-peek ticking; otherwise STOP the run behind the chrome.
     if (!opts.keepRunning) {
-      root.pauseGame = 1;
-      try {
-        const g = gameInstance();
-        if (g) {
-          g.nj = true;
-          if (g.dead != null) g.dead = true;
-        }
-        if (root.timeKeeper) {
-          root.timeKeeper._dead = true;
-          root.timeKeeper.playing = false;
-        }
-      } catch (e) { /* ignore */ }
+      // Full quit path — chrome-only was leaving settings rows dead
+      return quitNativeRunForMenus({
+        skipEscapeDispatch: !!opts.skipEscapeDispatch,
+        pulse: opts.pulse,
+      });
     }
     const overlay = document.getElementsByClassName("wjOYOd")[0];
     if (overlay) {
@@ -5042,26 +5737,7 @@
       const menu = overlay.children && overlay.children[0];
       if (menu) menu.style.visibility = "visible";
     }
-    // Sync engine quit state (same signal Remix reset uses), unless caller
-    // already came from an Escape keydown (avoids re-entrancy).
-    if (opts.skipEscapeDispatch) return;
-    if (root.__mpEscHandling) return;
-    try {
-      root.__mpEscHandling = true;
-      document.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Escape",
-          code: "Escape",
-          keyCode: 27,
-          which: 27,
-          bubbles: true,
-          cancelable: true,
-        })
-      );
-    } catch (e) { /* ignore */ }
-    finally {
-      root.__mpEscHandling = false;
-    }
+    unlockPersonalMenus();
   }
 
   function drawCoopSnapshot(canvas, snap, colorsApi) {
@@ -5109,12 +5785,18 @@
     const snake = (g && g.oa) || {};
     const body = mapBody(bodySrc, snakeDimFlags(snake));
     const scoreInfo = readScoreAndAlive();
+    const nativeDir = readNativeDirection(snake);
     const out = {
       body: body,
-      dir: snake.direction || snake.dir || root.head_dir || null,
+      dir: nativeDir || normalizePoseDirection(root.head_dir),
+      headDir: nativeDir || normalizePoseDirection(root.head_dir),
+      movementDir: nativeDir || normalizePoseDirection(root.head_dir),
+      modeKey: effectiveModeKey(),
       alive: scoreInfo.alive !== false,
       score: scoreInfo.score != null ? scoreInfo.score | 0 : 0,
     };
+    const flags = segmentFlags(body);
+    if (flags) out.segmentFlags = flags;
     try {
       const key = scrapeModeKey();
       const parts = String(key).toLowerCase().split("+");
@@ -5139,7 +5821,23 @@
           if (meta.height) h = meta.height | 0;
         } catch (eSz) { /* defaults */ }
         const body2 = scrapeCompanionBody(g, body, w, h);
-        if (body2 && body2.length) out.body2 = body2;
+        if (body2 && body2.length) {
+          out.body2 = body2;
+          const companion = findCompanionSnake(g, snake);
+          const dir2 = companion
+            ? readNativeDirection(companion)
+            : reflectDirection(out.headDir);
+          out.headDir2 = dir2;
+          out.movementDir2 = dir2;
+          const flags2 = segmentFlags(body2);
+          if (flags2) out.segmentFlags2 = flags2;
+          if (companion) {
+            if (typeof companion.Sc === "string") out.Sc2 = companion.Sc;
+            if (typeof companion.Yc === "string") out.Yc2 = companion.Yc;
+            if (typeof companion.color1 === "string") out.color1_2 = companion.color1;
+            if (typeof companion.color2 === "string") out.color2_2 = companion.color2;
+          }
+        }
       }
     } catch (eP) { /* ignore */ }
     try {
@@ -5209,25 +5907,62 @@
 
   function snakeDeltaFingerprint(delta) {
     if (!delta) return "";
-    // Pose identity is head + length + dir (+ alive + score) — avoid O(n)
-    // string growth. Score is in here so the combined co-op total still moves
-    // on a mode that scores without growing the body.
-    const body = delta.body || [];
-    const h = body[0];
-    return (
-      (delta.alive === false ? "0" : "1") +
-      "|" +
-      (delta.dir || "") +
-      "|" +
-      body.length +
-      "|" +
-      (h ? h.x + "," + h.y : "") +
-      "|" +
-      (delta.score != null ? delta.score : "")
-    );
+    function path(body) {
+      let out = "";
+      for (let i = 0; i < (body || []).length; i++) {
+        const p = body[i] || {};
+        out += (i ? ";" : "") + (p.x | 0) + "," + (p.y | 0) +
+          (p.otherDim ? "d" : "");
+      }
+      return out;
+    }
+    function turns(list) {
+      return (list || []).map(function (turn) {
+        const at = turn.at || {};
+        return [
+          turn.turnSeq | 0,
+          (at.x | 0) + "," + (at.y | 0),
+          turn.fromDir || "",
+          turn.toDir || "",
+          turn.moveSeq | 0,
+        ].join(":");
+      }).join(";");
+    }
+    return [
+      delta.alive === false ? "0" : "1",
+      delta.score != null ? delta.score : "",
+      delta.moveSeq != null ? delta.moveSeq : "",
+      delta.dir || "",
+      delta.movementDir || "",
+      delta.headDir || "",
+      delta.transitionDir || "",
+      delta.modeKey || "",
+      path(delta.body),
+      path(delta.body2),
+      (delta.segmentFlags || []).join(""),
+      (delta.segmentFlags2 || []).join(""),
+      delta.movementDir2 || "",
+      delta.headDir2 || "",
+      delta.transitionDir2 || "",
+      delta.headLight != null ? delta.headLight : "",
+      delta.headLight2 != null ? delta.headLight2 : "",
+      delta.colorId != null ? delta.colorId : "",
+      delta.color1 || "",
+      delta.color2 || "",
+      delta.Sc || "",
+      delta.Yc || "",
+      delta.color1_2 || "",
+      delta.color2_2 || "",
+      delta.Sc2 || "",
+      delta.Yc2 || "",
+      delta.poisoned ? "p" : "",
+      delta.peaceful ? "q" : "",
+      delta.slotActive != null ? delta.slotActive : "",
+      turns(delta.turns),
+    ].join("|");
   }
 
-  /** Compact board identity for versus mosaic upload skip. */
+  /** Compact board identity for race mosaic upload skip. */
   function boardDeltaFingerprint(board) {
     if (!board) return "";
     const body = board.body || [];
@@ -5574,6 +6309,10 @@
         placed.push(a);
       } else {
         // Board full — drop the apple; ALL_APPLES win (not a blocked spawn)
+        if (root.__mpCoopServerAuth) {
+          // Server owns refill / all-apples — keep trying other cells only
+          continue;
+        }
         root.__mpCoopBoardFull = true;
         if (typeof root.__mpCoopOnBoardFull === "function") {
           try {
@@ -5583,6 +6322,92 @@
       }
     }
     return placed;
+  }
+
+  /** Pudding/vanilla Count index → simultaneous apples on the board. */
+  function expectedAppleCountFromSettings() {
+    try {
+      if (typeof root.getPortalPairMinimum === "function") {
+        const n = Number(root.getPortalPairMinimum());
+        if (Number.isFinite(n) && n > 0) return n | 0;
+      }
+    } catch (eMin) { /* ignore */ }
+    let idx = readSettingIndex("count");
+    if (idx == null) {
+      try {
+        if (root.timeKeeper && typeof root.timeKeeper.getCurrentSetting === "function") {
+          idx = root.timeKeeper.getCurrentSetting("count");
+        }
+      } catch (eTk) { /* ignore */ }
+    }
+    idx = Number(idx);
+    if (!Number.isFinite(idx) || idx < 0) idx = 0;
+    // Matches Pudding COUNT_MINIMA (1 / 3 / 5 / 10 / dice / bowl / …)
+    const minima = { 0: 1, 1: 3, 2: 5, 3: 10, 4: 6, 5: 24, 6: 5 };
+    return minima[idx] != null ? minima[idx] : 1;
+  }
+
+  /**
+   * Top up native fruit so the live Count setting is respected after co-op
+   * seat / sync. Never shrinks (special modes may hold fewer briefly).
+   */
+  function ensureCoopFruitCount(gIn) {
+    if (root.__mpCoopServerAuth) return false;
+    const g = gIn || gameInstance();
+    if (!g || !g.wa || !Array.isArray(g.wa.ka)) return false;
+    const want = expectedAppleCountFromSettings();
+    if (!(want > 0)) return false;
+    if (g.wa.ka.length >= want) return true;
+    let planted = 0;
+    const freePos =
+      (typeof g.Rb === "function" && g.Rb.bind(g)) ||
+      (typeof g.Tb === "function" && g.Tb.bind(g)) ||
+      null;
+    if (!freePos) return false;
+    let template = null;
+    for (let t = 0; t < g.wa.ka.length; t++) {
+      if (g.wa.ka[t]) {
+        template = g.wa.ka[t];
+        break;
+      }
+    }
+    while (g.wa.ka.length < want && planted < 64) {
+      planted++;
+      let pos = null;
+      try {
+        pos = freePos(null, 0);
+      } catch (eFp) {
+        break;
+      }
+      if (!pos || pos.x == null || pos.y == null) break;
+      const fruit = {};
+      if (template) {
+        try {
+          Object.keys(template).forEach(function (k) {
+            if (
+              k === "pos" ||
+              k === "He" ||
+              k === "CAb" ||
+              k === "iL" ||
+              k === "nba" ||
+              k === "Oba"
+            ) {
+              return;
+            }
+            fruit[k] = template[k];
+          });
+        } catch (eC) { /* ignore */ }
+      }
+      fruit.pos = makeNativePoint(
+        pos.x,
+        pos.y,
+        template && template.pos
+      );
+      if (fruit.type == null) fruit.type = 0;
+      if (fruit.nba == null) fruit.nba = new Set();
+      g.wa.ka.push(fruit);
+    }
+    return g.wa.ka.length >= want;
   }
 
   /** Max shared apples: board cells minus walls minus length-3 seats. */
@@ -5606,10 +6431,19 @@
     // Between winged seeds, never yank live fruit back to a lagged peer pose
     const trustLiveMotion = motionMode && !payload.fruitMotionSeed;
     try {
-      if (!trustLiveMotion) {
+      if (!trustLiveMotion && !payload.serverAuth && !root.__mpCoopServerAuth) {
         apples = nudgeCoopApplesOffSnakes(apples, g);
       }
       if (g && g.wa && Array.isArray(g.wa.ka)) {
+        // Hard reset only on explicit request (new session). Mid-match must
+        // keep fruit object identity or native eat/spawn anims restart forever.
+        if (
+          (payload.hardReset || root.__mpCoopFruitHardReset) &&
+          (payload.serverAuth || root.__mpCoopServerAuth)
+        ) {
+          g.wa.ka.length = 0;
+          root.__mpCoopFruitHardReset = false;
+        }
         // Native fruit render does `apple.pos.clone()` — keep a template Od/point.
         let templateApple = null;
         let templatePos = null;
@@ -5624,6 +6458,16 @@
           }
         }
         while (g.wa.ka.length > apples.length) {
+          // Never drop below Count-setting floor when a peer sends a short list
+          // (client-auth only). Server-auth STATE is exact — always match length.
+          if (
+            root.__mpCoopSession &&
+            !root.__mpCoopServerAuth &&
+            !payload.serverAuth &&
+            g.wa.ka.length <= expectedAppleCountFromSettings()
+          ) {
+            break;
+          }
           g.wa.ka.pop();
         }
         for (let i = 0; i < apples.length; i++) {
@@ -5635,7 +6479,20 @@
             if (templateApple) {
               try {
                 Object.keys(templateApple).forEach(function (k) {
-                  if (k === "pos" || k === "He" || k === "CAb" || k === "iL") {
+                  // Match Remix fruit clone — never copy shield Sets (may be null)
+                  if (
+                    k === "pos" ||
+                    k === "He" ||
+                    k === "CAb" ||
+                    k === "iL" ||
+                    k === "nba" ||
+                    k === "Oba" ||
+                    k === "mouth" ||
+                    k === "eating" ||
+                    k === "eatProgress" ||
+                    k === "burgerTimer" ||
+                    k === "burgerTimerMax"
+                  ) {
                     return;
                   }
                   dst[k] = templateApple[k];
@@ -5688,12 +6545,33 @@
             dst.Lh = false;
             dst.Gh = false;
           }
-          if (Array.isArray(src.shields) && src.shields.length) {
-            const set = new Set(src.shields);
-            dst.nba = set;
+          if (Array.isArray(src.shields)) {
+            // Always a real Set — native eat paths call nba.has / related Sets
+            // without null guards on co-op-synthesized fruit.
+            dst.nba = new Set(src.shields);
+          } else if (!dst.nba || typeof dst.nba.has !== "function") {
+            // null / {} / array — never leave a non-Set nba for freePos
+            dst.nba = Array.isArray(dst.nba) ? new Set(dst.nba) : new Set();
           }
+          try {
+            delete dst.Oba;
+          } catch (eOba) {
+            dst.Oba = undefined;
+          }
+          // Guarantee wall host exists before tick can grow a wall (p6E → Aa.add)
+          try {
+            if (g.Ca) ensureNativeWallMap(g.Ca);
+          } catch (eAaInit) { /* ignore */ }
         }
+        ensureFruitShieldSets(g);
         applyBoardEntities(payload);
+        // Client-auth top-up only — server-auth fruit list is exact from COOP_STATE.
+        // ensureCoopFruitCount used native freePos and parked extras in corners.
+        if (root.__mpCoopSession && !root.__mpCoopServerAuth && !payload.serverAuth) {
+          try {
+            ensureCoopFruitCount(g);
+          } catch (eCnt) { /* ignore */ }
+        }
         // Sync Slot Machine roll from peer (idempotent; skip if we just ate)
         try {
           if (
@@ -5763,8 +6641,15 @@
       if (isSpectatingForTimeKeeper()) return true;
       try {
         tk._dead = false;
-        if (typeof tk.start === "function") tk.start();
-        else tk.playing = true;
+        // Latch so wrapTimeKeeper onStart does not treat shared-clock arm as a
+        // mid-match Play restart (that path was false-killing every co-op client).
+        root.__mpCoopArmingSharedTimer = true;
+        try {
+          if (typeof tk.start === "function") tk.start();
+          else tk.playing = true;
+        } finally {
+          root.__mpCoopArmingSharedTimer = false;
+        }
         if (startedAt && Number.isFinite(startedAt)) {
           const elapsed = Math.max(0, Date.now() - startedAt);
           tk._lastTimeMs = elapsed;
@@ -5774,6 +6659,7 @@
         }
         return true;
       } catch (e) {
+        root.__mpCoopArmingSharedTimer = false;
         console.warn("startCoopRunTimer", e);
         return false;
       }
@@ -5884,22 +6770,372 @@
 
   /** Force local death so cross-snake collision ends the native run. */
   function forceLocalDeath() {
+    let killed = false;
     try {
       const g = gameInstance();
-      if (g && typeof g.die === "function") {
-        g.die();
-        return true;
+      if (g) {
+        g.nj = true;
+        if (g.dead != null) g.dead = true;
+        if (g.isDead != null) g.isDead = true;
+        if (typeof g.die === "function") {
+          try {
+            g.die();
+            killed = true;
+          } catch (eDie) { /* fall through */ }
+        }
       }
     } catch (e) { /* fall through */ }
     try {
-      if (root.timeKeeper && typeof root.timeKeeper.death === "function") {
-        const s = readScoreAndAlive();
-        root.timeKeeper.death(s.timeMs || 0, s.score || 0);
-        return true;
+      if (root.timeKeeper) {
+        root.timeKeeper._dead = true;
+        root.timeKeeper.playing = false;
+        if (typeof root.timeKeeper.death === "function") {
+          const s = readScoreAndAlive();
+          root.timeKeeper.death(s.timeMs || 0, s.score || 0);
+          killed = true;
+        }
       }
     } catch (e2) { /* ignore */ }
-    showDeathScreen({ skipEscapeDispatch: false });
-    return false;
+    root.pauseGame = 1;
+    return killed;
+  }
+
+  /**
+   * True engine quit for lobby menus. Showing the death chrome alone is not
+   * enough — Remix ignores trophy/count/theme/color until Escape-style quit.
+   * Keep the warm Play→stop behavior, but always finish with a real quit.
+   */
+  function quitNativeRunForMenus(opts) {
+    opts = opts || {};
+    clearDeathOverlayOverrides();
+    forceLocalDeath();
+    root.pauseGame = 1;
+    try {
+      const g = gameInstance();
+      if (g) {
+        g.nj = true;
+        if (g.dead != null) g.dead = true;
+        if (g.isDead != null) g.isDead = true;
+      }
+      if (root.timeKeeper) {
+        root.timeKeeper._dead = true;
+        root.timeKeeper.playing = false;
+      }
+    } catch (eState) { /* ignore */ }
+
+    const overlay = document.getElementsByClassName("wjOYOd")[0];
+    if (overlay) {
+      overlay.style.visibility = "visible";
+      overlay.style.opacity = "1";
+      overlay.style.pointerEvents = "";
+      const menu = overlay.children && overlay.children[0];
+      // PauseMod hides the menu child while paused — force it open for settings
+      if (menu) {
+        menu.style.visibility = "visible";
+        menu.style.pointerEvents = "";
+      }
+    }
+
+    unlockPersonalMenus();
+    setNativeMenusLocked(false);
+
+    if (opts.skipEscapeDispatch) return true;
+    if (root.__mpEscHandling) return true;
+
+    function dispatchEsc() {
+      if (root.__mpStartingMatch || root.__mpCoopSession) return;
+      try {
+        root.__mpEscHandling = true;
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Escape",
+            code: "Escape",
+            keyCode: 27,
+            which: 27,
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+      } catch (eEsc) { /* ignore */ }
+      finally {
+        root.__mpEscHandling = false;
+      }
+    }
+
+    dispatchEsc();
+    // Remix sometimes needs a second Escape after die() settles
+    if (typeof setTimeout === "function" && opts.pulse !== false) {
+      root.__mpQuitMenusPulse = (root.__mpQuitMenusPulse | 0) + 1;
+      const pulseId = root.__mpQuitMenusPulse;
+      setTimeout(function () {
+        if (pulseId !== root.__mpQuitMenusPulse) return;
+        if (root.__mpStartingMatch || root.__mpCoopSession) return;
+        root.__mpEscHandling = true;
+        try {
+          dispatchEsc();
+        } finally {
+          root.__mpEscHandling = false;
+        }
+      }, 80);
+    }
+    return true;
+  }
+
+  /**
+   * Slide a co-op seat off solid walls, peer bodies, and illegal 1×1 dead-ends.
+   * Returns the preferred pose when already clear, or a nearby slide.
+   */
+  function findClearCoopSpawnPose(pose, opts) {
+    opts = opts || {};
+    if (!pose || pose.x == null || pose.y == null) return pose || null;
+    const g = opts.game || gameInstance();
+    let w = opts.width | 0;
+    let h = opts.height | 0;
+    if (!w || !h) {
+      try {
+        const wa = g && g.Ca && g.Ca.wa;
+        if (Array.isArray(wa) && wa.length) {
+          w = w || (wa[0] && wa[0].length) || 0;
+          h = h || wa.length || 0;
+        }
+      } catch (e) { /* ignore */ }
+    }
+    w = w || 17;
+    h = h || 15;
+    const dir = pose.dir === "LEFT" ? "LEFT" : "RIGHT";
+
+    const blocked = Object.create(null);
+    function markCell(x, y) {
+      if (x < 0 || y < 0 || x >= w || y >= h) return;
+      blocked[(x | 0) + "," + (y | 0)] = true;
+    }
+    // Solid walls (wa===1) + Aa map
+    try {
+      const walls =
+        opts.walls ||
+        (g && g.Ca ? scrapeWalls(g) : null) ||
+        [];
+      for (let i = 0; i < walls.length; i++) {
+        const p = walls[i];
+        if (p) markCell(p.x, p.y);
+      }
+    } catch (eW) { /* ignore */ }
+    // Peer / local bodies already seated
+    try {
+      const remotes = opts.remotes || root.__mpCoopRemotes || {};
+      Object.keys(remotes).forEach(function (id) {
+        const r = remotes[id];
+        if (!r || !r.body) return;
+        for (let i = 0; i < r.body.length; i++) {
+          const p = r.body[i];
+          if (p) markCell(p.x, p.y);
+        }
+      });
+    } catch (eR) { /* ignore */ }
+    if (opts.extraBodies) {
+      for (let i = 0; i < opts.extraBodies.length; i++) {
+        const body = opts.extraBodies[i];
+        if (!body) continue;
+        for (let j = 0; j < body.length; j++) {
+          const p = body[j];
+          if (p) markCell(p.x, p.y);
+        }
+      }
+    }
+
+    function poseClear(cand) {
+      if (!cand) return false;
+      if (isIllegalNormalWallCell(cand.x, cand.y, w, h)) return false;
+      const body = coopSpawnBodyFromPose(cand);
+      if (!coopSpawnBodyInBounds(body, w, h)) return false;
+      for (let i = 0; i < body.length; i++) {
+        const p = body[i];
+        if (!p) return false;
+        if (blocked[(p.x | 0) + "," + (p.y | 0)]) return false;
+        if (isIllegalNormalWallCell(p.x, p.y, w, h)) return false;
+      }
+      return true;
+    }
+
+    const preferred = {
+      x: Math.max(0, Math.min(pose.x | 0, w - 1)),
+      y: Math.max(0, Math.min(pose.y | 0, h - 1)),
+      dir: dir,
+    };
+    if (poseClear(preferred)) return preferred;
+
+    // Spiral search from preferred seat (bounded)
+    const maxR = Math.max(w, h);
+    for (let r = 1; r <= maxR; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+          const cand = {
+            x: preferred.x + dx,
+            y: preferred.y + dy,
+            dir: dir,
+          };
+          if (cand.x < 0 || cand.y < 0 || cand.x >= w || cand.y >= h) {
+            continue;
+          }
+          // Keep length-3 RIGHT body clear of left edge
+          if (dir === "RIGHT" && cand.x < 2) continue;
+          if (dir === "LEFT" && cand.x > w - 3) continue;
+          if (poseClear(cand)) return cand;
+        }
+      }
+    }
+    return preferred;
+  }
+
+  /**
+   * Same entry point as the in-game Reset control: GameInstance.reset().
+   * Call only after co-op session flags are cleared so wrapGameReset does not
+   * treat it as a mid-match local death.
+   */
+  function resetNativeLikeButton(gIn) {
+    const g = gIn || gameInstance();
+    if (!g || typeof g.reset !== "function") return false;
+    try {
+      g.reset();
+      return true;
+    } catch (e) {
+      console.warn("resetNativeLikeButton", e);
+      return false;
+    }
+  }
+
+  /**
+   * Hard-reset native board hosts for a new co-op SESSION_START (incl. mid-run).
+   * Empties walls Map (keeps wa corner sentinels), fruit list, and mode entities.
+   * Also kills leftover eat/grow animation so the next match does not loop the
+   * previous session's last apple bite.
+   */
+  function resetCoopBoardForNewSession(gIn) {
+    const g = gIn || gameInstance();
+    if (!g) return false;
+    let ok = false;
+    try {
+      g.nj = false;
+      if (g.dead != null) g.dead = false;
+      if (g.isDead != null) g.isDead = false;
+    } catch (eDead) { /* ignore */ }
+    try {
+      if (root.timeKeeper) {
+        root.timeKeeper._dead = false;
+        root.timeKeeper._lastScore = 0;
+        if (typeof root.timeKeeper.lastAppleTime === "number") {
+          root.timeKeeper.lastAppleTime = 0;
+        }
+      }
+    } catch (eTk) { /* ignore */ }
+    try {
+      if (g.Ca) {
+        ensureNativeWallMap(g.Ca);
+        ensureWallGridDense(g.Ca);
+        if (typeof g.Ca.Aa.clear === "function") {
+          g.Ca.Aa.clear();
+        }
+        const grid = g.Ca.wa;
+        if (Array.isArray(grid)) {
+          for (let y = 0; y < grid.length; y++) {
+            const row = grid[y];
+            if (!row) continue;
+            for (let x = 0; x < row.length; x++) {
+              if (typeof row[x] === "object" && row[x]) continue;
+              // Preserve corner sentinels (2); clear solids (1) and empties
+              if ((row[x] | 0) === 1) row[x] = 0;
+            }
+          }
+        }
+        ok = true;
+      }
+    } catch (eW) { /* ignore */ }
+    // Always wipe fruit hosts between matches. Leaving old apple objects made
+    // the next co-op run loop the previous bite animation (head still on that
+    // cell / fruit still carrying eat state). Server-auth rebinds from STATE;
+    // client-auth Play reseeds Count.
+    try {
+      if (g.wa && Array.isArray(g.wa.ka)) {
+        g.wa.ka.length = 0;
+      }
+    } catch (eFruit) { /* ignore */ }
+    // Drop snake grow / mouth leftovers so render does not keep biting
+    try {
+      if (g.oa) {
+        const snake = g.oa;
+        const growKeys = [
+          "grow",
+          "growth",
+          "pendingGrowth",
+          "toGrow",
+          "mouth",
+          "eating",
+          "eatProgress",
+          "appleBits",
+        ];
+        for (let gi = 0; gi < growKeys.length; gi++) {
+          const k = growKeys[gi];
+          if (k in snake) {
+            try {
+              snake[k] = typeof snake[k] === "number" ? 0 : false;
+            } catch (eG) { /* ignore */ }
+          }
+        }
+        if (typeof ensureSnakeSegmentFlags === "function") {
+          ensureSnakeSegmentFlags(snake);
+        }
+      }
+    } catch (eSnake) { /* ignore */ }
+    try {
+      if (g.Ba && g.Ba.keys) {
+        if (Array.isArray(g.Ba.keys)) g.Ba.keys.length = 0;
+        else if (typeof g.Ba.keys.clear === "function") g.Ba.keys.clear();
+      }
+    } catch (eK) { /* ignore */ }
+    try {
+      if (g.Aa) {
+        if (Array.isArray(g.Aa.oa)) g.Aa.oa.length = 0;
+        else if (g.Aa.oa && typeof g.Aa.oa.clear === "function") g.Aa.oa.clear();
+        if (Array.isArray(g.Aa.d_)) g.Aa.d_.length = 0;
+        if (Array.isArray(g.Aa.da)) g.Aa.da.length = 0;
+      }
+    } catch (eB) { /* ignore */ }
+    try {
+      if (g.Ma) {
+        const mh = g.Ma.oa || g.Ma.ka;
+        if (Array.isArray(mh)) mh.length = 0;
+        else if (mh && typeof mh.clear === "function") mh.clear();
+      }
+    } catch (eM) { /* ignore */ }
+    try {
+      if (g.Ya) {
+        const sh = g.Ya.oa || g.Ya.ka;
+        if (Array.isArray(sh)) sh.length = 0;
+        else if (sh && typeof sh.clear === "function") sh.clear();
+      }
+    } catch (eS) { /* ignore */ }
+    try {
+      if (g.Ga && Array.isArray(g.Ga.oa)) {
+        for (let y = 0; y < g.Ga.oa.length; y++) {
+          const row = g.Ga.oa[y];
+          if (!row) continue;
+          for (let x = 0; x < row.length; x++) row[x] = null;
+        }
+      }
+    } catch (eBr) { /* ignore */ }
+    try {
+      root.__mpCoopSkipFruitReapply = false;
+      root.__mpCoopBoardFull = false;
+      root.__mpCoopLastState = null;
+      root.__mpCoopLastStateMyId = null;
+      root.__mpCoopLastStateSeq = -1;
+      root.__mpCoopAuthReapplyScheduled = false;
+      root.__mpCoopPlayerRenderer = null;
+      root.__mpCoopRenderArgs = null;
+      root.__mpCoopRemotes = Object.create(null);
+    } catch (eFl) { /* ignore */ }
+    return ok;
   }
 
   root.MultiplayerGsm = {
@@ -5916,6 +7152,9 @@
     snapshotSettings: snapshotSettings,
     snapshotSyncSettings: snapshotSyncSettings,
     settingsMatchLocal: settingsMatchLocal,
+    forceMatchSettingsForPlay: forceMatchSettingsForPlay,
+    boardSizeFromGame: boardSizeFromGame,
+    boardDimsForSizeIndex: boardDimsForSizeIndex,
     applySettings: applySettings,
     applySnakeColor: applySnakeColor,
     triggerPlay: triggerPlay,
@@ -5931,6 +7170,9 @@
     scrapeBoard: scrapeBoard,
     scrapeSnakeDelta: scrapeSnakeDelta,
     scrapeCoopSnakeDelta: scrapeCoopSnakeDelta,
+    normalizePoseDirection: normalizePoseDirection,
+    readNativeDirection: readNativeDirection,
+    reflectDirection: reflectDirection,
     snakeDeltaFingerprint: snakeDeltaFingerprint,
     boardDeltaFingerprint: boardDeltaFingerprint,
     scrapeCollectables: scrapeCollectables,
@@ -5938,21 +7180,30 @@
     scrapeBoardEntities: scrapeBoardEntities,
     filterMosaicWalls: filterMosaicWalls,
     isIllegalNormalWallCell: isIllegalNormalWallCell,
+    wallSerialKey: wallSerialKey,
+    ensureNativeWallMap: ensureNativeWallMap,
+    ensureFruitShieldSets: ensureFruitShieldSets,
+    ensureWallGridDense: ensureWallGridDense,
+    ensureSnakeSegmentFlags: ensureSnakeSegmentFlags,
+    ensureCoopTickHosts: ensureCoopTickHosts,
     applyCollectables: applyCollectables,
     nudgeCoopApplesOffSnakes: nudgeCoopApplesOffSnakes,
     coopAppleGoal: coopAppleGoal,
+    expectedAppleCountFromSettings: expectedAppleCountFromSettings,
+    ensureCoopFruitCount: ensureCoopFruitCount,
     isCoopFruitMotionMode: isCoopFruitMotionMode,
     applyBoardEntities: applyBoardEntities,
     applyCoopSpawnOffset: applyCoopSpawnOffset,
     applyCoopStartMoving: applyCoopStartMoving,
     clampCoopSpawnOy: clampCoopSpawnOy,
+    distinctCoopSpawnY: distinctCoopSpawnY,
     coopSpawnPoseForSlot: coopSpawnPoseForSlot,
     coopYinYangCorner: coopYinYangCorner,
     coopSpawnBodyFromPose: coopSpawnBodyFromPose,
     coopSpawnBodyInBounds: coopSpawnBodyInBounds,
-    findClearCoopSpawnPose: function (pose) {
-      return pose || null;
-    },
+    findClearCoopSpawnPose: findClearCoopSpawnPose,
+    resetCoopBoardForNewSession: resetCoopBoardForNewSession,
+    resetNativeLikeButton: resetNativeLikeButton,
     coopIsYinYang: coopIsYinYang,
     parkLocalSnakeOffBoard: parkLocalSnakeOffBoard,
     emptyLocalSnakeBody: emptyLocalSnakeBody,
@@ -5968,7 +7219,9 @@
     restoreControlHelper: restoreControlHelper,
     installFirstRunControlTipGuard: installFirstRunControlTipGuard,
     forceLocalDeath: forceLocalDeath,
+    quitNativeRunForMenus: quitNativeRunForMenus,
     installFocusDieGuard: installFocusDieGuard,
+    installCoopDieGuard: installCoopDieGuard,
     installFocusTickGuard: installFocusTickGuard,
     focusPoseFingerprint: focusPoseFingerprint,
     startCoopRunTimer: startCoopRunTimer,

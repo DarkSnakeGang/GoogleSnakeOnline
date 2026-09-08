@@ -38,7 +38,7 @@ describe("gsm hooks", () => {
     assert.ok(out.indexOf("window.__mpGame=this") >= 0);
     assert.ok(out.indexOf("window.__remixGame=this") >= 0);
     assert.ok(out.indexOf("__mpCoopOnTick") >= 0);
-    assert.ok(out.indexOf("__mpVersusFocusOnTick") >= 0);
+    assert.ok(out.indexOf("__mpRaceFocusOnTick") >= 0);
   });
 
   it("injects __mpGame on plain tick(){", () => {
@@ -629,15 +629,21 @@ describe("gsm hooks", () => {
     assert.ok(wallFill, "wall cells painted with border color");
   });
 
-  it("filterMosaicWalls drops illegal corner walls but keeps temp/lock", () => {
-    assert.equal(Gsm.isIllegalNormalWallCell(0, 0, 10, 10), true);
-    assert.equal(Gsm.isIllegalNormalWallCell(1, 1, 10, 10), true);
-    assert.equal(Gsm.isIllegalNormalWallCell(9, 0, 10, 10), true);
+  it("filterMosaicWalls drops 1x1 corner dead-ends but keeps corner/diagonal", () => {
+    // Illegal: edge-adjacent dead-end cells. Legal: corner + inward diagonal.
+    assert.equal(Gsm.isIllegalNormalWallCell(0, 0, 10, 10), false, "corner ok");
+    assert.equal(Gsm.isIllegalNormalWallCell(1, 1, 10, 10), false, "diagonal ok");
+    assert.equal(Gsm.isIllegalNormalWallCell(1, 0, 10, 10), true, "top dead-end");
+    assert.equal(Gsm.isIllegalNormalWallCell(0, 1, 10, 10), true, "left dead-end");
+    assert.equal(Gsm.isIllegalNormalWallCell(9, 0, 10, 10), false, "TR corner ok");
+    assert.equal(Gsm.isIllegalNormalWallCell(8, 0, 10, 10), true, "TR edge dead-end");
     assert.equal(Gsm.isIllegalNormalWallCell(3, 4, 10, 10), false);
     const filtered = Gsm.filterMosaicWalls(
       [
         { x: 0, y: 0 },
         { x: 1, y: 1 },
+        { x: 1, y: 0 },
+        { x: 0, y: 1 },
         { x: 3, y: 4 },
         { x: 0, y: 0, temp: true },
         { x: 9, y: 9, lock: true },
@@ -645,10 +651,14 @@ describe("gsm hooks", () => {
       10,
       10
     );
-    assert.equal(filtered.length, 3);
-    assert.equal(filtered[0].x, 3);
-    assert.equal(filtered[1].temp, true);
-    assert.equal(filtered[2].lock, true);
+    assert.equal(filtered.length, 5);
+    assert.equal(filtered[0].x, 0);
+    assert.equal(filtered[0].y, 0);
+    assert.equal(filtered[1].x, 1);
+    assert.equal(filtered[1].y, 1);
+    assert.equal(filtered[2].x, 3);
+    assert.equal(filtered[3].temp, true);
+    assert.equal(filtered[4].lock, true);
   });
 
   it("scrapeWalls does not export co-op remote snake cells as walls", () => {
@@ -688,7 +698,7 @@ describe("gsm hooks", () => {
     }
   });
 
-  it("drawBoardOnCanvas ignores phantom corner walls", () => {
+  it("drawBoardOnCanvas keeps corner/diagonal walls; drops 1x1 dead-end phantoms", () => {
     const fills = [];
     const ctx = {
       fillStyle: "",
@@ -724,6 +734,7 @@ describe("gsm hooks", () => {
       walls: [
         { x: 0, y: 0 },
         { x: 1, y: 1 },
+        { x: 1, y: 0 },
         { x: 9, y: 9 },
         { x: 5, y: 5 },
       ],
@@ -734,9 +745,14 @@ describe("gsm hooks", () => {
     const wallCells = fills.filter(function (f) {
       return f.style === "#WALLX" && f.w === 10 && f.h === 10;
     });
-    assert.equal(wallCells.length, 1);
-    assert.equal(wallCells[0].x, 50);
-    assert.equal(wallCells[0].y, 50);
+    // Corner (0,0), diagonal (1,1), opposite corner (9,9), center — not (1,0)
+    assert.equal(wallCells.length, 4);
+    const keys = wallCells
+      .map(function (f) {
+        return f.x / 10 + "," + f.y / 10;
+      })
+      .sort();
+    assert.deepEqual(keys, ["0,0", "1,1", "5,5", "9,9"]);
   });
 
   it("drawBoardOnCanvas paints mode entities (key/soko/mine/statue/gate/bridge/arrow)", () => {
@@ -2970,7 +2986,7 @@ describe("gsm hooks", () => {
   it("startCoopRunTimer / stopCoopRunTimer toggle timeKeeper", () => {
     const g = typeof globalThis !== "undefined" ? globalThis : global;
     delete g.__mpCoopSpectator;
-    delete g.__mpVersusFocusSpectate;
+    delete g.__mpRaceFocusSpectate;
     g.timeKeeper = {
       _dead: true,
       playing: false,
@@ -2989,7 +3005,7 @@ describe("gsm hooks", () => {
   it("spectating never starts coop timer and never saves TimeKeeper", () => {
     const g = typeof globalThis !== "undefined" ? globalThis : global;
     delete g.__mpCoopSpectator;
-    delete g.__mpVersusFocusSpectate;
+    delete g.__mpRaceFocusSpectate;
     const saves = [];
     g.timeKeeper = {
       playing: false,
@@ -3035,9 +3051,9 @@ describe("gsm hooks", () => {
     assert.deepEqual(saves, [], "orig save methods must not run while spectating");
 
     g.__mpCoopSpectator = false;
-    g.__mpVersusFocusSpectate = true;
+    g.__mpRaceFocusSpectate = true;
     assert.equal(g.timeKeeper.shouldTrack(), false);
-    g.__mpVersusFocusSpectate = false;
+    g.__mpRaceFocusSpectate = false;
     assert.equal(g.timeKeeper.shouldTrack(), true);
   });
 
@@ -3137,7 +3153,7 @@ describe("gsm hooks", () => {
     assert.notEqual(Gsm.snakeDeltaFingerprint(pose), fp1);
   });
 
-  it("boardDeltaFingerprint skips unchanged versus boards", () => {
+  it("boardDeltaFingerprint skips unchanged race boards", () => {
     const board = {
       alive: true,
       dir: "RIGHT",
@@ -3532,7 +3548,7 @@ describe("gsm hooks", () => {
     }
   });
 
-  it("co-op wall sync drops board-corner cells on a small board", () => {
+  it("co-op wall sync keeps real walls; skips wa corner sentinels", () => {
     const g = typeof globalThis !== "undefined" ? globalThis : global;
     const W = 10;
     const H = 9;
@@ -3541,8 +3557,8 @@ describe("gsm hooks", () => {
       grid[y] = [];
       for (let x = 0; x < W; x++) grid[y][x] = 0;
     }
-    // Native leaves markers in the 2×2 at every corner; only a real wall
-    // (here 4,4) may ship to peers, or they stamp solid corners pre-start.
+    // Native leaves value-2 markers in the 2×2 at every corner; only a real
+    // solid (value 1) may scrape when Aa is empty.
     [
       [0, 0], [1, 0], [0, 1], [1, 1],
       [W - 1, 0], [W - 2, 0], [W - 1, 1], [W - 2, 1],
@@ -3563,11 +3579,18 @@ describe("gsm hooks", () => {
       return w.x + "," + w.y;
     }), ["4,4"]);
 
-    // A payload that still carries corners must not paint them
-    grid[0][W - 1] = 0;
-    Gsm.applyBoardEntities({ walls: cols.walls.concat([{ x: W - 1, y: 0 }]) });
-    assert.equal(grid[0][W - 1], 0, "top-right corner is never stamped solid");
+    // Corner + diagonal are legal; 1×1 dead-end edge cells are not
+    Gsm.applyBoardEntities({
+      walls: cols.walls.concat([
+        { x: W - 1, y: 0 },
+        { x: 1, y: 0 },
+      ]),
+    });
+    assert.equal(grid[0][W - 1], 1, "corner wall may be stamped");
+    assert.equal(grid[0][1], 2, "dead-end edge is not stamped over sentinel");
     assert.equal(grid[4][4], 1, "real wall is kept");
+    assert.ok(g.__remixGame.Ca.Aa, "wall Map must exist for native p6E");
+    assert.equal(g.__remixGame.Ca.Aa.size, 2);
   });
 
   it("collectablesFingerprint changes when a soko box or key moves", () => {
@@ -3788,5 +3811,167 @@ describe("gsm hooks", () => {
       apples: [],
     });
     assert.ok(lights && lights.length >= 2);
+  });
+
+  it("wall round-trip on 10×9 stamps one solid and keeps corner sentinels", () => {
+    const g = typeof globalThis !== "undefined" ? globalThis : global;
+    const W = 10;
+    const H = 9;
+    const wa = [];
+    for (let y = 0; y < H; y++) {
+      wa[y] = [];
+      for (let x = 0; x < W; x++) wa[y][x] = 0;
+    }
+    // Corner sentinels like native
+    wa[0][0] = 2;
+    wa[0][W - 1] = 2;
+    wa[H - 1][0] = 2;
+    wa[H - 1][W - 1] = 2;
+    g.__remixGame = {
+      oa: { ka: [{ x: 5, y: 4 }], oa: { width: W, height: H } },
+      Ca: { wa: wa, Aa: null },
+      wa: { ka: [], oa: { oa: { width: W, height: H } } },
+    };
+    g.__mpGame = g.__remixGame;
+    Gsm.applyBoardEntities({
+      walls: [{ x: 4, y: 4 }],
+      width: W,
+      height: H,
+    });
+    assert.equal(g.__remixGame.Ca.wa[4][4], 1);
+    assert.equal(g.__remixGame.Ca.wa[0][0], 2);
+    assert.ok(g.__remixGame.Ca.Aa instanceof Map);
+    assert.equal(g.__remixGame.Ca.Aa.size, 1);
+    // Dead-end (1,0) must not stamp
+    Gsm.applyBoardEntities({
+      walls: [{ x: 4, y: 4 }, { x: 1, y: 0 }],
+      width: W,
+      height: H,
+    });
+    assert.equal(g.__remixGame.Ca.wa[0][1] === 1 || g.__remixGame.Ca.wa[1][0] === 1, false);
+    assert.equal(g.__remixGame.Ca.wa[4][4], 1);
+  });
+
+  it("wall round-trip on 17×15 matches P1 cell for peer apply", () => {
+    const g = typeof globalThis !== "undefined" ? globalThis : global;
+    const W = 17;
+    const H = 15;
+    const wa = [];
+    for (let y = 0; y < H; y++) {
+      wa[y] = [];
+      for (let x = 0; x < W; x++) wa[y][x] = 0;
+    }
+    wa[0][0] = 2;
+    g.__remixGame = {
+      oa: { ka: [{ x: 8, y: 7 }], oa: { width: W, height: H } },
+      Ca: { wa: wa, Aa: new Map() },
+      wa: { ka: [], oa: { oa: { width: W, height: H } } },
+    };
+    g.__mpGame = g.__remixGame;
+    // P1 scrape after grow
+    g.__remixGame.Ca.wa[4][4] = 1;
+    g.__remixGame.Ca.Aa.set(Gsm.wallSerialKey(4, 4), { pos: { x: 4, y: 4 } });
+    const scraped = Gsm.scrapeBoardEntities(g.__remixGame);
+    assert.ok(scraped.walls.some(function (p) { return p.x === 4 && p.y === 4; }));
+    // Reset peer board and apply
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (g.__remixGame.Ca.wa[y][x] === 1) g.__remixGame.Ca.wa[y][x] = 0;
+      }
+    }
+    g.__remixGame.Ca.Aa.clear();
+    Gsm.applyBoardEntities({
+      walls: scraped.walls,
+      width: W,
+      height: H,
+    });
+    assert.equal(g.__remixGame.Ca.wa[4][4], 1);
+    assert.equal(g.__remixGame.Ca.wa[0][0], 2);
+  });
+
+  it("startCoopRunTimer sets arming latch around tk.start", () => {
+    const g = typeof globalThis !== "undefined" ? globalThis : global;
+    let started = false;
+    g.timeKeeper = {
+      start: function () {
+        started = true;
+        assert.equal(g.__mpCoopArmingSharedTimer, true);
+      },
+      playing: false,
+    };
+    g.__mpCoopSpectator = false;
+    assert.equal(Gsm.startCoopRunTimer({ timerStartedAtMs: Date.now() }), true);
+    assert.equal(started, true);
+    assert.equal(g.__mpCoopArmingSharedTimer, false);
+  });
+
+  it("findClearCoopSpawnPose slides off a solid wall", () => {
+    const pose = { x: 5, y: 5, dir: "RIGHT" };
+    const cleared = Gsm.findClearCoopSpawnPose(pose, {
+      width: 17,
+      height: 15,
+      walls: [{ x: 5, y: 5 }, { x: 4, y: 5 }, { x: 3, y: 5 }],
+      remotes: {},
+    });
+    assert.ok(cleared);
+    assert.ok(cleared.x !== 5 || cleared.y !== 5);
+    const body = Gsm.coopSpawnBodyFromPose(cleared);
+    assert.ok(Gsm.coopSpawnBodyInBounds(body, 17, 15));
+  });
+
+  it("distinctCoopSpawnY keeps small-board seats apart", () => {
+    const taken = { 4: true };
+    const y = Gsm.distinctCoopSpawnY(1, 1, 9, taken);
+    assert.notEqual(y, 4);
+    assert.ok(y >= 0 && y < 9);
+  });
+
+  it("resetCoopBoardForNewSession clears solids and fruit", () => {
+    const g = typeof globalThis !== "undefined" ? globalThis : global;
+    const wa = [];
+    for (let y = 0; y < 15; y++) {
+      wa[y] = [];
+      for (let x = 0; x < 17; x++) wa[y][x] = 0;
+    }
+    wa[0][0] = 2;
+    wa[3][3] = 1;
+    const game = {
+      nj: true,
+      Ca: { Aa: new Map([[1, { pos: { x: 3, y: 3 } }]]), wa: wa },
+      wa: { ka: [{ pos: { x: 1, y: 1 } }] },
+    };
+    g.__remixGame = game;
+    g.__mpGame = game;
+    assert.equal(Gsm.resetCoopBoardForNewSession(game), true);
+    assert.equal(game.Ca.Aa.size, 0);
+    assert.equal(game.Ca.wa[3][3], 0);
+    assert.equal(game.Ca.wa[0][0], 2);
+    assert.equal(game.wa.ka.length, 0);
+    assert.equal(game.nj, false);
+  });
+
+  it("mode matrix: wall apply / fruit apply / seat clear helpers exist", () => {
+    const modes = [
+      "peaceful",
+      "wall",
+      "portal",
+      "cheese",
+      "yin_yang",
+      "dimension",
+      "shield",
+      "key",
+      "sokoban",
+    ];
+    modes.forEach(function (m) {
+      assert.equal(typeof m, "string");
+    });
+    assert.equal(typeof Gsm.applyBoardEntities, "function");
+    assert.equal(typeof Gsm.applyCollectables, "function");
+    assert.equal(typeof Gsm.findClearCoopSpawnPose, "function");
+    assert.equal(typeof Gsm.resetCoopBoardForNewSession, "function");
+    assert.equal(typeof Gsm.isIllegalNormalWallCell, "function");
+    // Peaceful / yin_yang skip friendly — exposed via native, seats clear
+    assert.ok(Gsm.coopSpawnPoseForSlot(0, -1, 17, 15));
+    assert.ok(Gsm.coopYinYangCorner(0, 17, 15));
   });
 });

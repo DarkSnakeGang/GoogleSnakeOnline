@@ -162,7 +162,7 @@
     return null;
   }
 
-  /** Disambiguate duplicate color names in Versus: Blue, Blue 2, … */
+  /** Disambiguate duplicate color names in Race: Blue, Blue 2, … */
   function displayNameFor(client, roster) {
     if (client.displayName && String(client.displayName).trim()) {
       return String(client.displayName).trim();

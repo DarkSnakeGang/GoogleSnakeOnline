@@ -15,13 +15,18 @@
     this.myClientId = null;
     this.myColorId = null;
     this.injectEnabled = true;
+    this.generation = 0;
+    this.peerPoseSeq = Object.create(null);
   }
 
   CoopNative.prototype.reset = function () {
     this.remotes = {};
     this.collectables = null;
     this.sessionActive = false;
+    this.generation = 0;
+    this.peerPoseSeq = Object.create(null);
     this._seedStickyUntil = 0;
+    releaseNativeBackend("session-reset");
     invalidateLightMask();
     this.syncBridge();
   };
@@ -33,6 +38,7 @@
     root.__mpCoopRemotes = this.remotes;
     root.__mpCoopCollectables = this.collectables;
     root.__mpCoopOwnerId = this.collectablesOwnerId || null;
+    root.__mpCoopGeneration = this.generation || root.__mpCoopGeneration || 0;
     root.__mpCoopInject = !!this.injectEnabled && !!this.sessionActive;
     _displayColorsAt = 0;
   };
@@ -43,6 +49,21 @@
 
   CoopNative.prototype.applySnakeDelta = function (payload) {
     if (!payload || !payload.clientId) return;
+    if (
+      !payload._seeded &&
+      !payload._fromState &&
+      this.generation &&
+      Number(payload.generation) !== Number(this.generation)
+    ) return;
+    if (payload.poseSeq != null) {
+      const poseSeq = Number(payload.poseSeq);
+      if (
+        !Number.isSafeInteger(poseSeq) ||
+        poseSeq < 1 ||
+        poseSeq <= (this.peerPoseSeq[payload.clientId] || 0)
+      ) return;
+      this.peerPoseSeq[payload.clientId] = poseSeq;
+    }
     const prev = this.remotes[payload.clientId];
     // Live deltas win over SESSION_START seeds — except empty/short during sticky window
     if (payload._seeded && prev && prev._fromDelta) return;
@@ -106,7 +127,9 @@
       if (prev._visualBody) next._visualBody = prev._visualBody;
       if (prev._lerpAt != null) next._lerpAt = prev._lerpAt;
       if (prev._lerpStepMs != null) next._lerpStepMs = prev._lerpStepMs;
+      if (prev.__mpMotion) next.__mpMotion = prev.__mpMotion;
     }
+    if (payload._lerpStepMs != null) next._lerpStepMs = payload._lerpStepMs;
     // Never drop a corpse body when a dead/empty scrape arrives: a co-op corpse
     // stays exactly where it died and keeps colliding.
     if (bodyEmpty && prev && prev.body && prev.body.length) {
@@ -207,6 +230,68 @@
       }
     }
     return true;
+  }
+
+  /**
+   * Rewrite snake.ka to finite Closure-safe points + matching wa flags.
+   * Returns false when the body cannot be salvaged (caller should skip/park).
+   */
+  function sanitizeSnakeBody(snake) {
+    if (!snake) return false;
+    if (!Array.isArray(snake.ka) || !snake.ka.length) return false;
+    const Gsm = root.MultiplayerGsm;
+    const clean = [];
+    let dirty = false;
+    for (let i = 0; i < snake.ka.length; i++) {
+      const p = snake.ka[i];
+      if (!p) {
+        dirty = true;
+        continue;
+      }
+      const x = Number(p.x);
+      const y = Number(p.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        dirty = true;
+        continue;
+      }
+      if (typeof p.clone !== "function") dirty = true;
+      clean.push({ x: x, y: y });
+    }
+    if (!clean.length) return false;
+    if (dirty || clean.length !== snake.ka.length) {
+      if (Gsm && typeof Gsm.writeNativeBody === "function") {
+        try {
+          Gsm.writeNativeBody(snake, clean);
+        } catch (eW) {
+          return false;
+        }
+      } else {
+        snake.ka.length = 0;
+        for (let j = 0; j < clean.length; j++) {
+          const seg = { x: clean[j].x, y: clean[j].y };
+          seg.clone = function () {
+            const c = { x: this.x, y: this.y };
+            c.clone = this.clone;
+            return c;
+          };
+          snake.ka.push(seg);
+        }
+      }
+    }
+    if (Gsm && typeof Gsm.ensureSnakeSegmentFlags === "function") {
+      try {
+        Gsm.ensureSnakeSegmentFlags(snake);
+      } catch (eF) { /* ignore */ }
+    }
+    return bodyIsRenderable(snake.ka);
+  }
+
+  /** Local + Yin Yang twin — repair before native PlayerRenderer. */
+  function sanitizeLocalSnakesForRender(game) {
+    if (!game) return false;
+    const ok = sanitizeSnakeBody(game.oa);
+    if (game.Ra) sanitizeSnakeBody(game.Ra);
+    return ok;
   }
 
   /* ------------------------------------------------------------------ modes */
@@ -386,6 +471,8 @@
 
   function killLocalOnRemote(game) {
     if (!game || coopSkipFriendlyHits()) return false;
+    // Server-auth: death is STATE-only — never native die / nj stars
+    if (root.__mpCoopServerAuth) return false;
     if (root.__mpCoopSpectator || root.__mpCoopLocalDead) return false;
     if (game.nj || game.dead || game.isDead) return false;
     const snake = game.oa;
@@ -422,15 +509,14 @@
     game.__mpCoopResetWrapped = true;
     const orig = game.reset;
     game.reset = function () {
-      if (
-        root.__mpCoopSession &&
-        root.__mpCoopInject &&
-        !root.__mpCoopSpectator &&
-        typeof root.__mpCoopOnLocalReset === "function"
-      ) {
-        try {
-          root.__mpCoopOnLocalReset();
-        } catch (e) { /* ignore */ }
+      // Co-op mid-match Reset/Escape → soft-rebind STATE only (never native reset).
+      if (root.__mpCoopSession && !root.__mpCoopSpectator) {
+        if (typeof root.__mpCoopOnLocalReset === "function") {
+          try {
+            root.__mpCoopOnLocalReset();
+          } catch (e) { /* ignore */ }
+        }
+        return;
       }
       return orig.apply(this, arguments);
     };
@@ -752,6 +838,34 @@
     return 0;
   }
 
+  /**
+   * Snake overlay layout — must match native floor/fruit (same tile + origin).
+   * Do NOT invent a second fill-center board; that double-draws apples and
+   * fights Classic's native chrome.
+   * @returns {{w:number,h:number,cell:number,ox:number,oy:number}|null}
+   */
+  function authBoardLayout(renderer, game) {
+    const state = root.__mpCoopLastState;
+    let w = 0;
+    let h = 0;
+    if (state) {
+      w = state.width | 0;
+      h = state.height | 0;
+    }
+    if (!(w > 0) || !(h > 0)) {
+      const sz = boardSizeFromGame(game);
+      w = sz.width | 0;
+      h = sz.height | 0;
+    }
+    if (!(w > 0) || !(h > 0)) return null;
+    const cell = nativeTileSize(game);
+    if (!(cell > 0)) return null;
+    // Native Classic paints from the engine origin (0,0) in PlayerRenderer space
+    const layout = { w: w, h: h, cell: cell, ox: 0, oy: 0 };
+    root.__mpCoopAuthLayout = layout;
+    return layout;
+  }
+
   // Light-mode fog mask, rebuilt once per tick (per-frame scraping is too slow).
   let _lightMask = null;
   let _lightMaskAt = 0;
@@ -900,13 +1014,23 @@
    * `renderer.wb` its GameInstance, so cell (x,y) sits at (x*tile, y*tile) with
    * no origin offset — the same mapping Remix uses for its own overlays.
    */
-  function drawCoopRemotes(renderer) {
+  function drawCoopRemotes(renderer, acceptRemote) {
     if (!root.__mpCoopInject || !root.__mpCoopSession) return 0;
     const ctx = renderer && renderer.ka;
     if (!ctx || typeof ctx.save !== "function") return 0;
     const game = (renderer && renderer.wb) || root.__mpGame || root.__remixGame;
-    const tile = nativeTileSize(game);
-    if (!(tile > 0)) return 0;
+    let ox = 0;
+    let oy = 0;
+    let tile = 0;
+    let size = { width: 0, height: 0 };
+    // Co-op always uses fill+center auth layout (same as drawAuthBoardChrome)
+    const layout =
+      root.__mpCoopAuthLayout || authBoardLayout(renderer, game);
+    if (!layout) return 0;
+    tile = layout.cell;
+    ox = layout.ox;
+    oy = layout.oy;
+    size = { width: layout.w, height: layout.h };
 
     const myId = root.__mpCoopMyId;
     const remotes = root.__mpCoopRemotes || {};
@@ -917,7 +1041,6 @@
     if (!Gsm || typeof Gsm.drawWallSolverStyleSnake !== "function") return 0;
 
     const colorsById = displayColorIds();
-    const size = boardSizeFromGame(game);
     const modeKey = coopModeKey();
     const wraps =
       modeKeyHas(modeKey, "borderless") || modeKeyHas(modeKey, "peaceful");
@@ -943,6 +1066,7 @@
         if (myId && id === myId) continue;
         const r = remotes[id];
         if (!r) continue;
+        if (acceptRemote && !acceptRemote(r, id)) continue;
         let body = r._visualBody;
         if (!bodyIsRenderable(body)) body = r.body;
         if (!bodyIsRenderable(body)) continue;
@@ -987,8 +1111,8 @@
           Gsm.drawWallSolverStyleSnake(
             ctx,
             body,
-            0,
-            0,
+            ox,
+            oy,
             tile,
             colorInfo,
             r.dir,
@@ -1023,8 +1147,8 @@
             Gsm.drawWallSolverStyleSnake(
               ctx,
               body2,
-              0,
-              0,
+              ox,
+              oy,
               tile,
               companionColor,
               r.dir,
@@ -1055,18 +1179,757 @@
     let prog = a;
     if (typeof prog === "number" && !Number.isFinite(prog)) prog = 0;
     if (prog == null) prog = 0;
+    if (typeof prog === "number") prog = Math.max(0, Math.min(1, prog));
     return [prog, b === undefined ? true : b, c == null ? {} : c];
   }
 
+  function isYiNanError(err) {
+    const msg = String((err && err.message) || err || "");
+    return /\byi\b/i.test(msg) && /NaN/i.test(msg);
+  }
+
+  /* ------------------------------------------------ native peer rendering */
+
+  const NATIVE_RELAY = "native-relay-v1";
+  const NATIVE_MAX_PEERS = 3;
+  const NATIVE_CANVAS_PROPS = [
+    "globalAlpha",
+    "globalCompositeOperation",
+    "imageSmoothingEnabled",
+    "imageSmoothingQuality",
+    "filter",
+    "direction",
+  ];
+  let _nativeBackend = null;
+
+  function nativeMetrics() {
+    if (!_nativeBackend) return {
+      generation: Number(root.__mpCoopGeneration) || 0,
+      backend: "mosaic",
+      cadence: 60,
+      renderCount: 0,
+      refreshCount: 0,
+      compositeCount: 0,
+      layerAllocations: 0,
+      layerReleases: 0,
+      bufferGrowth: 0,
+      fallbackReason: null,
+    };
+    return _nativeBackend.metrics;
+  }
+
+  function publishNativeMetrics(state) {
+    root.__mpCoopNativeRenderMetrics = state.metrics;
+    const now = Date.now();
+    if (!state.lastDebugAt || now - state.lastDebugAt >= 1000) {
+      state.lastDebugAt = now;
+      root.__mpCoopNativeRenderDebug = Object.assign({}, state.metrics);
+    }
+  }
+
+  function releaseNativeBackend(reason) {
+    const state = _nativeBackend;
+    if (!state) return;
+    Object.keys(state.seats).forEach(function (id) {
+      const seat = state.seats[id];
+      if (seat && seat.canvas && seat.canvas.parentNode) {
+        try { seat.canvas.parentNode.removeChild(seat.canvas); } catch (e) { /* ignore */ }
+      }
+      state.metrics.layerReleases++;
+    });
+    state.seats = Object.create(null);
+    if (reason && !state.metrics.fallbackReason) state.metrics.fallbackReason = reason;
+    publishNativeMetrics(state);
+    _nativeBackend = null;
+  }
+
+  function createNativeBackend(generation) {
+    releaseNativeBackend("generation-changed");
+    const metrics = {
+      generation: generation,
+      backend: "layers",
+      cadence: 60,
+      renderCount: 0,
+      refreshCount: 0,
+      compositeCount: 0,
+      layerAllocations: 0,
+      layerReleases: 0,
+      bufferGrowth: 0,
+      fallbackReason: null,
+      renderExceptions: 0,
+      averageRefreshMs: 0,
+    };
+    _nativeBackend = {
+      generation: generation,
+      seats: Object.create(null),
+      frame: 0,
+      disabled: false,
+      audited: false,
+      exceptionTimes: [],
+      metrics: metrics,
+      lastDebugAt: 0,
+    };
+    publishNativeMetrics(_nativeBackend);
+    return _nativeBackend;
+  }
+
+  function nativeState() {
+    const generation = Number(root.__mpCoopGeneration) || 0;
+    if (!_nativeBackend || _nativeBackend.generation !== generation) {
+      return createNativeBackend(generation);
+    }
+    return _nativeBackend;
+  }
+
+  function disableNative(state, reason) {
+    state.disabled = true;
+    state.metrics.backend = "mosaic";
+    state.metrics.fallbackReason = reason || "disabled";
+    publishNativeMetrics(state);
+  }
+
+  function noteNativeException(state, err) {
+    const now = Date.now();
+    state.exceptionTimes = state.exceptionTimes.filter(function (at) {
+      return now - at <= 10000;
+    });
+    state.exceptionTimes.push(now);
+    state.metrics.renderExceptions++;
+    if (state.exceptionTimes.length >= 3) {
+      disableNative(state, "render-circuit-breaker");
+    }
+    const at = Date.now();
+    if (at - _drawWarnAt > 2000) {
+      _drawWarnAt = at;
+      console.warn("__mpCoop native peer render", err);
+    }
+  }
+
+  function isNativeRelayPlayer() {
+    return (
+      root.__mpCoopInject &&
+      root.__mpCoopSession &&
+      root.__mpCoopAuthority === NATIVE_RELAY &&
+      !root.__mpCoopSpectator &&
+      !modeKeyHas(coopModeKey(), "light")
+    );
+  }
+
+  function remoteSlot(remote, id) {
+    const n = Number(
+      remote && remote.slot != null
+        ? remote.slot
+        : remote && remote.seat != null
+          ? remote.seat
+          : remote && remote.slotIndex
+    );
+    return Number.isFinite(n) ? n : String(id);
+  }
+
+  function liveNativePeers() {
+    const remotes = root.__mpCoopRemotes || {};
+    const myId = root.__mpCoopMyId;
+    return Object.keys(remotes)
+      .filter(function (id) {
+        const r = remotes[id];
+        return (
+          (!myId || id !== myId) &&
+          r &&
+          (!r.clientId || r.clientId === id) &&
+          r.alive !== false &&
+          bodyIsRenderable(r.body)
+        );
+      })
+      .sort(function (a, b) {
+        const as = remoteSlot(remotes[a], a);
+        const bs = remoteSlot(remotes[b], b);
+        if (typeof as === "number" && typeof bs === "number" && as !== bs) {
+          return as - bs;
+        }
+        return String(as).localeCompare(String(bs)) || a.localeCompare(b);
+      })
+      .slice(0, NATIVE_MAX_PEERS);
+  }
+
+  function copyCanvasState(from, to) {
+    if (!from || !to) return;
+    for (let i = 0; i < NATIVE_CANVAS_PROPS.length; i++) {
+      const k = NATIVE_CANVAS_PROPS[i];
+      try {
+        if (k in from) to[k] = from[k];
+      } catch (e) { /* optional context state */ }
+    }
+    try {
+      if (typeof from.getTransform === "function" && typeof to.setTransform === "function") {
+        const t = from.getTransform();
+        to.setTransform(t.a, t.b, t.c, t.d, t.e, t.f);
+      }
+    } catch (eT) { /* old canvas */ }
+  }
+
+  function createLayer(mainCtx) {
+    const source = mainCtx && mainCtx.canvas;
+    if (!source) return null;
+    let canvas = null;
+    try {
+      if (root.document && typeof root.document.createElement === "function") {
+        canvas = root.document.createElement("canvas");
+      } else if (typeof root.OffscreenCanvas === "function") {
+        canvas = new root.OffscreenCanvas(source.width, source.height);
+      }
+    } catch (e) { canvas = null; }
+    if (!canvas || typeof canvas.getContext !== "function") return null;
+    canvas.width = source.width;
+    canvas.height = source.height;
+    if (canvas.style) {
+      canvas.style.position = "absolute";
+      canvas.style.inset = "0";
+      canvas.style.width = (source.clientWidth || source.width) + "px";
+      canvas.style.height = (source.clientHeight || source.height) + "px";
+      canvas.style.pointerEvents = "none";
+      canvas.style.opacity = "0";
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    copyCanvasState(mainCtx, ctx);
+    return { canvas: canvas, ctx: ctx };
+  }
+
+  function pointFactory(template) {
+    if (template && typeof template.clone === "function") {
+      try {
+        const p = template.clone();
+        if (p) return p;
+      } catch (e) { /* use plain native-shaped point */ }
+    }
+    const p = { x: 0, y: 0 };
+    p.clone = function () {
+      const c = { x: this.x, y: this.y };
+      c.clone = this.clone;
+      return c;
+    };
+    return p;
+  }
+
+  function writeCachedBody(cache, body, template, state) {
+    if (!cache.points) cache.points = [];
+    while (cache.points.length < body.length) {
+      cache.points.push(pointFactory(template));
+      state.metrics.bufferGrowth++;
+    }
+    cache.points.length = body.length;
+    for (let i = 0; i < body.length; i++) {
+      cache.points[i].x = Number(body[i].x);
+      cache.points[i].y = Number(body[i].y);
+      if (body[i].otherDim) cache.points[i].otherDim = true;
+      else if ("otherDim" in cache.points[i]) delete cache.points[i].otherDim;
+    }
+    if (!cache.flags) cache.flags = [];
+    while (cache.flags.length < body.length) cache.flags.push(true);
+    cache.flags.length = body.length;
+    for (let j = 0; j < body.length; j++) {
+      cache.flags[j] = !body[j].otherDim;
+    }
+  }
+
+  function copyIfPresent(target, source, names) {
+    for (let i = 0; i < names.length; i++) {
+      const k = names[i];
+      if (source && source[k] != null) target[k] = source[k];
+    }
+  }
+
+  function buildPeerSnake(cache, localSnake, remote, body, suffix, state) {
+    cache = cache || {};
+    writeCachedBody(cache, body, localSnake && localSnake.ka && localSnake.ka[0], state);
+    if (!cache.snake || Object.getPrototypeOf(cache.snake) !== Object.getPrototypeOf(localSnake)) {
+      cache.snake = Object.create(localSnake ? Object.getPrototypeOf(localSnake) : Object.prototype);
+    }
+    const snake = cache.snake;
+    if (localSnake) {
+      Object.keys(localSnake).forEach(function (k) {
+        if (k !== "ka" && k !== "wa" && k !== "Ra") snake[k] = localSnake[k];
+      });
+    }
+    snake.ka = cache.points;
+    snake.wa = cache.flags;
+    const s = suffix || "";
+    const dir = remote["movementDir" + s] != null
+      ? remote["movementDir" + s]
+      : remote["headDir" + s] != null
+        ? remote["headDir" + s]
+        : remote.dir;
+    copyIfPresent(snake, {
+      direction: dir,
+      dir: dir,
+      Ca: remote["headDir" + s],
+      Ga: remote["transitionDir" + s],
+      turns: remote["turns" + s] || remote.turns,
+      Sc: remote[s ? "Sc2" : "Sc"],
+      Yc: remote[s ? "Yc2" : "Yc"],
+    }, ["direction", "dir", "Ca", "Ga", "turns", "Sc", "Yc"]);
+    if ("pendingTurns" in snake) snake.pendingTurns = remote["turns" + s] || remote.turns || [];
+    if (remote["headLight" + s] != null) snake.headLight = remote["headLight" + s];
+    copyIfPresent(snake, remote, ["poisoned", "otherDim", "status"]);
+    snake.alive = true;
+    return { snake: snake, cache: cache };
+  }
+
+  function snapshotHost(host) {
+    if (!host || (typeof host !== "object" && typeof host !== "function")) return null;
+    const keys = Object.keys(host);
+    const values = Object.create(null);
+    for (let i = 0; i < keys.length; i++) values[keys[i]] = host[keys[i]];
+    return { host: host, keys: keys, values: values };
+  }
+
+  function restoreHost(snap) {
+    if (!snap) return true;
+    const host = snap.host;
+    let ok = true;
+    Object.keys(host).forEach(function (k) {
+      if (snap.keys.indexOf(k) < 0) {
+        try { delete host[k]; } catch (e) { ok = false; }
+      }
+    });
+    for (let i = 0; i < snap.keys.length; i++) {
+      const k = snap.keys[i];
+      try {
+        host[k] = snap.values[k];
+        if (host[k] !== snap.values[k]) ok = false;
+      } catch (e) { ok = false; }
+    }
+    return ok;
+  }
+
+  function hostHasUnknownMutation(snap, allowed) {
+    if (!snap) return false;
+    const nowKeys = Object.keys(snap.host);
+    if (nowKeys.length !== snap.keys.length) return true;
+    for (let i = 0; i < snap.keys.length; i++) {
+      const k = snap.keys[i];
+      if (allowed && allowed[k]) continue;
+      if (snap.host[k] !== snap.values[k]) return true;
+    }
+    return false;
+  }
+
+  function snapshotSnakeGraph(snake) {
+    if (!snake) return [];
+    const out = [snapshotHost(snake), snapshotHost(snake.ka), snapshotHost(snake.wa)];
+    const body = snake.ka || [];
+    for (let i = 0; i < body.length; i++) out.push(snapshotHost(body[i]));
+    const turns = snake.turns || snake.pendingTurns || snake.Aa;
+    out.push(snapshotHost(turns));
+    for (let j = 0; turns && j < turns.length; j++) out.push(snapshotHost(turns[j]));
+    return out;
+  }
+
+  function graphMutated(snaps) {
+    for (let i = 0; i < snaps.length; i++) {
+      if (hostHasUnknownMutation(snaps[i], null)) return true;
+    }
+    return false;
+  }
+
+  function restoreGraph(snaps) {
+    let ok = true;
+    for (let i = snaps.length - 1; i >= 0; i--) {
+      ok = restoreHost(snaps[i]) && ok;
+    }
+    return ok;
+  }
+
+  function modeGateHosts(renderer, game) {
+    const hosts = [];
+    function add(host) {
+      if (!host || typeof host !== "object" || hosts.indexOf(host) >= 0) return;
+      hosts.push(host);
+    }
+    add(renderer && renderer.settings);
+    add(game && game.settings);
+    add(renderer && renderer.modeSettings);
+    add(game && game.modeSettings);
+    [renderer, game].forEach(function (owner) {
+      Object.keys(owner || {}).forEach(function (k) {
+        const value = owner[k];
+        if (value && typeof value === "object" && /setting|mode/i.test(k)) add(value);
+      });
+    });
+    return hosts;
+  }
+
+  function discoveredRenderHosts(renderer, game, localSnake, companion) {
+    const hosts = [];
+    function add(host) {
+      if (!host || typeof host !== "object" || hosts.indexOf(host) >= 0) return;
+      hosts.push(host);
+    }
+    [renderer, game, localSnake, companion].forEach(function (owner) {
+      Object.keys(owner || {}).forEach(function (k) {
+        if (!/color|status|light|dimension|dimHost/i.test(k)) return;
+        add(owner[k]);
+      });
+    });
+    return hosts;
+  }
+
   /**
-   * True when native PlayerRenderer must not run — empty / non-finite local body
-   * would throw Closure `yi NaN×4`. Spectators park off-board (finite) so they
-   * still get the shared board (apples, walls, obstacles) from native render;
-   * remotes are overpainted via drawCoopRemotes.
+   * Stock Yin Yang can synthesize its second snake from renderer settings even
+   * after Ra is hidden. Temporarily select the neutral mode on every discovered
+   * renderer/game settings host. If no gate is discoverable, native YY is unsafe.
+   */
+  function suppressStockCompanion(renderer, game, isYinYang) {
+    const hosts = modeGateHosts(renderer, game);
+    const snaps = hosts.map(snapshotHost);
+    let changed = 0;
+    if (isYinYang) {
+      hosts.forEach(function (host) {
+        Object.keys(host).forEach(function (k) {
+          if (!/^(mode|modeKey|gameMode|snakeMode)$/i.test(k)) return;
+          const value = host[k];
+          if (typeof value !== "string" || !/yin.?yang/i.test(value)) return;
+          try {
+            host[k] = k.toLowerCase().indexOf("key") >= 0 ? "classic" : "";
+            changed++;
+          } catch (e) { /* restoration audit handles readonly hosts */ }
+        });
+      });
+    }
+    return { snapshots: snaps, changed: changed };
+  }
+
+  function canvasSnapshot(ctx) {
+    if (!ctx) return null;
+    const out = { ctx: ctx, values: Object.create(null), transform: null };
+    for (let i = 0; i < NATIVE_CANVAS_PROPS.length; i++) {
+      const k = NATIVE_CANVAS_PROPS[i];
+      try { out.values[k] = ctx[k]; } catch (e) { /* ignore */ }
+    }
+    try {
+      if (typeof ctx.getTransform === "function") out.transform = ctx.getTransform();
+    } catch (eT) { /* ignore */ }
+    return out;
+  }
+
+  function restoreCanvas(snap) {
+    if (!snap) return true;
+    let ok = true;
+    Object.keys(snap.values).forEach(function (k) {
+      try {
+        snap.ctx[k] = snap.values[k];
+        if (snap.ctx[k] !== snap.values[k]) ok = false;
+      } catch (e) { ok = false; }
+    });
+    try {
+      if (snap.transform && typeof snap.ctx.setTransform === "function") {
+        const t = snap.transform;
+        snap.ctx.setTransform(t.a, t.b, t.c, t.d, t.e, t.f);
+      }
+    } catch (eT) { ok = false; }
+    return ok;
+  }
+
+  function renderPeerPass(state, renderer, origRender, args, remote, body, seat, suffix, targetCtx) {
+    const game = renderer.wb || root.__mpGame || root.__remixGame;
+    const localSnake = game && game.oa;
+    if (!game || !localSnake || remote.alive === false) return false;
+    const built = buildPeerSnake(
+      suffix ? seat.body2Cache : seat.bodyCache,
+      localSnake,
+      remote,
+      body,
+      suffix,
+      state
+    );
+    if (suffix) seat.body2Cache = built.cache;
+    else seat.bodyCache = built.cache;
+    // Synthetic peer snakes never own a companion; body2 gets its own pass.
+    built.snake.Ra = null;
+    const companion = game.Ra || localSnake.Ra || null;
+    const snaps = [
+      snapshotHost(renderer),
+      snapshotHost(game),
+      snapshotHost(args && args[2]),
+    ];
+    const localGraph = snapshotSnakeGraph(localSnake);
+    const companionGraph = snapshotSnakeGraph(companion);
+    const peerGraph = snapshotSnakeGraph(built.snake);
+    const discoveredSnaps = discoveredRenderHosts(
+      renderer,
+      game,
+      localSnake,
+      companion
+    ).map(snapshotHost);
+    const isYinYang = modeKeyHas(coopModeKey(), "yin_yang");
+    const modeSuppression = suppressStockCompanion(renderer, game, isYinYang);
+    if (isYinYang && modeSuppression.changed === 0) {
+      disableNative(state, "yy-mode-gate-unknown");
+      return false;
+    }
+    const canvasSnap = canvasSnapshot(targetCtx);
+    let threw = null;
+    let auditBad = false;
+    let restored = true;
+    try {
+      renderer.ka = targetCtx;
+      game.oa = built.snake;
+      if ("Ra" in game) game.Ra = null;
+      origRender.call(renderer, args[0], args[1], args[2]);
+      state.metrics.renderCount++;
+      if (!state.audited) {
+        auditBad =
+          hostHasUnknownMutation(snaps[0], { ka: true }) ||
+          hostHasUnknownMutation(snaps[1], { oa: true, Ra: true }) ||
+          hostHasUnknownMutation(snaps[2], null) ||
+          graphMutated(localGraph) ||
+          graphMutated(companionGraph) ||
+          graphMutated(peerGraph) ||
+          graphMutated(discoveredSnaps);
+      }
+    } catch (e) {
+      threw = e;
+    } finally {
+      restored = restoreGraph(modeSuppression.snapshots) && restored;
+      restored = restoreGraph(discoveredSnaps) && restored;
+      restored = restoreGraph(peerGraph) && restored;
+      restored = restoreGraph(companionGraph) && restored;
+      restored = restoreGraph(localGraph) && restored;
+      for (let i = snaps.length - 1; i >= 0; i--) {
+        restored = restoreHost(snaps[i]) && restored;
+      }
+      restored = restoreCanvas(canvasSnap) && restored;
+    }
+    if (!restored) {
+      disableNative(state, "restoration-failure");
+      return false;
+    }
+    if (auditBad) {
+      disableNative(state, "mutation-audit");
+      return false;
+    }
+    if (threw) {
+      noteNativeException(state, threw);
+      return false;
+    }
+    state.audited = true;
+    return true;
+  }
+
+  function seatSignature(remote) {
+    function bodySig(body) {
+      return (body || []).map(function (p) {
+        return p && [p.x, p.y, p.otherDim ? 1 : 0].join(":");
+      }).join("|");
+    }
+    return [
+      bodySig(remote.body),
+      bodySig(remote.body2),
+      remote.movementDir,
+      remote.headDir,
+      remote.transitionDir,
+      remote.movementDir2,
+      remote.headDir2,
+      remote.transitionDir2,
+      remote.colorId,
+      remote.Sc,
+      remote.Yc,
+    ].join("/");
+  }
+
+  function ensureSeatLayer(state, id, mainCtx) {
+    let seat = state.seats[id];
+    const source = mainCtx.canvas;
+    if (
+      seat &&
+      (seat.canvas.width !== source.width || seat.canvas.height !== source.height)
+    ) {
+      if (seat.canvas.parentNode) {
+        try { seat.canvas.parentNode.removeChild(seat.canvas); } catch (e) { /* ignore */ }
+      }
+      state.metrics.layerReleases++;
+      delete state.seats[id];
+      seat = null;
+    }
+    if (!seat) {
+      const layer = createLayer(mainCtx);
+      if (!layer) return null;
+      seat = {
+        id: id,
+        canvas: layer.canvas,
+        ctx: layer.ctx,
+        bodyCache: {},
+        body2Cache: {},
+        signature: null,
+      };
+      state.seats[id] = seat;
+      state.metrics.layerAllocations++;
+    }
+    copyCanvasState(mainCtx, seat.ctx);
+    return seat;
+  }
+
+  function adaptCadence(state, elapsed) {
+    const m = state.metrics;
+    m.averageRefreshMs = m.averageRefreshMs
+      ? m.averageRefreshMs * 0.8 + elapsed * 0.2
+      : elapsed;
+    m.cadence = m.averageRefreshMs > 8 ? 20 : m.averageRefreshMs > 4 ? 30 : 60;
+  }
+
+  function paintDirectNativePeers(state, renderer, origRender, safe, peers, mainCtx) {
+    if (state.directAccepted == null) {
+      const probeStarted = nowMs();
+      try {
+        mainCtx.save();
+        mainCtx.restore();
+      } catch (eProbe) {
+        state.directAccepted = false;
+      }
+      const probeMs = Math.max(0, nowMs() - probeStarted);
+      const probeBudget = Number(root.__mpCoopNativeDirectBudgetMs) || 4;
+      if (state.directAccepted !== false) state.directAccepted = probeMs <= probeBudget;
+    }
+    if (!state.directAccepted) {
+      disableNative(state, "direct-main-budget");
+      return false;
+    }
+    const started = nowMs();
+    for (let i = 0; i < peers.length; i++) {
+      const id = peers[i];
+      const remote = root.__mpCoopRemotes[id];
+      let seat = state.seats[id];
+      if (!seat) {
+        seat = { id: id, bodyCache: {}, body2Cache: {}, signature: null };
+        state.seats[id] = seat;
+      }
+      if (!renderPeerPass(state, renderer, origRender, safe, remote, remote.body, seat, "", mainCtx)) {
+        return false;
+      }
+      if (
+        bodyIsRenderable(remote.body2) &&
+        !renderPeerPass(state, renderer, origRender, safe, remote, remote.body2, seat, "2", mainCtx)
+      ) {
+        return false;
+      }
+      state.metrics.refreshCount++;
+    }
+    const elapsed = Math.max(0, nowMs() - started);
+    state.metrics.backend = "direct-main";
+    adaptCadence(state, elapsed);
+    publishNativeMetrics(state);
+    return true;
+  }
+
+  function paintNativePeers(renderer, origRender, safe) {
+    if (!isNativeRelayPlayer()) return false;
+    const state = nativeState();
+    if (state.disabled) return false;
+    const mode = coopModeKey();
+    const peers = liveNativePeers();
+    for (let p = 0; p < peers.length; p++) {
+      const peerMode = root.__mpCoopRemotes[peers[p]].modeKey;
+      if (peerMode && String(peerMode) !== String(mode)) {
+        disableNative(state, "mode-mismatch");
+        return false;
+      }
+    }
+    const mainCtx = renderer && renderer.ka;
+    if (!mainCtx || !mainCtx.canvas || typeof mainCtx.drawImage !== "function") {
+      disableNative(state, "context-swap-unsupported");
+      return false;
+    }
+    state.frame++;
+    const stride = state.metrics.cadence === 60 ? 1 : state.metrics.cadence === 30 ? 2 : 3;
+    const keep = Object.create(null);
+    for (let i = 0; i < peers.length; i++) {
+      const id = peers[i];
+      const remote = root.__mpCoopRemotes[id];
+      const seat = ensureSeatLayer(state, id, mainCtx);
+      if (!seat || !seat.ctx) {
+        return paintDirectNativePeers(
+          state,
+          renderer,
+          origRender,
+          safe,
+          peers,
+          mainCtx
+        );
+      }
+      if (renderer.ka !== mainCtx) {
+        disableNative(state, "context-swap-unsupported");
+        return false;
+      }
+      keep[id] = true;
+      const sig = seatSignature(remote);
+      const dirty = sig !== seat.signature || ((state.frame - 1) % stride === 0);
+      if (dirty) {
+        const started = nowMs();
+        try {
+          seat.ctx.save();
+          seat.ctx.setTransform(1, 0, 0, 1, 0, 0);
+          seat.ctx.clearRect(0, 0, seat.canvas.width, seat.canvas.height);
+          seat.ctx.restore();
+        } catch (eClear) {
+          disableNative(state, "context-swap-unsupported");
+          return false;
+        }
+        copyCanvasState(mainCtx, seat.ctx);
+        if (!renderPeerPass(state, renderer, origRender, safe, remote, remote.body, seat, "", seat.ctx)) {
+          return false;
+        }
+        if (bodyIsRenderable(remote.body2)) {
+          if (!renderPeerPass(state, renderer, origRender, safe, remote, remote.body2, seat, "2", seat.ctx)) {
+            return false;
+          }
+        }
+        seat.signature = sig;
+        state.metrics.refreshCount++;
+        adaptCadence(state, Math.max(0, nowMs() - started));
+      }
+    }
+    Object.keys(state.seats).forEach(function (id) {
+      if (keep[id]) return;
+      const seat = state.seats[id];
+      if (seat.canvas.parentNode) {
+        try { seat.canvas.parentNode.removeChild(seat.canvas); } catch (e) { /* ignore */ }
+      }
+      state.metrics.layerReleases++;
+      delete state.seats[id];
+    });
+    for (let c = 0; c < peers.length; c++) {
+      const seat = state.seats[peers[c]];
+      if (!seat) continue;
+      mainCtx.drawImage(seat.canvas, 0, 0);
+      state.metrics.compositeCount++;
+    }
+    state.metrics.backend = "layers";
+    publishNativeMetrics(state);
+    return true;
+  }
+
+  /**
+   * Under server-auth with live STATE: never run PlayerRenderer — it either
+   * parks off-board (yi NaN) or draws a jumpy native body + false death stars.
+   * Auth board paints floor/apples/snakes with real on-board coords instead.
    */
   function shouldSkipNativeSnakeRender(renderer) {
+    if (root.__mpCoopRenderParked) return true;
     const game =
       (renderer && renderer.wb) || root.__mpGame || root.__remixGame;
+    if (
+      root.__mpCoopServerAuth &&
+      root.__mpCoopLastState &&
+      !root.__mpCoopLastState.ended
+    ) {
+      try {
+        if (typeof root.__mpCoopSeatBeforeRender === "function") {
+          root.__mpCoopSeatBeforeRender(renderer);
+        }
+      } catch (eSeat) { /* ignore */ }
+      return true;
+    }
+    if (!sanitizeLocalSnakesForRender(game)) return true;
     const body = game && game.oa && game.oa.ka;
     return !bodyIsRenderable(body);
   }
@@ -1079,6 +1942,7 @@
     if (Gsm && typeof Gsm.writeNativeBody === "function") {
       try {
         Gsm.writeNativeBody(snake, [{ x: -8, y: -8 }]);
+        root.__mpCoopRenderParked = true;
         return;
       } catch (e) { /* fall through */ }
     }
@@ -1090,6 +1954,7 @@
     };
     snake.ka.length = 1;
     snake.ka[0] = seg;
+    root.__mpCoopRenderParked = true;
   }
 
   /**
@@ -1104,13 +1969,42 @@
       if (!renderer || renderer.__mpCoopPaintWrapped) return;
       if (typeof renderer.render !== "function") return;
       renderer.__mpCoopPaintWrapped = true;
-      const origRender = renderer.render;
+      const origRender = renderer.render.__mpCoopOriginal || renderer.render;
       renderer.render = function (a, b, c) {
+        const game =
+          this.wb || root.__mpGame || root.__remixGame || null;
+        // Server-auth: seat once until head matches — never every-frame reapply
+        if (root.__mpCoopServerAuth && !root.__mpCoopSeatLocked) {
+          try {
+            if (this.wb) {
+              root.__mpGame = this.wb;
+              root.__remixGame = this.wb;
+            }
+            if (typeof root.__mpCoopSeatBeforeRender === "function") {
+              root.__mpCoopSeatBeforeRender(this);
+            }
+          } catch (eIdle) { /* ignore */ }
+        }
+        // Clear park latch once a real finite body is back (new seat / Play)
+        if (root.__mpCoopRenderParked && sanitizeLocalSnakesForRender(game)) {
+          const body = game && game.oa && game.oa.ka;
+          if (
+            bodyIsRenderable(body) &&
+            body[0] &&
+            ((body[0].x | 0) !== -8 || (body[0].y | 0) !== -8)
+          ) {
+            root.__mpCoopRenderParked = false;
+          }
+        }
         const safe = sanitizeRenderArgs(a, b, c);
         root.__mpCoopRenderArgs = safe;
         if (shouldSkipNativeSnakeRender(this)) {
           try {
-            drawCoopRemotes(this);
+            if (typeof root.__mpCoopDrawAuthBoard === "function") {
+              root.__mpCoopDrawAuthBoard(this);
+            } else {
+              drawCoopRemotes(this);
+            }
           } catch (eSkip) { /* ignore */ }
           return undefined;
         }
@@ -1118,30 +2012,221 @@
         try {
           out = origRender.call(this, safe[0], safe[1], safe[2]);
         } catch (e) {
-          try {
-            out = origRender.call(this, 0, true, safe[2]);
-          } catch (e2) {
-            const now = Date.now();
-            if (now - _drawWarnAt > 2000) {
-              _drawWarnAt = now;
-              console.warn("__mp render", e2);
+          // Do not park at (-8,-8) and retry — that is the yi NaN root cause.
+          // Sanitize finite body once; if still broken, skip this frame.
+          if (isYiNanError(e) || /NaN/.test(String((e && e.message) || e))) {
+            try {
+              sanitizeLocalSnakesForRender(game);
+              out = origRender.call(this, 0, true, safe[2]);
+            } catch (e2) {
+              const now = Date.now();
+              if (now - _drawWarnAt > 5000) {
+                _drawWarnAt = now;
+                console.warn("__mp render yi NaN — skipped frame", e2);
+              }
+              out = undefined;
             }
-            out = undefined;
+          } else {
+            try {
+              out = origRender.call(this, 0, true, safe[2]);
+            } catch (e2) {
+              const now = Date.now();
+              if (now - _drawWarnAt > 2000) {
+                _drawWarnAt = now;
+                console.warn("__mp render", e2);
+              }
+              out = undefined;
+            }
           }
         }
+        let usedNative = false;
         try {
-          drawCoopRemotes(this);
+          usedNative = paintNativePeers(this, origRender, safe);
+        } catch (eNative) {
+          const state = nativeState();
+          noteNativeException(state, eNative);
+          usedNative = false;
+        }
+        try {
+          drawCoopRemotes(
+            this,
+            usedNative
+              ? function (remote) { return remote.alive === false; }
+              : null
+          );
         } catch (e3) { /* ignore */ }
         return out;
       };
+      renderer.render.__mpCoopOriginal = origRender;
     }
 
+    /**
+     * Seat oa.ka from COOP_STATE onto the GameInstance the renderer will paint.
+     * Must run on the first frame; do not require __mpCoopSession (Play can paint
+     * before beginCoop). Prefer renderer.wb over a stale __mpGame pointer.
+     */
+    root.__mpCoopSeatBeforeRender = function (renderer) {
+      if (!root.__mpCoopServerAuth) return false;
+      if (root.__mpCoopSeatLocked) return true;
+      const state = root.__mpCoopLastState;
+      if (!state || state.ended) return false;
+      const game =
+        (renderer && renderer.wb) || root.__mpGame || root.__remixGame || null;
+      if (game) {
+        root.__mpGame = game;
+        root.__remixGame = game;
+      }
+      try {
+        if (!root.CoopBinder || typeof root.CoopBinder.applyCoopState !== "function") {
+          return false;
+        }
+        const myId = root.__mpCoopLastStateMyId || root.__mpCoopMyId;
+        // Body-only seat — never force-rewrite fruit (kills native eat anim)
+        const r = root.CoopBinder.applyCoopState(state, myId, {
+          force: true,
+          skipFruit: true,
+          bodyOnly: true,
+        });
+        if (
+          root.CoopBinder.localHeadMatchesState &&
+          root.CoopBinder.localHeadMatchesState(state, myId)
+        ) {
+          root.__mpCoopSeatLocked = true;
+        } else {
+          root.__mpCoopSeatLocked = false;
+        }
+        return !!(r && r.ok);
+      } catch (eSeat) {
+        root.__mpCoopSeatLocked = false;
+        return false;
+      }
+    };
+
+    /**
+     * When native body still disagrees with STATE, paint local from STATE too
+     * (same mosaic path as peers) so both clients share the authoritative board.
+     * Mid-match corpse fades at 0.55 — never native death stars.
+     */
+    function drawAuthLocalSnake(renderer) {
+      if (!root.__mpCoopServerAuth) return 0;
+      const state = root.__mpCoopLastState;
+      if (!state || state.ended) return 0;
+      const myId = root.__mpCoopLastStateMyId || root.__mpCoopMyId;
+      if (!myId) return 0;
+      const holder = root.__mpCoopLocalMotion;
+      const snakes = state.snakes || [];
+      let mine = null;
+      for (let i = 0; i < snakes.length; i++) {
+        if (snakes[i] && snakes[i].clientId === myId) {
+          mine = snakes[i];
+          break;
+        }
+      }
+      if (!mine || !mine.body || !mine.body.length) return 0;
+      const ctx = renderer && renderer.ka;
+      if (!ctx || typeof ctx.save !== "function") return 0;
+      const game = (renderer && renderer.wb) || root.__mpGame || root.__remixGame;
+      const layout =
+        root.__mpCoopAuthLayout || authBoardLayout(renderer, game);
+      if (!layout) return 0;
+      const tile = layout.cell;
+      const ox = layout.ox;
+      const oy = layout.oy;
+      const Gsm = root.MultiplayerGsm;
+      if (!Gsm || typeof Gsm.drawWallSolverStyleSnake !== "function") return 0;
+      let body =
+        holder && bodyIsRenderable(holder._visualBody)
+          ? holder._visualBody
+          : null;
+      if (!bodyIsRenderable(body)) body = snapshotBody(mine.body);
+      if (!bodyIsRenderable(body)) return 0;
+      const colorsById = displayColorIds();
+      const colorInfo = remoteColorInfo(
+        {
+          clientId: myId,
+          colorId: mine.colorId != null ? mine.colorId : holder && holder.colorId,
+          alive: mine.alive !== false,
+        },
+        colorsById[myId]
+      );
+      const intervalMs =
+        (state.intervalMs != null
+          ? Number(state.intervalMs)
+          : root.__mpCoopIntervalMs) || 0;
+      if (holder && intervalMs > 0) holder._lerpStepMs = intervalMs;
+      const opts = {
+        cheese: coopIsCheeseMode(),
+        lights: lightMaskFor(game),
+        wrapWidth: 0,
+        wrapHeight: 0,
+        motion:
+          holder && typeof Gsm.snakeMotion === "function"
+            ? Gsm.snakeMotion(holder, "coop-local", body)
+            : null,
+      };
+      const dead =
+        mine.alive === false ||
+        root.__mpCoopLocalCorpse ||
+        (holder && holder.alive === false);
+      ctx.save();
+      try {
+        ctx.globalAlpha = dead ? 0.55 : 1;
+        Gsm.drawWallSolverStyleSnake(
+          ctx,
+          body,
+          ox,
+          oy,
+          tile,
+          colorInfo,
+          (holder && holder.dir) || mine.dir || "RIGHT",
+          opts
+        );
+        return 1;
+      } catch (eDraw) {
+        return 0;
+      } finally {
+        ctx.restore();
+      }
+    }
+
+    /**
+     * Native owns Classic floor + fruit. We only skip PlayerRenderer (death
+     * stars / yi NaN) and overlay SVG snakes on the same native tile grid.
+     * Never fillRect / redraw apples — that double-paints against fruit render.
+     */
+    function drawAuthBoardChrome(renderer) {
+      // Intentionally empty — keep hook for callers / tests.
+      void renderer;
+      void authBoardLayout;
+    }
+
+    root.__mpCoopDrawAuthBoard = function (renderer) {
+      // Cache native-aligned layout for snake overlays
+      try {
+        const game =
+          (renderer && renderer.wb) || root.__mpGame || root.__remixGame;
+        authBoardLayout(renderer, game);
+      } catch (eLay) { /* ignore */ }
+      try {
+        drawAuthLocalSnake(renderer);
+      } catch (eL) { /* ignore */ }
+      try {
+        drawCoopRemotes(renderer);
+      } catch (eR) { /* ignore */ }
+    };
+
     root.__mpCoopRenderEnter = function (renderer) {
+      try {
+        if (typeof root.__mpCoopSeatBeforeRender === "function") {
+          root.__mpCoopSeatBeforeRender(renderer);
+        }
+      } catch (ePre) { /* ignore */ }
       if (!renderer || typeof renderer.render !== "function") return;
       root.__mpCoopPlayerRenderer = renderer;
       wrapRenderer(renderer);
     };
     root.__mpCoopSkipNativeRender = shouldSkipNativeSnakeRender;
+    root.__mpCoopSanitizeLocalSnakes = sanitizeLocalSnakesForRender;
     // Alias used by older tests / callers
     root.__mpCoopPaintCompanions = function (gameOrRenderer) {
       const renderer =
@@ -1152,6 +2237,8 @@
       return drawCoopRemotes(renderer);
     };
     root.__mpCoopAfterSnakeRender = root.__mpCoopPaintCompanions;
+    root.__mpCoopNativeRendererReset = releaseNativeBackend;
+    root.__mpCoopNativeRendererMetrics = nativeMetrics;
   }
 
   /* --------------------------------------------------------- spawn occupancy */
@@ -1187,9 +2274,96 @@
       const orig = game[name];
       if (typeof orig !== "function") return;
       game[name] = function () {
+        // freePos checks Ca.Aa.has(serial) — repair hosts before native runs
+        function repairHosts(g) {
+          try {
+            if (
+              root.MultiplayerGsm &&
+              typeof root.MultiplayerGsm.ensureCoopTickHosts === "function"
+            ) {
+              root.MultiplayerGsm.ensureCoopTickHosts(g);
+              return;
+            }
+            if (
+              g &&
+              g.Ca &&
+              root.MultiplayerGsm &&
+              typeof root.MultiplayerGsm.ensureNativeWallMap === "function"
+            ) {
+              root.MultiplayerGsm.ensureNativeWallMap(g.Ca);
+            }
+            if (
+              root.MultiplayerGsm &&
+              typeof root.MultiplayerGsm.ensureFruitShieldSets === "function"
+            ) {
+              root.MultiplayerGsm.ensureFruitShieldSets(g);
+            }
+          } catch (ePre) { /* ignore */ }
+        }
+        function sanitizePos(g, p) {
+          if (!p || p.x == null || p.y == null) return null;
+          const x = Math.round(Number(p.x));
+          const y = Math.round(Number(p.y));
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+          const size = boardSizeFromGame(g);
+          if (x < 0 || y < 0 || x >= size.width || y >= size.height) {
+            return null;
+          }
+          // Guarantee the row exists before native writes wa[y][x]
+          try {
+            if (
+              g &&
+              g.Ca &&
+              root.MultiplayerGsm &&
+              typeof root.MultiplayerGsm.ensureWallGridDense === "function"
+            ) {
+              root.MultiplayerGsm.ensureWallGridDense(
+                g.Ca,
+                size.width,
+                size.height
+              );
+            } else if (g && g.Ca && Array.isArray(g.Ca.wa) && !g.Ca.wa[y]) {
+              const row = [];
+              for (let i = 0; i < size.width; i++) row.push(0);
+              g.Ca.wa[y] = row;
+            }
+          } catch (eRow) { /* ignore */ }
+          p.x = x;
+          p.y = y;
+          return p;
+        }
+        repairHosts(this);
         const wallPick = arguments.length >= 2 && Number(arguments[1]) === 5;
         let attempts = 0;
-        let pos = orig.apply(this, arguments);
+        let pos;
+        // Native freePos (Rb) reads Aa.has / Aa.size / nba.has with no null
+        // guards — co-op peer sync can leave those hosts null/{}.
+        function isHostCorruptError(err) {
+          const msg = String((err && err.message) || err || "");
+          return /has is not a function|\.has|reading ['"]size['"]|Cannot read properties of (null|undefined)/.test(
+            msg
+          );
+        }
+        function callOrig() {
+          repairHosts(this);
+          return sanitizePos(this, orig.apply(this, arguments));
+        }
+        try {
+          pos = callOrig.apply(this, arguments);
+        } catch (eOrig) {
+          if (isHostCorruptError(eOrig)) {
+            // Re-ensure hosts (never null Aa — that caused size crashes)
+            repairHosts(this);
+            try {
+              pos = callOrig.apply(this, arguments);
+            } catch (eRetry1) {
+              if (!isHostCorruptError(eRetry1)) throw eRetry1;
+              pos = null;
+            }
+          } else {
+            throw eOrig;
+          }
+        }
         while (pos && attempts < 64) {
           if (wallPick) {
             if (!wallSpawnRejected(game || this, pos.x, pos.y)) break;
@@ -1198,7 +2372,14 @@
             if (!spawnCellBlocked(game || this, pos.x, pos.y, occ)) break;
           }
           attempts++;
-          pos = orig.apply(this, arguments);
+          try {
+            pos = callOrig.apply(this, arguments);
+          } catch (eRetry) {
+            repairHosts(this);
+            if (!isHostCorruptError(eRetry)) break;
+            pos = null;
+            break;
+          }
         }
         if (pos) {
           if (wallPick) {
@@ -1210,9 +2391,16 @@
           }
           const occ = readSpawnOccupancy(game || this, true);
           if (spawnCellBlocked(game || this, pos.x, pos.y, occ)) {
-            const scanned = findFreeSpawnCell(game || this, occ);
+            const scanned = sanitizePos(
+              game || this,
+              findFreeSpawnCell(game || this, occ)
+            );
             if (scanned) return scanned;
-            // Board full for fruit → ALL_APPLES
+            // Board full for fruit → ALL_APPLES (client-auth only)
+            if (root.__mpCoopServerAuth) {
+              root.__mpCoopBoardFull = false;
+              return pos;
+            }
             if (typeof root.__mpCoopOnBoardFull === "function") {
               try {
                 root.__mpCoopOnBoardFull();
@@ -1234,7 +2422,8 @@
 
   /**
    * Regular Wall-mode freePos(null,5) rules on a shared multi-snake board.
-   * Rejects corners, snake/fruit/wall occupancy, and taxicab ≤3 of any head.
+   * Rejects 1×1 corner dead-end cells, snake/fruit/wall occupancy, and
+   * taxicab ≤3 of any head.
    */
   function wallSpawnRejected(game, x, y) {
     const xi = x | 0;
@@ -1309,11 +2498,32 @@
     ) {
       const origKeys = root.chess_occupied_keys;
       root.chess_occupied_keys = function (game, apples, skipIndexes) {
-        const keys = origKeys.call(this, game, apples, skipIndexes);
+        let keys = origKeys.call(this, game, apples, skipIndexes);
+        // Native / Remix spawn paths call keys.has — never return {} / Map / array
+        if (!keys || typeof keys.has !== "function" || typeof keys.add !== "function") {
+          const next = new Set();
+          try {
+            if (keys && typeof keys.forEach === "function") {
+              keys.forEach(function (v, k) {
+                // Set forEach(v), Map forEach(v,k) — prefer key when present
+                next.add(k != null && typeof k !== "function" ? k : v);
+              });
+            } else if (Array.isArray(keys)) {
+              keys.forEach(function (k) {
+                next.add(k);
+              });
+            } else if (keys && typeof keys === "object") {
+              Object.keys(keys).forEach(function (k) {
+                if (keys[k]) next.add(k);
+              });
+            }
+          } catch (eKeys) { /* ignore */ }
+          keys = next;
+        }
         if (!root.__mpCoopSession || !root.__mpCoopInject) return keys;
         function addKey(k) {
-          if (keys && typeof keys.add === "function") keys.add(k);
-          else if (keys && typeof keys === "object") keys[k] = true;
+          if (k == null) return;
+          keys.add(k);
         }
         const occ = readSpawnOccupancy(game, true);
         Object.keys(occ).forEach(addKey);
@@ -1349,11 +2559,15 @@
               }
               return scanned;
             }
-            root.__mpCoopBoardFull = true;
-            if (typeof root.__mpCoopOnBoardFull === "function") {
-              try {
-                root.__mpCoopOnBoardFull();
-              } catch (eFull) { /* ignore */ }
+            if (root.__mpCoopServerAuth) {
+              root.__mpCoopBoardFull = false;
+            } else {
+              root.__mpCoopBoardFull = true;
+              if (typeof root.__mpCoopOnBoardFull === "function") {
+                try {
+                  root.__mpCoopOnBoardFull();
+                } catch (eFull) { /* ignore */ }
+              }
             }
           }
         }
@@ -1393,6 +2607,31 @@
       root.__mpCoopLastTickAt = Date.now();
       if (!root.__mpCoopInject || !root.__mpCoopSession) return;
       try {
+        // p6E wall grow / freePos / y4E run later in this same native tick —
+        // wall Map, dense Ca.wa rows, fruit Sets, and snake.wa flags must exist.
+        try {
+          if (
+            root.MultiplayerGsm &&
+            typeof root.MultiplayerGsm.ensureCoopTickHosts === "function"
+          ) {
+            root.MultiplayerGsm.ensureCoopTickHosts(game);
+          } else {
+            if (game && game.Ca) {
+              if (
+                root.MultiplayerGsm &&
+                typeof root.MultiplayerGsm.ensureNativeWallMap === "function"
+              ) {
+                root.MultiplayerGsm.ensureNativeWallMap(game.Ca);
+              }
+            }
+            if (
+              root.MultiplayerGsm &&
+              typeof root.MultiplayerGsm.ensureFruitShieldSets === "function"
+            ) {
+              root.MultiplayerGsm.ensureFruitShieldSets(game);
+            }
+          }
+        } catch (eAa) { /* ignore */ }
         if (typeof root.__mpCoopFlushPendingDeltas === "function") {
           try {
             root.__mpCoopFlushPendingDeltas();
@@ -1411,7 +2650,12 @@
           root.__mpCoopLocalDead = true;
         }
 
-        killLocalOnRemote(game);
+        // Co-op: native crawls between STATE ticks so head "drift" is expected.
+        // Do not force-reapply every tick — that reset fruit/body and looked broken.
+        // SeatBeforeRender handles first-frame body seat (fruit stays with STATE seq).
+        if (root.__mpCoopSession && root.__mpCoopServerAuth) {
+          /* intentional no-op */
+        }
 
         if (typeof root.__mpCoopAfterTick === "function") {
           try {
@@ -1450,6 +2694,8 @@
       findFreeSpawnCell: findFreeSpawnCell,
       wallOccupancyKeys: wallOccupancyKeys,
       coopTicksRunning: coopTicksRunning,
+      nativeRendererMetrics: nativeMetrics,
+      resetNativeRenderer: releaseNativeBackend,
     };
   }
 })(typeof window !== "undefined" ? window : globalThis);

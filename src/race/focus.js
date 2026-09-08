@@ -1,5 +1,5 @@
 /**
- * Versus Focus spectate — the watched player's board drawn with the mosaic
+ * Race Focus spectate — the watched player's board drawn with the mosaic
  * renderer, sized to the game canvas.
  *
  * Focus used to puppet a real local run so Google's renderer drew the remote
@@ -24,7 +24,7 @@
 
     const Gsm = root.MultiplayerGsm;
     const Mp = root.MultiplayerRuntime;
-    const VersusState = root.VersusState;
+    const RaceState = root.RaceState;
 
     /**
      * Focus sits on the game canvas, so everything the page draws around it
@@ -69,7 +69,7 @@
       return null;
     }
 
-    App.prototype.ensureVersusFocusView = function () {
+    App.prototype.ensureRaceFocusView = function () {
       if (this._focusView) return this._focusView;
       const el = document.createElement("div");
       el.id = "mp-focus-view";
@@ -96,8 +96,8 @@
      * border frame reads like the in-game one on all four sides instead of only
      * where the renderer happens to letterbox.
      */
-    App.prototype._layoutVersusFocusView = function (board) {
-      const el = this.ensureVersusFocusView();
+    App.prototype._layoutRaceFocusView = function (board) {
+      const el = this.ensureRaceFocusView();
       const box = gameCanvasBox() || fallbackBox();
       const cols = (board && board.width) || 17;
       const rows = (board && board.height) || 15;
@@ -123,11 +123,11 @@
     };
 
     /** Watched player, run clock and best — the mosaic label at game size. */
-    App.prototype._paintVersusFocusLabel = function (board) {
+    App.prototype._paintRaceFocusLabel = function (board) {
       const view = this._focusView;
       const el = view && view.querySelector(".mp-focus-label");
       if (!el) return;
-      const id = this.versus.focusClientId;
+      const id = this.race.focusClientId;
       const seat = rosterSeat(this, id) || {};
       const name =
         seat.resolvedName ||
@@ -135,11 +135,11 @@
         seat.colorName ||
         (id ? String(id).slice(0, 6) : "—");
       const goal =
-        (this.versus && this.versus.versusGoal) ||
-        (this.client && this.client.roster && this.client.roster.versusGoal) ||
+        (this.race && this.race.raceGoal) ||
+        (this.client && this.client.roster && this.client.roster.raceGoal) ||
         "score";
-      const sc = this.versus.scores && this.versus.scores[id];
-      const runClock = this.versus.runClocks && this.versus.runClocks[id];
+      const sc = this.race.scores && this.race.scores[id];
+      const runClock = this.race.runClocks && this.race.runClocks[id];
       const fallbackMs =
         sc && sc.timeMs != null && Number.isFinite(Number(sc.timeMs))
           ? Number(sc.timeMs)
@@ -147,18 +147,18 @@
             ? Number(board.timeMs)
             : null;
       const timeMs =
-        VersusState && VersusState.resolveRunClockMs
-          ? VersusState.resolveRunClockMs(runClock, Date.now(), fallbackMs)
+        RaceState && RaceState.resolveRunClockMs
+          ? RaceState.resolveRunClockMs(runClock, Date.now(), fallbackMs)
           : fallbackMs;
       const clock =
-        VersusState && VersusState.formatRunClock
-          ? VersusState.formatRunClock(timeMs)
+        RaceState && RaceState.formatRunClock
+          ? RaceState.formatRunClock(timeMs)
           : timeMs == null
             ? "—"
             : String(Math.floor(timeMs / 1000)) + "s";
       const best =
-        VersusState && VersusState.formatGoalBest
-          ? VersusState.formatGoalBest(sc, goal)
+        RaceState && RaceState.formatGoalBest
+          ? RaceState.formatGoalBest(sc, goal)
           : sc && sc.bestScore != null
             ? String(sc.bestScore)
             : "—";
@@ -180,7 +180,7 @@
       }
     };
 
-    App.prototype._paintVersusFocus = function (board) {
+    App.prototype._paintRaceFocus = function (board) {
       if (!board || !Gsm.drawBoardOnCanvas) return false;
       // Escape peek: step aside so the native death screen and the menus it
       // unlocks are actually reachable underneath.
@@ -188,31 +188,31 @@
         if (this._focusView) this._focusView.style.display = "none";
         return false;
       }
-      const el = this._layoutVersusFocusView(board);
+      const el = this._layoutRaceFocusView(board);
       el.style.display = "block";
       const theme = board.themeColors;
       el.style.background = (theme && theme.border) || "#578a34";
-      const colorInfo = this._colorForClient(this.versus.focusClientId);
+      const colorInfo = this._colorForClient(this.race.focusClientId);
       Gsm.drawBoardOnCanvas(
         this._focusViewCanvas,
         board,
         colorInfo,
         theme,
-        this.versus.focusClientId
+        this.race.focusClientId
       );
-      this._paintVersusFocusLabel(board);
+      this._paintRaceFocusLabel(board);
       if (this._paintMosaicCatLives) {
         this._paintMosaicCatLives(el.querySelector(".mp-focus-cat"), board);
       }
       return true;
     };
 
-    App.prototype._enterVersusFocusSpectate = function () {
-      if (this._versusFocusSpectate) return;
-      this._versusFocusSpectate = true;
-      if (Mp && Mp.enterVersusFocus) Mp.enterVersusFocus();
+    App.prototype._enterRaceFocusSpectate = function () {
+      if (this._raceFocusSpectate) return;
+      this._raceFocusSpectate = true;
+      if (Mp && Mp.enterRaceFocus) Mp.enterRaceFocus();
       else if (typeof window !== "undefined") {
-        window.__mpVersusFocusWatch = true;
+        window.__mpRaceFocusWatch = true;
         window.__mpSpectateAllowMenus = false;
         window.__mpSpectateMenuFp = null;
       }
@@ -221,24 +221,24 @@
       }
       this.hideNativeBoard(false);
       this.ensureAutoFocus();
-      this.startVersusFocusLoop();
-      this.startVersusFocusAnim();
+      this.startRaceFocusLoop();
+      this.startRaceFocusAnim();
     };
 
     /**
      * Leaving is also the "not spectating" path (mosaic, session end, promote),
      * so the native death screen / personal menus are always handed back.
      */
-    App.prototype._leaveVersusFocusSpectate = function () {
-      const wasWatching = !!this._versusFocusSpectate;
-      this._versusFocusSpectate = false;
-      this.stopVersusFocusLoop();
-      this.stopVersusFocusAnim();
+    App.prototype._leaveRaceFocusSpectate = function () {
+      const wasWatching = !!this._raceFocusSpectate;
+      this._raceFocusSpectate = false;
+      this.stopRaceFocusLoop();
+      this.stopRaceFocusAnim();
       if (this._focusView) this._focusView.style.display = "none";
       if (wasWatching) {
-        if (Mp && Mp.leaveVersusFocus) Mp.leaveVersusFocus();
+        if (Mp && Mp.leaveRaceFocus) Mp.leaveRaceFocus();
         else if (typeof window !== "undefined") {
-          window.__mpVersusFocusWatch = false;
+          window.__mpRaceFocusWatch = false;
           window.__mpSpectateAllowMenus = false;
         }
         if (Gsm.restoreControlHelper) Gsm.restoreControlHelper();
@@ -247,21 +247,21 @@
       if (Gsm.unlockPersonalMenus) Gsm.unlockPersonalMenus();
     };
 
-    App.prototype.startVersusFocusLoop = function () {
-      if (this._versusFocusTimer) return;
+    App.prototype.startRaceFocusLoop = function () {
+      if (this._raceFocusTimer) return;
       const self = this;
       // Also picks up window resizes and the end of an Escape peek.
-      this._versusFocusTimer = setInterval(function () {
-        if (!self._versusFocusSpectate) return;
-        const board = self.versus && self.versus.focusBoard();
-        if (board) self._paintVersusFocus(board);
+      this._raceFocusTimer = setInterval(function () {
+        if (!self._raceFocusSpectate) return;
+        const board = self.race && self.race.focusBoard();
+        if (board) self._paintRaceFocus(board);
       }, LABEL_TICK_MS);
     };
 
-    App.prototype.stopVersusFocusLoop = function () {
-      if (this._versusFocusTimer) {
-        clearInterval(this._versusFocusTimer);
-        this._versusFocusTimer = 0;
+    App.prototype.stopRaceFocusLoop = function () {
+      if (this._raceFocusTimer) {
+        clearInterval(this._raceFocusTimer);
+        this._raceFocusTimer = 0;
       }
     };
 
@@ -270,24 +270,24 @@
      * repaint the canvas while a step is in flight. Canvas only — layout, the
      * label and the cat strip stay on the slower tick above.
      */
-    App.prototype._animateVersusFocus = function () {
+    App.prototype._animateRaceFocus = function () {
       if (peekingMenus()) return false;
       const canvas = this._focusViewCanvas;
       if (!canvas || typeof Gsm.snakeMotionActive !== "function") return false;
       if (!Gsm.snakeMotionActive(canvas)) return false;
-      const board = this.versus && this.versus.focusBoard();
+      const board = this.race && this.race.focusBoard();
       if (!board) return false;
       Gsm.drawBoardOnCanvas(
         canvas,
         board,
-        this._colorForClient(this.versus.focusClientId),
+        this._colorForClient(this.race.focusClientId),
         board.themeColors,
-        this.versus.focusClientId
+        this.race.focusClientId
       );
       return true;
     };
 
-    App.prototype.startVersusFocusAnim = function () {
+    App.prototype.startRaceFocusAnim = function () {
       if (this._focusAnimRaf) return;
       const raf =
         typeof root.requestAnimationFrame === "function"
@@ -297,17 +297,17 @@
       const self = this;
       function frame() {
         if (!self._focusAnimRaf) return;
-        if (!self._versusFocusSpectate) {
+        if (!self._raceFocusSpectate) {
           self._focusAnimRaf = 0;
           return;
         }
         self._focusAnimRaf = raf(frame);
-        self._animateVersusFocus();
+        self._animateRaceFocus();
       }
       this._focusAnimRaf = raf(frame);
     };
 
-    App.prototype.stopVersusFocusAnim = function () {
+    App.prototype.stopRaceFocusAnim = function () {
       if (!this._focusAnimRaf) return;
       if (typeof root.cancelAnimationFrame === "function") {
         try {
@@ -322,24 +322,24 @@
         this._focusCanvas.style.display = "none";
       }
 
-      const isSpec = this._isVersusSpectator();
-      const mosaicOn = this.versus.spectateMode === "mosaic";
+      const isSpec = this._isRaceSpectator();
+      const mosaicOn = this.race.spectateMode === "mosaic";
       const sessionOn = !!(
         this.client &&
         this.client.roster &&
         this.client.roster.sessionActive
       );
       if (!isSpec || mosaicOn || !sessionOn) {
-        this._leaveVersusFocusSpectate();
+        this._leaveRaceFocusSpectate();
         if (!sessionOn) this.applyControlLocks();
         return;
       }
 
-      this._enterVersusFocusSpectate();
+      this._enterRaceFocusSpectate();
       // No board cached yet (just switched player): draw the empty frame rather
       // than leaving the last player's pixels up until the first delta lands.
-      this._paintVersusFocus(
-        this.versus.focusBoard() || {
+      this._paintRaceFocus(
+        this.race.focusBoard() || {
           width: 17,
           height: 15,
           body: [],

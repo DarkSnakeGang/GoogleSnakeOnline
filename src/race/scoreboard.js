@@ -1,4 +1,4 @@
-/** Versus scoreboard + attempt timer client state. */
+/** Race scoreboard + attempt timer client state. */
 (function (root) {
   const GOALS = [
     { id: "score", label: "Score" },
@@ -8,7 +8,7 @@
     { id: "bestAll", label: "Best All", all: true },
   ];
 
-  function VersusState() {
+  function RaceState() {
     this.scores = {};
     this.attemptRemainingMs = null;
     this.expired = false;
@@ -16,16 +16,16 @@
     this.focusClientId = null;
     this.boards = {};
     this.spectateMode = "focus"; // focus | mosaic
-    this.versusGoal = "score";
+    this.raceGoal = "score";
     this.leaderClientId = null;
     this.winnerClientId = null;
     /** Per-player mosaic run clocks: { startedAtMs, frozenMs }. */
     this.runClocks = {};
   }
 
-  VersusState.GOALS = GOALS;
+  RaceState.GOALS = GOALS;
 
-  VersusState.normalizeGoal = function (goal) {
+  RaceState.normalizeGoal = function (goal) {
     const id = String(goal || "score");
     const hit = GOALS.find(function (g) {
       return g.id === id;
@@ -33,8 +33,8 @@
     return hit ? hit.id : "score";
   };
 
-  VersusState.goalMeta = function (goal) {
-    const id = VersusState.normalizeGoal(goal);
+  RaceState.goalMeta = function (goal) {
+    const id = RaceState.normalizeGoal(goal);
     return (
       GOALS.find(function (g) {
         return g.id === id;
@@ -42,16 +42,16 @@
     );
   };
 
-  VersusState.goalLabel = function (goal) {
-    return VersusState.goalMeta(goal).label;
+  RaceState.goalLabel = function (goal) {
+    return RaceState.goalMeta(goal).label;
   };
 
-  VersusState.isTimedGoal = function (goal) {
-    return VersusState.normalizeGoal(goal) !== "score";
+  RaceState.isTimedGoal = function (goal) {
+    return RaceState.normalizeGoal(goal) !== "score";
   };
 
-  VersusState.goalThreshold = function (goal) {
-    const m = VersusState.goalMeta(goal);
+  RaceState.goalThreshold = function (goal) {
+    const m = RaceState.goalMeta(goal);
     return m.threshold != null ? m.threshold : null;
   };
 
@@ -100,13 +100,13 @@
    * Timed → fastest bestGoalTimeMs among completions; if nobody completed the
    * goal, the highest score wins, with the fastest time to it breaking ties.
    */
-  VersusState.pickLeader = function (scores, goal) {
+  RaceState.pickLeader = function (scores, goal) {
     const map = scores || {};
-    const g = VersusState.normalizeGoal(goal);
+    const g = RaceState.normalizeGoal(goal);
     const ids = Object.keys(map);
     if (!ids.length) return null;
 
-    if (VersusState.isTimedGoal(g)) {
+    if (RaceState.isTimedGoal(g)) {
       let bestId = null;
       let bestT = null;
       ids.forEach(function (id) {
@@ -150,10 +150,10 @@
   };
 
   /** One-line best summary for roster / HUD under the active goal. */
-  VersusState.formatGoalBest = function (sc, goal) {
+  RaceState.formatGoalBest = function (sc, goal) {
     if (!sc) return "—";
-    const g = VersusState.normalizeGoal(goal);
-    if (VersusState.isTimedGoal(g)) {
+    const g = RaceState.normalizeGoal(goal);
+    if (RaceState.isTimedGoal(g)) {
       if (sc.bestGoalTimeMs == null) {
         if (sc.goalCompleted) return "done";
         // Goal not reached — show the score that counts instead, plus how fast
@@ -174,11 +174,11 @@
    * bestGoalTimeMs, then everyone else by highest score / fastest time to it;
    * Score: highest bestScore (tie → longer bestTimeMs).
    */
-  VersusState.rankPlayers = function (scores, goal) {
+  RaceState.rankPlayers = function (scores, goal) {
     const map = scores || {};
-    const g = VersusState.normalizeGoal(goal);
+    const g = RaceState.normalizeGoal(goal);
     const ids = Object.keys(map);
-    const timed = VersusState.isTimedGoal(g);
+    const timed = RaceState.isTimedGoal(g);
     ids.sort(function (a, b) {
       const sa = map[a] || {};
       const sb = map[b] || {};
@@ -212,9 +212,9 @@
   };
 
   /** "Score 42" / "Best 25 12.34s" for winner / place lines. */
-  VersusState.formatGoalDetail = function (sc, goal) {
-    const label = VersusState.goalLabel(goal);
-    const best = VersusState.formatGoalBest(sc, goal);
+  RaceState.formatGoalDetail = function (sc, goal) {
+    const label = RaceState.goalLabel(goal);
+    const best = RaceState.formatGoalBest(sc, goal);
     return label + " " + best;
   };
 
@@ -224,10 +224,10 @@
     return t.toFixed(2) + "s";
   }
 
-  VersusState.prototype.onScorePulse = function (payload) {
+  RaceState.prototype.onScorePulse = function (payload) {
     if (!payload || !payload.clientId) return;
-    if (payload.versusGoal) {
-      this.versusGoal = VersusState.normalizeGoal(payload.versusGoal);
+    if (payload.raceGoal) {
+      this.raceGoal = RaceState.normalizeGoal(payload.raceGoal);
     }
     this.scores[payload.clientId] = {
       score: payload.score,
@@ -242,7 +242,7 @@
     if (payload.leaderClientId !== undefined) {
       this.leaderClientId = payload.leaderClientId || null;
     } else {
-      this.leaderClientId = VersusState.pickLeader(this.scores, this.versusGoal);
+      this.leaderClientId = RaceState.pickLeader(this.scores, this.raceGoal);
     }
     this._applyRunClockPulse(payload);
   };
@@ -252,7 +252,7 @@
    * SCORE_PULSE / BOARD_DELTA re-anchor liveMs; labels show that value so the
    * clock advances on the same cadence as the on-screen run timer.
    */
-  VersusState.prototype._applyRunClockPulse = function (payload) {
+  RaceState.prototype._applyRunClockPulse = function (payload) {
     if (!payload || !payload.clientId) return;
     if (!this.runClocks) this.runClocks = {};
     const id = payload.clientId;
@@ -282,7 +282,7 @@
     if (payload.alive === false) {
       if (timeMs != null) next.frozenMs = timeMs;
       else if (next.frozenMs == null) {
-        next.frozenMs = VersusState.resolveRunClockMs(next, now, 0) || 0;
+        next.frozenMs = RaceState.resolveRunClockMs(next, now, 0) || 0;
       }
     } else {
       // Live again — never keep a death freeze across a new / continuing run
@@ -296,7 +296,7 @@
   };
 
   /** Elapsed ms for mosaic labels: frozen death time, or last live in-game sync. */
-  VersusState.resolveRunClockMs = function (clock, nowMs, fallbackMs) {
+  RaceState.resolveRunClockMs = function (clock, nowMs, fallbackMs) {
     if (clock) {
       if (clock.frozenMs != null && Number.isFinite(Number(clock.frozenMs))) {
         return Math.max(0, Number(clock.frozenMs));
@@ -321,36 +321,36 @@
     return null;
   };
 
-  VersusState.prototype.onAttemptTick = function (payload) {
+  RaceState.prototype.onAttemptTick = function (payload) {
     const ms = payload && payload.remainingMs;
     this.attemptRemainingMs =
       ms == null || !Number.isFinite(Number(ms)) ? null : Number(ms);
   };
 
-  VersusState.prototype.onExpired = function (payload) {
+  RaceState.prototype.onExpired = function (payload) {
     this.expired = true;
     this.finishOngoing = !!(payload && payload.finishOngoing);
     if (payload && payload.winnerClientId) {
       this.winnerClientId = payload.winnerClientId;
       this.leaderClientId = payload.winnerClientId;
     } else {
-      this.winnerClientId = VersusState.pickLeader(this.scores, this.versusGoal);
+      this.winnerClientId = RaceState.pickLeader(this.scores, this.raceGoal);
       this.leaderClientId = this.winnerClientId;
     }
-    if (payload && payload.versusGoal) {
-      this.versusGoal = VersusState.normalizeGoal(payload.versusGoal);
+    if (payload && payload.raceGoal) {
+      this.raceGoal = RaceState.normalizeGoal(payload.raceGoal);
     }
   };
 
-  VersusState.prototype.syncFromRoster = function (roster) {
+  RaceState.prototype.syncFromRoster = function (roster) {
     if (!roster) return;
-    if (roster.versusGoal) {
-      this.versusGoal = VersusState.normalizeGoal(roster.versusGoal);
+    if (roster.raceGoal) {
+      this.raceGoal = RaceState.normalizeGoal(roster.raceGoal);
     }
     if (roster.leaderClientId !== undefined) {
       this.leaderClientId = roster.leaderClientId || null;
     }
-    if (roster.mode && roster.mode !== "versus") {
+    if (roster.mode && roster.mode !== "race") {
       this.attemptRemainingMs = null;
     }
     const hasScores = Object.keys(this.scores || {}).length > 0;
@@ -362,7 +362,7 @@
         if (!this.winnerClientId) {
           this.winnerClientId =
             roster.leaderClientId ||
-            VersusState.pickLeader(this.scores, this.versusGoal);
+            RaceState.pickLeader(this.scores, this.raceGoal);
         }
       } else if (roster.allowNewRuns !== false) {
         this.expired = false;
@@ -374,7 +374,7 @@
       if (!this.winnerClientId) {
         this.winnerClientId =
           roster.leaderClientId ||
-          VersusState.pickLeader(this.scores, this.versusGoal);
+          RaceState.pickLeader(this.scores, this.raceGoal);
       }
     } else if (
       roster.sessionActive &&
@@ -388,7 +388,7 @@
   };
 
   /** Clear board/score state for a brand-new Start match. */
-  VersusState.prototype.resetForNewMatch = function () {
+  RaceState.prototype.resetForNewMatch = function () {
     this.scores = {};
     this.boards = {};
     this.runClocks = {};
@@ -400,7 +400,7 @@
   };
 
   /** Format a player's run timer (SpeedInfo-style hundredths). */
-  VersusState.formatRunClock = function (ms) {
+  RaceState.formatRunClock = function (ms) {
     if (ms == null || !Number.isFinite(Number(ms))) return "—";
     const total = Math.max(0, Math.floor(Number(ms)));
     // Guard against wall-clock timestamps accidentally treated as durations
@@ -416,7 +416,7 @@
   };
 
   /** Format remaining attempt time as MM:SS. */
-  VersusState.formatAttemptClock = function (remainingMs, expired) {
+  RaceState.formatAttemptClock = function (remainingMs, expired) {
     if (expired) return "00:00";
     if (remainingMs == null || !Number.isFinite(Number(remainingMs))) return null;
     const s = Math.max(0, Math.ceil(Number(remainingMs) / 1000));
@@ -427,7 +427,7 @@
     );
   };
 
-  VersusState.prototype.onBoardDelta = function (payload) {
+  RaceState.prototype.onBoardDelta = function (payload) {
     if (!payload) return;
     const id = payload.clientId;
     const board = payload.board || payload;
@@ -443,36 +443,36 @@
     }
   };
 
-  VersusState.prototype.onBoardSnapshot = function (payload) {
+  RaceState.prototype.onBoardSnapshot = function (payload) {
     this.onBoardDelta(payload);
   };
 
-  VersusState.prototype.setFocus = function (clientId) {
+  RaceState.prototype.setFocus = function (clientId) {
     this.focusClientId = clientId;
   };
 
-  VersusState.prototype.focusBoard = function () {
+  RaceState.prototype.focusBoard = function () {
     if (!this.focusClientId) return null;
     return this.boards[this.focusClientId] || null;
   };
 
-  VersusState.prototype.playerIdsWithBoards = function () {
+  RaceState.prototype.playerIdsWithBoards = function () {
     return Object.keys(this.boards);
   };
 
-  VersusState.prototype.setSpectateMode = function (mode) {
+  RaceState.prototype.setSpectateMode = function (mode) {
     this.spectateMode = mode === "mosaic" ? "mosaic" : "focus";
   };
 
   /**
-   * Versus session TimeKeeper — SpeedInfo shows this match's bests, not lifetime
+   * Race session TimeKeeper — SpeedInfo shows this match's bests, not lifetime
    * Pudding/Remix PBs. Session beats that improve remix are promoted on death/ALL.
    */
-  const VERSUS_TK_KEY = "snake_timeKeeper_versus_session";
+  const RACE_TK_KEY = "snake_timeKeeper_race_session";
   const REMIX_TK_KEY = "snake_timeKeeper_remix";
 
-  const VersusTimeKeeper = {
-    KEY: VERSUS_TK_KEY,
+  const RaceTimeKeeper = {
+    KEY: RACE_TK_KEY,
     REMIX_KEY: REMIX_TK_KEY,
     _active: false,
 
@@ -484,7 +484,7 @@
       this._active = !!on;
       const tk = root.timeKeeper;
       if (tk) {
-        tk._mpVersusCache = null;
+        tk._mpRaceCache = null;
         // Force remix path to re-read if leaving session mode
         if (!on) tk._storageCache = null;
       }
@@ -492,10 +492,10 @@
 
     clearSession: function () {
       try {
-        localStorage.setItem(VERSUS_TK_KEY, JSON.stringify({ version: 4 }));
+        localStorage.setItem(RACE_TK_KEY, JSON.stringify({ version: 4 }));
       } catch (e) { /* ignore */ }
       const tk = root.timeKeeper;
-      if (tk) tk._mpVersusCache = null;
+      if (tk) tk._mpRaceCache = null;
     },
 
     beginMatch: function () {
@@ -519,7 +519,7 @@
 
     loadSession: function () {
       try {
-        return JSON.parse(localStorage.getItem(VERSUS_TK_KEY) || '{"version":4}');
+        return JSON.parse(localStorage.getItem(RACE_TK_KEY) || '{"version":4}');
       } catch (e) {
         return { version: 4 };
       }
@@ -572,18 +572,18 @@
           const tk = root.timeKeeper;
           if (tk) tk._storageCache = null;
         } catch (e) {
-          console.warn("versus PB promote failed", e);
+          console.warn("race PB promote failed", e);
           return false;
         }
       }
       return changed;
     },
 
-    /** Redirect timeKeeper get/set/flush to session storage while versus match TK is active. */
+    /** Redirect timeKeeper get/set/flush to session storage while race match TK is active. */
     install: function () {
       const tk = root.timeKeeper;
-      if (!tk || tk.__mpVersusTkInstalled) return false;
-      tk.__mpVersusTkInstalled = true;
+      if (!tk || tk.__mpRaceTkInstalled) return false;
+      tk.__mpRaceTkInstalled = true;
       const self = this;
       const origGet = tk.getStorage && tk.getStorage.bind(tk);
       const origSet = tk.setStorage && tk.setStorage.bind(tk);
@@ -593,27 +593,27 @@
         if (!self.isActive()) {
           return origGet ? origGet() : {};
         }
-        if (!tk._mpVersusCache) {
-          tk._mpVersusCache = self.loadSession();
+        if (!tk._mpRaceCache) {
+          tk._mpRaceCache = self.loadSession();
         }
-        return tk._mpVersusCache;
+        return tk._mpRaceCache;
       };
       tk.setStorage = function (storage) {
         if (!self.isActive()) {
           return origSet ? origSet(storage) : undefined;
         }
-        tk._mpVersusCache = storage || { version: 4 };
+        tk._mpRaceCache = storage || { version: 4 };
         try {
-          localStorage.setItem(VERSUS_TK_KEY, JSON.stringify(tk._mpVersusCache));
+          localStorage.setItem(RACE_TK_KEY, JSON.stringify(tk._mpRaceCache));
         } catch (e) { /* ignore */ }
         tk._storageDirty = false;
       };
       if (origFlush) {
         tk.flushStorage = function () {
           if (!self.isActive()) return origFlush();
-          if (!tk._storageDirty || !tk._mpVersusCache) return;
+          if (!tk._storageDirty || !tk._mpRaceCache) return;
           try {
-            localStorage.setItem(VERSUS_TK_KEY, JSON.stringify(tk._mpVersusCache));
+            localStorage.setItem(RACE_TK_KEY, JSON.stringify(tk._mpRaceCache));
           } catch (e) { /* ignore */ }
           tk._storageDirty = false;
         };
@@ -622,16 +622,16 @@
     },
   };
 
-  root.VersusTimeKeeper = VersusTimeKeeper;
+  root.RaceTimeKeeper = RaceTimeKeeper;
 
-  /** @deprecated use VersusTimeKeeper.promoteSessionToRemix */
-  VersusState.maybePromoteLocalPb = function () {
-    return VersusTimeKeeper.promoteSessionToRemix();
+  /** @deprecated use RaceTimeKeeper.promoteSessionToRemix */
+  RaceState.maybePromoteLocalPb = function () {
+    return RaceTimeKeeper.promoteSessionToRemix();
   };
 
-  root.VersusState = VersusState;
+  root.RaceState = RaceState;
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = VersusState;
-    module.exports.VersusTimeKeeper = VersusTimeKeeper;
+    module.exports = RaceState;
+    module.exports.RaceTimeKeeper = RaceTimeKeeper;
   }
 })(typeof window !== "undefined" ? window : globalThis);

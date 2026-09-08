@@ -53,6 +53,82 @@ function send(ws, type, payload) {
   ws.send(JSON.stringify({ v: 1, type, payload: payload || {}, seq: Date.now() }));
 }
 
+const relayCounters = new WeakMap();
+
+function relayPayload(ws, generation, payload, pose) {
+  const counters = relayCounters.get(ws) || { eventSeq: 0, poseSeq: 0 };
+  counters.eventSeq++;
+  const out = Object.assign(
+    { generation, eventSeq: counters.eventSeq },
+    payload || {}
+  );
+  if (pose) {
+    counters.poseSeq++;
+    out.poseSeq = counters.poseSeq;
+  }
+  relayCounters.set(ws, counters);
+  return out;
+}
+
+function seatBody(seat) {
+  return [
+    { x: seat.x, y: seat.y },
+    { x: seat.x - 1, y: seat.y },
+    { x: seat.x - 2, y: seat.y },
+  ];
+}
+
+async function readyNativeBoard(entries, start) {
+  const generation = start.payload.generation;
+  const ownerId = start.payload.collectablesOwnerId;
+  const owner = entries.find((entry) => entry.id === ownerId);
+  assert.ok(owner, "initializer is a frozen seat");
+  const init = await waitMsg(owner.inbox, "COOP_BOARD_INIT");
+  assert.equal(init.payload.generation, generation);
+  assert.equal(init.payload.initializerClientId, ownerId);
+  for (const entry of entries) {
+    const seat = start.payload.slots.find((slot) => slot.clientId === entry.id);
+    send(
+      entry.ws,
+      "SNAKE_DELTA",
+      relayPayload(
+        entry.ws,
+        generation,
+        {
+          body: seatBody(seat),
+          dir: seat.dir || "RIGHT",
+          headDir: seat.dir || "RIGHT",
+          movementDir: seat.dir || "RIGHT",
+          transitionDir: null,
+          fromHead: seatBody(seat)[0],
+          toHead: seatBody(seat)[0],
+          moveSeq: 0,
+          turns: [],
+          modeKey: "classic",
+          seated: true,
+          moved: false,
+        },
+        true
+      )
+    );
+  }
+  send(
+    owner.ws,
+    "COLLECTABLES_DELTA",
+    relayPayload(owner.ws, generation, {
+      initial: true,
+      baseRevision: 0,
+      modeKey: "classic",
+      collectables: [{ x: 4, y: 4, type: 0 }],
+      apples: [{ x: 4, y: 4, type: 0 }],
+    })
+  );
+  const ready = await waitMsg(owner.inbox, "COOP_BOARD_READY");
+  assert.equal(ready.payload.generation, generation);
+  assert.equal(ready.payload.revision, 1);
+  return generation;
+}
+
 async function waitMsg(inbox, type, timeout = 5000) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
@@ -81,7 +157,7 @@ describe("ws integration", { timeout: 60000 }, () => {
   let proc;
 
   before(async () => {
-    proc = spawn(EXE, ["--bind", `127.0.0.1:${PORT}`], {
+    proc = spawn(EXE, ["--bind", `127.0.0.1:${PORT}`, "--coop-native-relay"], {
       cwd: path.join(ROOT, "server"),
       stdio: "ignore",
     });
@@ -92,7 +168,7 @@ describe("ws integration", { timeout: 60000 }, () => {
     if (proc) proc.kill();
   });
 
-  it("join, promote, ready, start versus", async () => {
+  it("join, promote, ready, start race", async () => {
     const a = await wsClient();
     send(a.ws, "HELLO", { create: true, roomCode: "", displayName: "Admin" });
     const welcome = await waitMsg(a.inbox, "WELCOME");
@@ -117,7 +193,7 @@ describe("ws integration", { timeout: 60000 }, () => {
 
     send(a.ws, "SESSION_START", {});
     const start = await waitMsg(a.inbox, "SESSION_START");
-    assert.equal(start.payload.mode, "versus");
+    assert.equal(start.payload.mode, "race");
 
     send(b.ws, "SESSION_END", {});
     const denied = await waitMsg(b.inbox, "ERROR");
@@ -191,12 +267,19 @@ describe("ws integration", { timeout: 60000 }, () => {
     });
     const start = await waitMsg(a.inbox, "SESSION_START");
     assert.equal(start.payload.mode, "coop");
+    assert.equal(start.payload.authority, "native-relay-v1");
+    assert.ok(start.payload.generation > 0);
     assert.ok(Array.isArray(start.payload.slots), "slots on SESSION_START");
     assert.equal(start.payload.slots.length, 1);
     assert.equal(start.payload.slots[0].oy, 0);
+    assert.equal(start.payload.slots[0].x, 8);
+    assert.equal(start.payload.slots[0].y, 7);
+    assert.equal(start.payload.slots[0].dir, "RIGHT");
+    assert.equal(start.payload.slots[0].boardWidth, 17);
+    assert.equal(start.payload.slots[0].boardHeight, 15);
     assert.equal(
       start.payload.timerStartedAtMs,
-      undefined,
+      null,
       "timer arms on first move, not SESSION_START"
     );
     assert.equal(start.payload.settings.trophy, 2);
@@ -206,7 +289,7 @@ describe("ws integration", { timeout: 60000 }, () => {
     a.ws.close();
   });
 
-  it("coop arms shared timer on first SNAKE_DELTA timerArm", async () => {
+  it("native relay arms shared timer on first moved pose after board ready", async () => {
     const a = await wsClient();
     send(a.ws, "HELLO", { create: true, displayName: "Host" });
     const aWelcome = await waitMsg(a.inbox, "WELCOME");
@@ -229,15 +312,43 @@ describe("ws integration", { timeout: 60000 }, () => {
     a.inbox.length = 0;
     b.inbox.length = 0;
     send(a.ws, "SESSION_START", { settings: {} });
-    await waitMsg(a.inbox, "SESSION_START");
+    const startA = await waitMsg(a.inbox, "SESSION_START");
     await waitMsg(b.inbox, "SESSION_START");
+    await waitMsg(a.inbox, "PLAY_SYNC");
+    await waitMsg(b.inbox, "PLAY_SYNC");
+    assert.equal(startA.payload.authority, "native-relay-v1");
+    const generation = await readyNativeBoard(
+      [
+        { ws: a.ws, inbox: a.inbox, id: aId },
+        { ws: b.ws, inbox: b.inbox, id: bId },
+      ],
+      startA
+    );
     const epoch = 1; // client claims Unix epoch — server must ignore
-    send(a.ws, "SNAKE_DELTA", {
-      body: [{ x: 9, y: 7 }, { x: 8, y: 7 }, { x: 7, y: 7 }],
-      alive: true,
-      timerArm: true,
-      timerStartedAtMs: epoch,
-    });
+    send(
+      a.ws,
+      "SNAKE_DELTA",
+      relayPayload(
+        a.ws,
+        generation,
+        {
+          body: [{ x: 9, y: 7 }, { x: 8, y: 7 }, { x: 7, y: 7 }],
+          dir: "RIGHT",
+          headDir: "RIGHT",
+          movementDir: "RIGHT",
+          transitionDir: "RIGHT",
+          fromHead: { x: 8, y: 7 },
+          toHead: { x: 9, y: 7 },
+          moveSeq: 1,
+          turns: [],
+          modeKey: "classic",
+          seated: true,
+          moved: true,
+          timerStartedAtMs: epoch,
+        },
+        true
+      )
+    );
     const timerA = await waitMsg(a.inbox, "COOP_TIMER_START");
     const timerB = await waitMsg(b.inbox, "COOP_TIMER_START");
     // Server stamps its own wall-clock (ignore client timerStartedAtMs skew)
@@ -272,6 +383,31 @@ describe("ws integration", { timeout: 60000 }, () => {
     assert.ok(me.displayName.length <= 32);
     assert.ok(!/[\u0000-\u001f]/.test(me.displayName));
     a.ws.close();
+  });
+
+  it("SET_DISPLAY_NAME renames and fans out on ROSTER", async () => {
+    const a = await wsClient();
+    send(a.ws, "HELLO", { create: true, displayName: "Host" });
+    const aWelcome = await waitMsg(a.inbox, "WELCOME");
+    const room = aWelcome.payload.roomCode;
+    await waitMsg(a.inbox, "ROSTER");
+    const b = await wsClient();
+    send(b.ws, "HELLO", { create: false, roomCode: room, displayName: "Guest" });
+    const bWelcome = await waitMsg(b.inbox, "WELCOME");
+    const bId = bWelcome.payload.clientId;
+    await waitMsg(a.inbox, "ROSTER");
+    await waitMsg(b.inbox, "ROSTER");
+    send(b.ws, "SET_DISPLAY_NAME", { displayName: "Renamed" });
+    const rosterA = await waitMsg(a.inbox, "ROSTER");
+    const rosterB = await waitMsg(b.inbox, "ROSTER");
+    const namedA = (rosterA.payload.clients || []).find((c) => c.clientId === bId);
+    const namedB = (rosterB.payload.clients || []).find((c) => c.clientId === bId);
+    assert.ok(namedA);
+    assert.equal(namedA.displayName, "Renamed");
+    assert.ok(namedB);
+    assert.equal(namedB.displayName, "Renamed");
+    a.ws.close();
+    b.ws.close();
   });
 
   it("coop auto-assigns distinct colors on promote and rejects taken claims", async () => {
@@ -407,7 +543,7 @@ describe("ws integration", { timeout: 60000 }, () => {
     spec.ws.close();
   });
 
-  it("SET_VERSUS_GOAL tracks Best 25 leader", async () => {
+  it("SET_RACE_GOAL tracks Best 25 leader", async () => {
     const a = await wsClient();
     send(a.ws, "HELLO", { create: true, displayName: "Admin" });
     const welcome = await waitMsg(a.inbox, "WELCOME");
@@ -423,12 +559,12 @@ describe("ws integration", { timeout: 60000 }, () => {
       r.clients.some((c) => c.clientId === bId && c.role === "player")
     );
 
-    send(a.ws, "SET_VERSUS_GOAL", { goal: "best25" });
+    send(a.ws, "SET_RACE_GOAL", { goal: "best25" });
     const rosterGoal = await waitRosterWhere(
       a.inbox,
-      (r) => r.versusGoal === "best25"
+      (r) => r.raceGoal === "best25"
     );
-    assert.equal(rosterGoal.versusGoalLabel, "Best 25");
+    assert.equal(rosterGoal.raceGoalLabel, "Best 25");
 
     send(a.ws, "SET_ROLE", { clientId: welcome.payload.clientId, role: "player" });
     await waitRosterWhere(a.inbox, (r) =>
@@ -445,7 +581,7 @@ describe("ws integration", { timeout: 60000 }, () => {
     b.inbox.length = 0;
     send(b.ws, "SCORE_PULSE", { score: 25, timeMs: 4000, alive: true });
     const pulse = await waitMsg(a.inbox, "SCORE_PULSE");
-    assert.equal(pulse.payload.versusGoal, "best25");
+    assert.equal(pulse.payload.raceGoal, "best25");
     assert.equal(pulse.payload.goalCompleted, true);
     assert.equal(pulse.payload.bestGoalTimeMs, 4000);
     assert.equal(pulse.payload.leaderClientId, bId);
@@ -642,7 +778,7 @@ describe("ws integration", { timeout: 60000 }, () => {
     b.ws.close();
   });
 
-  it("coop 3 players share SNAKE_DELTA after start", async () => {
+  it("native relay shares ordered poses and rejects runtime fruit", async () => {
     const a = await wsClient();
     send(a.ws, "HELLO", { create: true, displayName: "A" });
     const welcome = await waitMsg(a.inbox, "WELCOME");
@@ -686,35 +822,71 @@ describe("ws integration", { timeout: 60000 }, () => {
     const oys = startSpec.payload.slots.map((s) => s.oy).sort((x, y) => x - y);
     assert.deepEqual(oys, [-2, 0, 3]);
     await waitMsg(spec.inbox, "PLAY_SYNC");
+    const generation = await readyNativeBoard(
+      [
+        { ws: a.ws, inbox: a.inbox, id: aId },
+        { ws: b.ws, inbox: b.inbox, id: bId },
+        { ws: c.ws, inbox: c.inbox, id: cId },
+      ],
+      startSpec
+    );
 
     spec.inbox.length = 0;
-    send(a.ws, "SNAKE_DELTA", {
-      body: [{ x: 1, y: 1 }],
-      alive: true,
-      width: 17,
-      height: 15,
-      colorId: 0,
-    });
+    send(
+      a.ws,
+      "SNAKE_DELTA",
+      relayPayload(
+        a.ws,
+        generation,
+        {
+          body: [{ x: 9, y: 7 }, { x: 8, y: 7 }, { x: 7, y: 7 }],
+          dir: "RIGHT",
+          headDir: "RIGHT",
+          movementDir: "RIGHT",
+          transitionDir: "RIGHT",
+          fromHead: { x: 8, y: 7 },
+          toHead: { x: 9, y: 7 },
+          moveSeq: 1,
+          turns: [],
+          modeKey: "classic",
+          seated: true,
+          moved: true,
+          colorId: 0,
+        },
+        true
+      )
+    );
     const delta = await waitMsg(spec.inbox, "SNAKE_DELTA", 8000);
     assert.equal(delta.payload.clientId, aId);
     assert.ok(Array.isArray(delta.payload.body));
     assert.equal(delta.payload.alive, true);
 
-    // Any player (not only admin/owner) may publish fruit after native eat
-    b.inbox.length = 0;
+    // Plan 1 deliberately rejects all post-ready runtime fruit mutations.
+    const runtimePublisher =
+      startSpec.payload.collectablesOwnerId === aId ? a : b;
+    runtimePublisher.inbox.length = 0;
     c.inbox.length = 0;
     spec.inbox.length = 0;
-    send(b.ws, "COLLECTABLES_DELTA", {
-      apples: [
-        { x: 4, y: 4 },
-        { x: 9, y: 9 },
-      ],
-      width: 17,
-      height: 15,
-    });
-    const fruit = await waitMsg(spec.inbox, "COLLECTABLES_DELTA", 8000);
-    assert.equal(fruit.payload.clientId, bId);
-    assert.equal(fruit.payload.apples.length, 2);
+    send(
+      runtimePublisher.ws,
+      "COLLECTABLES_DELTA",
+      relayPayload(runtimePublisher.ws, generation, {
+        initial: false,
+        baseRevision: 1,
+        collectables: [{ x: 9, y: 9, type: 0 }],
+        apples: [{ x: 9, y: 9, type: 0 }],
+      })
+    );
+    const rejected = await waitMsg(runtimePublisher.inbox, "ERROR", 8000);
+    assert.match(
+      String(rejected.payload.code || rejected.payload.message || ""),
+      /runtime_board_updates_disabled|initial_board_required/
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(
+      spec.inbox.filter((m) => m.type === "COLLECTABLES_DELTA").length,
+      0
+    );
 
     // End match then late pose — server must not ERROR(not_coop_session)
     send(a.ws, "SESSION_END", { reason: "ALL_DEAD" });
@@ -785,7 +957,7 @@ describe("ws integration", { timeout: 60000 }, () => {
     a.ws.close();
   });
 
-  it("versus: non-admin spectator receives admin BOARD_DELTA", async () => {
+  it("race: non-admin spectator receives admin BOARD_DELTA", async () => {
     const admin = await wsClient();
     send(admin.ws, "HELLO", { create: true, displayName: "Admin" });
     const welcome = await waitMsg(admin.inbox, "WELCOME");
@@ -800,7 +972,7 @@ describe("ws integration", { timeout: 60000 }, () => {
     });
     await waitMsg(spec.inbox, "WELCOME");
 
-    send(admin.ws, "MODE_CHANGE", { mode: "versus" });
+    send(admin.ws, "MODE_CHANGE", { mode: "race" });
     await waitMsg(admin.inbox, "MODE_CHANGE");
     send(admin.ws, "SET_ROLE", { clientId: adminId, role: "player" });
     await waitRosterWhere(admin.inbox, (r) =>
@@ -845,7 +1017,7 @@ describe("ws integration", { timeout: 60000 }, () => {
     spec.ws.close();
   });
 
-  it("versus full session: start → score pulse → session end", async () => {
+  it("race full session: start → score pulse → session end", async () => {
     const a = await wsClient();
     send(a.ws, "HELLO", { create: true, displayName: "Host" });
     const welcome = await waitMsg(a.inbox, "WELCOME");
@@ -854,7 +1026,7 @@ describe("ws integration", { timeout: 60000 }, () => {
     const b = await wsClient();
     send(b.ws, "HELLO", { create: false, roomCode: room, displayName: "P2" });
     const bId = (await waitMsg(b.inbox, "WELCOME")).payload.clientId;
-    send(a.ws, "MODE_CHANGE", { mode: "versus" });
+    send(a.ws, "MODE_CHANGE", { mode: "race" });
     await waitMsg(a.inbox, "MODE_CHANGE");
     send(a.ws, "SET_ROLE", { clientId: aId, role: "player" });
     send(a.ws, "SET_ROLE", { clientId: bId, role: "player" });
@@ -900,7 +1072,7 @@ describe("ws integration", { timeout: 60000 }, () => {
       displayName: "Spec",
     });
     await waitMsg(spec.inbox, "WELCOME");
-    send(a.ws, "MODE_CHANGE", { mode: "versus" });
+    send(a.ws, "MODE_CHANGE", { mode: "race" });
     await waitMsg(a.inbox, "MODE_CHANGE");
     send(a.ws, "SET_ROLE", { clientId: aId, role: "player" });
     await waitRosterWhere(

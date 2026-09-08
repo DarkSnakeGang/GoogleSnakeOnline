@@ -32,7 +32,7 @@ function loadUi(win) {
   win.remixShowSettingsPage = function () {};
   win.MultiplayerColors = require(path.join(ROOT, "src/shared/colors.js"));
   win.MultiplayerSession = require(path.join(ROOT, "src/session/ready.js"));
-  win.VersusState = require(path.join(ROOT, "src/versus/scoreboard.js"));
+  win.RaceState = require(path.join(ROOT, "src/race/scoreboard.js"));
   const uiPath = require.resolve(path.join(ROOT, "src/ui/settingsTab.js"));
   delete require.cache[uiPath];
   require(path.join(ROOT, "src/ui/settingsTab.js"));
@@ -54,14 +54,15 @@ function loadAppModules(win) {
     "shared/protocol.js",
     "runtime/bridge.js",
     "session/ready.js",
-    "versus/scoreboard.js",
+    "race/scoreboard.js",
     "coop/state.js",
+    "coop/session.js",
     "coop/native.js",
     "hooks/gsm.js",
     "net/client.js",
     "ui/settingsTab.js",
-    "versus/focus.js",
-    "versus/mosaic.js",
+    "race/focus.js",
+    "race/mosaic.js",
     "mod.js",
   ].forEach(function (rel) {
     const p = require.resolve(path.join(ROOT, "src", rel));
@@ -98,7 +99,7 @@ function adminApp(mode, extras) {
         return true;
       },
       setDuration: function () {},
-      setVersusGoal: function () {},
+      setRaceGoal: function () {},
       setMode: function (m) {
         this.roster.mode = m;
       },
@@ -106,7 +107,7 @@ function adminApp(mode, extras) {
         sessionPayload = payload || {};
       },
     },
-    versus: { scores: {}, spectateMode: "focus" },
+    race: { scores: {}, spectateMode: "focus" },
     syncMySettingsAsAdmin: function () {
       return { trophy: 0, count: 1, speed: 0, size: 0 };
     },
@@ -126,10 +127,10 @@ describe("co-op experience review", () => {
   });
 
   describe("lobby (settings Match panel)", () => {
-    it("shows the snake-color hint only in co-op, and hides versus finish-ongoing", () => {
+    it("shows the snake-color hint only in co-op, and hides race finish-ongoing", () => {
       win = new JSDOM(SETTINGS_HTML).window;
       const UI = loadUi(win);
-      const app = adminApp("versus");
+      const app = adminApp("race");
       // Non-admin player box hosts the color hint
       app.client.isAdmin = function () {
         return false;
@@ -142,11 +143,16 @@ describe("co-op experience review", () => {
 
       const hint = win.document.getElementById("mp-coop-color-hint");
       const finishWrap = win.document.getElementById("mp-finish-ongoing-wrap");
+      const resetWrap = win.document.getElementById("mp-reset-on-goal-wrap");
+      const resetCb = win.document.getElementById("mp-reset-on-goal");
       assert.ok(hint, "color hint element");
       assert.ok(finishWrap, "finish-ongoing wrap");
+      assert.ok(resetWrap, "reset-on-goal wrap");
+      assert.ok(resetCb, "reset-on-goal checkbox");
+      assert.equal(resetCb.checked, false, "Reset on goal defaults off");
 
       ui.renderRoster({
-        mode: "versus",
+        mode: "race",
         roomCode: "ABCD",
         sessionActive: false,
         clients: [
@@ -155,10 +161,48 @@ describe("co-op experience review", () => {
         ],
         allowNewRuns: true,
       });
-      assert.equal(hint.style.display, "none", "no color hint in versus");
+      assert.equal(hint.style.display, "none", "no color hint in race");
       assert.ok(hint.classList.contains("hidden"));
-      assert.notEqual(finishWrap.style.display, "none", "finish-ongoing visible in versus");
+      assert.notEqual(finishWrap.style.display, "none", "finish-ongoing visible in race");
+      assert.notEqual(
+        resetWrap.style.display,
+        "none",
+        "reset-on-goal visible for connected race player"
+      );
 
+      ui.renderRoster({
+        mode: "race",
+        roomCode: "ABCD",
+        sessionActive: false,
+        clients: [
+          { clientId: "admin", role: "player", ready: true },
+          { clientId: "p2", role: "spectator", ready: false },
+        ],
+        allowNewRuns: true,
+      });
+      // Still player in this fixture's me() — flip to spectator
+      app.client.me = function () {
+        return { clientId: "p2", role: "spectator", ready: false };
+      };
+      ui.renderRoster({
+        mode: "race",
+        roomCode: "ABCD",
+        sessionActive: false,
+        clients: [
+          { clientId: "admin", role: "player", ready: true },
+          { clientId: "p2", role: "spectator", ready: false },
+        ],
+        allowNewRuns: true,
+      });
+      assert.equal(
+        resetWrap.style.display,
+        "none",
+        "reset-on-goal hidden for spectator"
+      );
+
+      app.client.me = function () {
+        return { clientId: "p2", role: "player", ready: true };
+      };
       ui.renderRoster({
         mode: "coop",
         roomCode: "ABCD",
@@ -176,61 +220,96 @@ describe("co-op experience review", () => {
         "hint copy mentions unique color"
       );
       assert.equal(finishWrap.style.display, "none", "finish-ongoing hidden in co-op");
+      assert.equal(resetWrap.style.display, "none", "reset-on-goal hidden in co-op");
     });
 
-    it("Start match in co-op omits finishOngoingRuns (versus still ships it)", () => {
-      win = new JSDOM(SETTINGS_HTML).window;
-      const UI = loadUi(win);
+    it("Start match in co-op omits finishOngoingRuns (race still ships it)", () => {
+      function runStart(mode) {
+        const html = SETTINGS_HTML.replace(
+          "</body>",
+          '<button jsname="NSjDf" aria-label="Play"><svg></svg><span>Play</span></button></body>'
+        );
+        win = new JSDOM(html).window;
+        global.window = win;
+        global.document = win.document;
+        win.button_color = "#1155CC";
+        win.remixShowSettingsPage = function () {};
+        [
+          "shared/colors.js",
+          "shared/protocol.js",
+          "runtime/bridge.js",
+          "session/ready.js",
+          "race/scoreboard.js",
+          "coop/state.js",
+          "coop/native.js",
+          "hooks/gsm.js",
+          "net/client.js",
+          "ui/settingsTab.js",
+          "race/focus.js",
+          "race/mosaic.js",
+          "mod.js",
+        ].forEach(function (rel) {
+          const p = require.resolve(path.join(ROOT, "src", rel));
+          delete require.cache[p];
+          require(path.join(ROOT, "src", rel));
+        });
+        const MultiplayerApp =
+          win.MultiplayerApp ||
+          require(path.join(ROOT, "src/mod.js")).MultiplayerApp;
+        const app = new MultiplayerApp();
+        let sessionPayload = null;
+        app.client = {
+          connected: true,
+          clientId: "admin",
+          isAdmin: function () {
+            return true;
+          },
+          me: function () {
+            return { clientId: "admin", role: "player", ready: true };
+          },
+          roster: {
+            mode: mode,
+            sessionActive: false,
+            allowNewRuns: true,
+            clients: [
+              { clientId: "admin", role: "player", ready: true },
+              { clientId: "p2", role: "player", ready: true },
+            ],
+          },
+          setDuration: function () {},
+          setRaceGoal: function () {},
+          sessionStart: function (payload) {
+            sessionPayload = payload || {};
+          },
+        };
+        app.syncMySettingsAsAdmin = function () {
+          return { trophy: 0, count: 1, speed: 0, size: 0 };
+        };
+        app.ui = new win.MultiplayerUI(app);
+        app.ui.mountSettingsTab();
+        app.ui.renderRoster(app.client.roster);
+        win.document.getElementById("mp-finish-ongoing").checked = true;
+        assert.equal(app.startMatchAsAdmin(), true);
+        app._paintPlayAsStartMatch();
+        return {
+          payload: sessionPayload,
+          label: win.document
+            .querySelector('[jsname="NSjDf"]')
+            .getAttribute("aria-label"),
+        };
+      }
 
-      // --- co-op ---
-      const coopApp = adminApp("coop");
-      const coopUi = new UI(coopApp);
-      coopUi.mountSettingsTab();
-      const finishCb = win.document.getElementById("mp-finish-ongoing");
-      finishCb.checked = true; // leftover versus preference must not leak
-      coopApp.client.roster = {
-        mode: "coop",
-        sessionActive: false,
-        allowNewRuns: true,
-        clients: [
-          { clientId: "admin", role: "player", ready: true },
-          { clientId: "p2", role: "player", ready: true },
-        ],
-      };
-      coopUi.renderRoster(coopApp.client.roster);
-      const startBtn = win.document.getElementById("mp-start");
-      startBtn.disabled = false;
-      startBtn.click();
-      const coopPayload = coopApp._lastStartPayload();
-      assert.ok(coopPayload && coopPayload.settings, "co-op still ships settings snap");
+      const coop = runStart("coop");
+      assert.ok(coop.payload && coop.payload.settings);
       assert.equal(
-        Object.prototype.hasOwnProperty.call(coopPayload, "finishOngoingRuns"),
-        false,
-        "co-op SESSION_START must not include finishOngoingRuns"
+        Object.prototype.hasOwnProperty.call(coop.payload, "finishOngoingRuns"),
+        false
       );
+      assert.equal(coop.label, "Start Co-op");
 
-      // --- versus ---
-      win = new JSDOM(SETTINGS_HTML).window;
-      const UI2 = loadUi(win);
-      const versusApp = adminApp("versus");
-      const versusUi = new UI2(versusApp);
-      versusUi.mountSettingsTab();
-      win.document.getElementById("mp-finish-ongoing").checked = true;
-      versusApp.client.roster = {
-        mode: "versus",
-        sessionActive: false,
-        allowNewRuns: true,
-        clients: [
-          { clientId: "admin", role: "player", ready: true },
-          { clientId: "p2", role: "player", ready: true },
-        ],
-      };
-      versusUi.renderRoster(versusApp.client.roster);
-      const startVersus = win.document.getElementById("mp-start");
-      startVersus.disabled = false;
-      startVersus.click();
-      const versusPayload = versusApp._lastStartPayload();
-      assert.equal(versusPayload.finishOngoingRuns, true);
+      const raceStart = runStart("race");
+      assert.equal(raceStart.payload.finishOngoingRuns, true);
+      assert.equal(raceStart.label, "Start Race");
     });
   });
 

@@ -1,15 +1,20 @@
 /** Versioned client↔server message helpers. */
 (function (root) {
   const PROTOCOL_VERSION = 1;
+  const COOP_AUTHORITIES = {
+    SERVER_SIM: "server-sim-v1",
+    NATIVE_RELAY: "native-relay-v1",
+  };
 
   const TYPES = {
     HELLO: "HELLO",
     WELCOME: "WELCOME",
     ROSTER: "ROSTER",
+    SET_DISPLAY_NAME: "SET_DISPLAY_NAME",
     SET_ROLE: "SET_ROLE",
     KICK: "KICK",
     SET_DURATION: "SET_DURATION",
-    SET_VERSUS_GOAL: "SET_VERSUS_GOAL",
+    SET_RACE_GOAL: "SET_RACE_GOAL",
     READY: "READY",
     COLOR_CLAIM: "COLOR_CLAIM",
     MODE_CHANGE: "MODE_CHANGE",
@@ -38,6 +43,18 @@
     COOP_GOAL: "COOP_GOAL",
     /** Native co-op: shared run timer armed (first player moved). */
     COOP_TIMER_START: "COOP_TIMER_START",
+    /** Native relay: server asks one seat to publish the initial native board. */
+    COOP_BOARD_INIT: "COOP_BOARD_INIT",
+    /** Native relay: canonical initial board is committed and movement may begin. */
+    COOP_BOARD_READY: "COOP_BOARD_READY",
+    /** Native relay: ordered canonical dynamic-speed transition. */
+    COOP_SPEED_TRANSITION: "COOP_SPEED_TRANSITION",
+    /** Server-auth co-op: client direction intent only. */
+    COOP_INPUT: "COOP_INPUT",
+    /** Server-auth co-op: full board snapshot each sim tick. */
+    COOP_STATE: "COOP_STATE",
+    /** Server-auth co-op: optional one-shot events (eat/death/allApples). */
+    COOP_EVENT: "COOP_EVENT",
     ERROR: "ERROR",
     PING: "PING",
     PONG: "PONG",
@@ -81,6 +98,7 @@
 
   const API = {
     PROTOCOL_VERSION,
+    COOP_AUTHORITIES,
     TYPES,
     envelope,
     parseMessage,
