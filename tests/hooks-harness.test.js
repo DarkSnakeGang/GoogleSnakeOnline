@@ -2620,6 +2620,14 @@ describe("Multiplayer settings tab layout", () => {
     ui.updateHud(app);
     assert.ok(ui.hud.innerHTML.indexOf("All apples!") >= 0);
     assert.ok(ui.hud.innerHTML.indexOf("45.1s") >= 0);
+    assert.notEqual(ui.hud.style.display, "none");
+
+    // Admin: menus quit zeros local score; end banner must remain visible.
+    app._coopTotal = 0;
+    app._coopMatchEndHandled = true;
+    ui.updateHud(app);
+    assert.notEqual(ui.hud.style.display, "none");
+    assert.ok(ui.hud.innerHTML.indexOf("All apples!") >= 0);
 
     app._coopEndReason = "ALL_DEAD";
     app._coopWon = false;
@@ -3659,6 +3667,49 @@ describe("spectator / admin menu access", () => {
       "hidden",
       "ALL_DEAD must leave .wjOYOd visible"
     );
+  });
+
+  it("co-op ALL_APPLES: refreshCoopScores freezes admin totals after match end", () => {
+    const win = menuDom();
+    const MultiplayerApp = loadApp(win);
+    const app = seatedApp(win, MultiplayerApp, {
+      admin: true,
+      role: "player",
+      roster: {
+        mode: "coop",
+        sessionActive: false,
+        adminId: "admin",
+        clients: [
+          { clientId: "admin", role: "player", displayName: "Blue" },
+          { clientId: "guest", role: "player", displayName: "Cyan" },
+        ],
+      },
+    });
+    app.client.clientId = "admin";
+    app._coopScores = {
+      admin: { score: 82, alive: true },
+      guest: { score: 0, alive: true },
+    };
+    app._coopTotal = 82;
+    app._coopGoal = 84;
+    app._coopEndReason = "ALL_APPLES";
+    app._coopWon = true;
+    app._coopMatchEndHandled = true;
+    app._coopSessionActive = false;
+    win.GsmHooks = win.GsmHooks || {};
+    win.GsmHooks.readScoreAndAlive = function () {
+      return { score: 0, alive: false };
+    };
+    let hudCalls = 0;
+    app.ui = {
+      updateHud: function () {
+        hudCalls++;
+      },
+    };
+    app.refreshCoopScores();
+    assert.equal(app._coopTotal, 82, "post-quit scrape must not wipe team score");
+    assert.equal(app._coopScores.admin.score, 82);
+    assert.ok(hudCalls >= 1);
   });
 
   it("End match quits the engine even if Escape was already latched", async () => {

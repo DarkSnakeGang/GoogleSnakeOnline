@@ -1,10 +1,10 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-20T19:35:02.940Z */
+/* Built: 2026-09-20T19:38:09.895Z */
 
 window.__MP_MOD_VERSION="13";
 
-window.__MP_MOD_BUILT="2026-09-20T19:35:02.940Z";
+window.__MP_MOD_BUILT="2026-09-20T19:38:09.895Z";
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -52403,7 +52403,14 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 
     // Co-op panel: combined score + shared run clock + per-player lives
     if (r.mode === "coop") {
-      if (!r.sessionActive && !(app._coopTotal > 0)) {
+      // Keep the end banner after ALL_APPLES / ALL_DEAD even if a post-quit
+      // score scrape zeroed `_coopTotal` (admin local score resets on menus).
+      const coopEnded = !!(
+        app._coopEndReason ||
+        app._coopWon ||
+        app._coopMatchEndHandled
+      );
+      if (!r.sessionActive && !(app._coopTotal > 0) && !coopEnded) {
         this.hud.style.display = "none";
         return;
       }
@@ -57966,6 +57973,12 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
    */
   MultiplayerApp.prototype.refreshCoopScores = function () {
     if (!this.client || !this.client.roster || this.client.roster.mode !== "coop") {
+      return;
+    }
+    // Match end freezes the last team totals — quitting the native run would
+    // otherwise scrape score 0 and wipe the admin's HUD ("All apples!").
+    if (this._coopMatchEndHandled || this._coopEndReason) {
+      if (this.ui && this.ui.updateHud) this.ui.updateHud(this);
       return;
     }
     if (!this._coopScores) this._coopScores = {};

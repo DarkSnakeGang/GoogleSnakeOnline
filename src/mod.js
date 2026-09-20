@@ -4423,6 +4423,12 @@
     if (!this.client || !this.client.roster || this.client.roster.mode !== "coop") {
       return;
     }
+    // Match end freezes the last team totals — quitting the native run would
+    // otherwise scrape score 0 and wipe the admin's HUD ("All apples!").
+    if (this._coopMatchEndHandled || this._coopEndReason) {
+      if (this.ui && this.ui.updateHud) this.ui.updateHud(this);
+      return;
+    }
     if (!this._coopScores) this._coopScores = {};
     // Server-auth: scores come from COOP_STATE only — do not scrape native
     if (this._coopServerAuth || (typeof window !== "undefined" && window.__mpCoopServerAuth)) {

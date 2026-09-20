@@ -1705,7 +1705,14 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 
     // Co-op panel: combined score + shared run clock + per-player lives
     if (r.mode === "coop") {
-      if (!r.sessionActive && !(app._coopTotal > 0)) {
+      // Keep the end banner after ALL_APPLES / ALL_DEAD even if a post-quit
+      // score scrape zeroed `_coopTotal` (admin local score resets on menus).
+      const coopEnded = !!(
+        app._coopEndReason ||
+        app._coopWon ||
+        app._coopMatchEndHandled
+      );
+      if (!r.sessionActive && !(app._coopTotal > 0) && !coopEnded) {
         this.hud.style.display = "none";
         return;
       }

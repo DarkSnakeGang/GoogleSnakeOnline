@@ -359,6 +359,14 @@ describe("co-op experience review", () => {
       ui.updateHud(app);
       assert.ok(ui.hud.innerHTML.indexOf("All apples!") >= 0);
       assert.ok(ui.hud.innerHTML.indexOf("45.1s") >= 0);
+      assert.notEqual(ui.hud.style.display, "none");
+
+      // Admin post-quit: native score scrape may zero total — HUD must stay.
+      app._coopTotal = 0;
+      app._coopMatchEndHandled = true;
+      ui.updateHud(app);
+      assert.notEqual(ui.hud.style.display, "none");
+      assert.ok(ui.hud.innerHTML.indexOf("All apples!") >= 0);
 
       app._coopEndReason = "ALL_DEAD";
       app._coopWon = false;
