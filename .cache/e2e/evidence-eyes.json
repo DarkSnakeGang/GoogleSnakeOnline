@@ -1,0 +1,48 @@
+{
+  "a": {
+    "ok": true,
+    "head": {
+      "x": 5,
+      "y": 5
+    },
+    "peerSc": "#19D8E6",
+    "peerBackend": "layers",
+    "faceCtxRetargets": 161,
+    "clip": {
+      "x": 316,
+      "y": 313,
+      "width": 82,
+      "height": 82
+    },
+    "ink": 0,
+    "sclera": 2531,
+    "body": 374920,
+    "total": 377580,
+    "inkRatio": 0,
+    "hasPupils": true,
+    "shot": "C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\.cache\\e2e\\evidence-eyes-a.png"
+  },
+  "b": {
+    "ok": true,
+    "head": {
+      "x": 9,
+      "y": 3
+    },
+    "peerSc": "#4E7CF6",
+    "peerBackend": "layers",
+    "faceCtxRetargets": 49,
+    "clip": {
+      "x": 574,
+      "y": 184,
+      "width": 82,
+      "height": 82
+    },
+    "ink": 0,
+    "sclera": 2452,
+    "body": 375055,
+    "total": 377580,
+    "inkRatio": 0,
+    "hasPupils": true,
+    "shot": "C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\.cache\\e2e\\evidence-eyes-b.png"
+  }
+}

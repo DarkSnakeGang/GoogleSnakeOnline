@@ -1,0 +1,249 @@
+{
+  "modVersion": "13",
+  "modBuilt": "2026-09-20T04:40:54.166Z",
+  "liveBoard": {
+    "width": 10,
+    "height": 9
+  },
+  "Sa": 1,
+  "Aa": 1,
+  "fruitLen": 0,
+  "fruitFp": "",
+  "fruitPosCloneOk": true,
+  "fruitPos": [],
+  "appleType": null,
+  "cellSize": 87,
+  "boardCss": null,
+  "playSettings": null,
+  "matchSettings": {
+    "_nativeGraphicsCount": 4,
+    "_rowLengths": {
+      "apple": 52,
+      "color": 49,
+      "count": 17,
+      "graphics": 7,
+      "size": 12,
+      "speed": 17,
+      "theme": 19,
+      "trophy": 32
+    },
+    "apple": 0,
+    "count": 5,
+    "size": 1,
+    "speed": 1,
+    "trophy": 0
+  },
+  "forceSaBeforeAa": true,
+  "forceSnaRan": true,
+  "playController": true,
+  "alterSnakeRan": true,
+  "alterHadMaEntry": true,
+  "alterHadAaEqSa": true,
+  "alterHadAaSwitch": true,
+  "alterSizePatched": true,
+  "authority": null,
+  "nativeRenderDebug": {
+    "generation": 0,
+    "backend": "layers",
+    "cadence": 60,
+    "renderCount": 0,
+    "refreshCount": 0,
+    "compositeCount": 0,
+    "layerAllocations": 0,
+    "layerReleases": 0,
+    "bufferGrowth": 0,
+    "fallbackReason": null,
+    "renderExceptions": 0,
+    "averageRefreshMs": 0
+  },
+  "nativeRenderMetrics": {
+    "generation": 0,
+    "backend": "layers",
+    "cadence": 60,
+    "renderCount": 0,
+    "refreshCount": 0,
+    "compositeCount": 0,
+    "layerAllocations": 0,
+    "layerReleases": 0,
+    "bufferGrowth": 0,
+    "fallbackReason": null,
+    "renderExceptions": 0,
+    "averageRefreshMs": 0
+  },
+  "fallbackReason": null,
+  "peerBackend": "layers",
+  "coopEndReason": "ALL_APPLES",
+  "statusText": "Multiplayer Mod v13 - Connected [1ms] - Co-op Mode",
+  "local": {
+    "body": [
+      {
+        "x": 3,
+        "y": 1
+      },
+      {
+        "x": 3,
+        "y": 2
+      },
+      {
+        "x": 3,
+        "y": 3
+      },
+      {
+        "x": 3,
+        "y": 4
+      },
+      {
+        "x": 3,
+        "y": 5
+      },
+      {
+        "x": 3,
+        "y": 6
+      },
+      {
+        "x": 3,
+        "y": 7
+      },
+      {
+        "x": 3,
+        "y": 8
+      },
+      {
+        "x": 2,
+        "y": 8
+      },
+      {
+        "x": 2,
+        "y": 7
+      },
+      {
+        "x": 2,
+        "y": 6
+      },
+      {
+        "x": 2,
+        "y": 5
+      },
+      {
+        "x": 2,
+        "y": 4
+      },
+      {
+        "x": 2,
+        "y": 3
+      },
+      {
+        "x": 2,
+        "y": 2
+      },
+      {
+        "x": 2,
+        "y": 1
+      },
+      {
+        "x": 1,
+        "y": 1
+      },
+      {
+        "x": 1,
+        "y": 2
+      },
+      {
+        "x": 1,
+        "y": 3
+      },
+      {
+        "x": 1,
+        "y": 4
+      },
+      {
+        "x": 1,
+        "y": 5
+      },
+      {
+        "x": 1,
+        "y": 6
+      },
+      {
+        "x": 1,
+        "y": 7
+      },
+      {
+        "x": 1,
+        "y": 8
+      },
+      {
+        "x": 0,
+        "y": 8
+      },
+      {
+        "x": 0,
+        "y": 7
+      },
+      {
+        "x": 0,
+        "y": 6
+      },
+      {
+        "x": 0,
+        "y": 5
+      },
+      {
+        "x": 0,
+        "y": 4
+      },
+      {
+        "x": 0,
+        "y": 3
+      },
+      {
+        "x": 0,
+        "y": 2
+      },
+      {
+        "x": 0,
+        "y": 1
+      },
+      {
+        "x": 0,
+        "y": 0
+      },
+      {
+        "x": 1,
+        "y": 0
+      },
+      {
+        "x": 2,
+        "y": 0
+      },
+      {
+        "x": 3,
+        "y": 0
+      }
+    ],
+    "head": {
+      "x": 3,
+      "y": 1
+    },
+    "dir": "NONE",
+    "Sc": "#19D8E6",
+    "Yc": "#15B5C1",
+    "score": 33,
+    "clientId": "e7f889cb-cf23-4dc5-9064-07f93e306ee1"
+  },
+  "remotes": {},
+  "hudScores": {
+    "scores": {
+      "e76654b7-60b8-47f5-81f7-9cd2ee58fe60": {
+        "score": 36,
+        "alive": true
+      },
+      "e7f889cb-cf23-4dc5-9064-07f93e306ee1": {
+        "score": 33,
+        "alive": true
+      }
+    },
+    "total": 69
+  },
+  "poseFp": "L:3,1>3,2>3,3>3,4>3,5>3,6>3,7>3,8>2,8>2,7>2,6>2,5>2,4>2,3>2,2>2,1>1,1>1,2>1,3>1,4>1,5>1,6>1,7>1,8>0,8>0,7>0,6>0,5>0,4>0,3>0,2>0,1>0,0>1,0>2,0>3,0|NONE|#19D8E6/#15B5C1####"
+}

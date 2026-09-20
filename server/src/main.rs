@@ -219,7 +219,13 @@ async fn main() {
 
     tracing_subscriber::registry()
         .with(filter)
-        .with(fmt::layer().with_writer(std::io::stderr))
+        // ANSI only when stderr is a real TTY — the console GUI pipes stderr
+        // into an HTML log pane where escape codes render as garbage.
+        .with(
+            fmt::layer()
+                .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+                .with_writer(std::io::stderr),
+        )
         .with(fmt::layer().with_ansi(false).with_writer(non_blocking))
         .init();
 

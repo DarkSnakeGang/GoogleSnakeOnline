@@ -1,0 +1,68 @@
+{
+  "a": {
+    "clientId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
+    "peerId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
+    "endReason": "ALL_DEAD",
+    "sessionActive": false,
+    "deadSent": false,
+    "localDead": false,
+    "nj": true,
+    "overlayVisible": true,
+    "gsmOverlayVisible": true,
+    "overlayVisibility": "visible",
+    "overlayOpacity": "1",
+    "menuVisibility": "visible",
+    "hudAlive": false,
+    "scoreAlive": false,
+    "peerHudAlive": false,
+    "peerRemoteAlive": null,
+    "scores": {
+      "1861e322-e8f0-4044-99d4-35d5c2bf7e04": {
+        "score": 0,
+        "alive": false
+      },
+      "f3a1d07a-a218-48cb-8162-1e82088e90bc": {
+        "score": 0,
+        "alive": false
+      }
+    },
+    "remotes": {}
+  },
+  "b": {
+    "clientId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
+    "peerId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
+    "endReason": "ALL_DEAD",
+    "sessionActive": false,
+    "deadSent": false,
+    "localDead": false,
+    "nj": true,
+    "overlayVisible": true,
+    "gsmOverlayVisible": true,
+    "overlayVisibility": "visible",
+    "overlayOpacity": "0.9694",
+    "menuVisibility": "visible",
+    "hudAlive": false,
+    "scoreAlive": false,
+    "peerHudAlive": false,
+    "peerRemoteAlive": null,
+    "scores": {
+      "1861e322-e8f0-4044-99d4-35d5c2bf7e04": {
+        "score": 0,
+        "alive": false
+      },
+      "f3a1d07a-a218-48cb-8162-1e82088e90bc": {
+        "score": 0,
+        "alive": false
+      }
+    },
+    "remotes": {}
+  },
+  "killedB": {
+    "ok": true,
+    "clientId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
+    "deadSent": true,
+    "generation": 1,
+    "eventSeq": 3,
+    "bodyLen": 3
+  }
+}

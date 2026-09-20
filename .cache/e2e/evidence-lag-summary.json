@@ -1,0 +1,10 @@
+{
+  "pingMin": 1,
+  "pingMax": 1,
+  "maxRefresh": 0.4410735457683085,
+  "medianFps": 41.0296670242196,
+  "faceTintSwaps": 1,
+  "faceTintRestores": 1,
+  "faceCtxRetargets": 631,
+  "a7": 0
+}

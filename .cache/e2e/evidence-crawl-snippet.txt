@@ -1,0 +1,52 @@
+          // Opposed crawl for tip/mid; short L for corner probe.
+          for (let i = 0; i < 8; i++) {
+            await Promise.all([
+              pageA.keyboard.press("ArrowRight").catch(function () {}),
+              pageB.keyboard.press("ArrowLeft").catch(function () {}),
+            ]);
+            await new Promise(function (r) {
+              setTimeout(r, 90);
+            });
+          }
+          for (let i = 0; i < 3; i++) {
+            await Promise.all([
+              pageA.keyboard.press("ArrowUp").catch(function () {}),
+              pageB.keyboard.press("ArrowDown").catch(function () {}),
+            ]);
+            await new Promise(function (r) {
+              setTimeout(r, 90);
+            });
+          }
+          await new Promise(function (r) {
+            setTimeout(r, 150);
+          });
+
+          const bLocal = await sampleSnakeParity(pageB, {
+            role: "local",
+          });
+          let aPeerB = await sampleSnakeParity(pageA, {
+            role: "peer",
+            peerClientId: idB,
+          });
+          if (
+            !aPeerB ||
+            !aPeerB.bodyColor ||
+            aPeerB.bodyColor.hex === "#FFFFFF" ||
+            (aPeerB.head && !aPeerB.head.ok)
+          ) {
+            await new Promise(function (r) {
+              setTimeout(r, 200);
+            });
+            aPeerB = await sampleSnakeParity(pageA, {
+              role: "peer",
+              peerClientId: idB,
+            });
+          }
+          const aLocal = await sampleSnakeParity(pageA, {
+            role: "local",
+          });
+          const bPeerA = await sampleSnakeParity(pageB, {
+            role: "peer",
+            peerClientId: idA,
+          });
+

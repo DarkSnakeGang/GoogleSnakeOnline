@@ -1,0 +1,32 @@
+{
+  "n": 2,
+  "at": [
+    1,
+    2
+  ],
+  "stacks": [
+    [
+      "at Document.callTheUserObjectsOperation (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\node_modules\\jsdom\\lib\\jsdom\\living\\generated\\EventListener.js:26:30)",
+      "at innerInvokeEventListeners (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\node_modules\\jsdom\\lib\\jsdom\\living\\events\\EventTarget-impl.js:350:25)",
+      "at invokeEventListeners (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\node_modules\\jsdom\\lib\\jsdom\\living\\events\\EventTarget-impl.js:286:3)",
+      "at DocumentImpl._dispatch (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\node_modules\\jsdom\\lib\\jsdom\\living\\events\\EventTarget-impl.js:233:9)",
+      "at DocumentImpl.dispatchEvent (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\node_modules\\jsdom\\lib\\jsdom\\living\\events\\EventTarget-impl.js:104:17)",
+      "at Document.dispatchEvent (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\node_modules\\jsdom\\lib\\jsdom\\living\\generated\\EventTarget.js:241:34)",
+      "at dispatchEsc (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\src\\hooks\\gsm.js:7982:18)",
+      "at Timeout._onTimeout (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\src\\hooks\\gsm.js:8008:11)",
+      "at listOnTimeout (node:internal/timers:608:17)"
+    ],
+    [
+      "at Document.callTheUserObjectsOperation (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\node_modules\\jsdom\\lib\\jsdom\\living\\generated\\EventListener.js:26:30)",
+      "at innerInvokeEventListeners (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\node_modules\\jsdom\\lib\\jsdom\\living\\events\\EventTarget-impl.js:350:25)",
+      "at invokeEventListeners (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\node_modules\\jsdom\\lib\\jsdom\\living\\events\\EventTarget-impl.js:286:3)",
+      "at DocumentImpl._dispatch (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\node_modules\\jsdom\\lib\\jsdom\\living\\events\\EventTarget-impl.js:233:9)",
+      "at DocumentImpl.dispatchEvent (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\node_modules\\jsdom\\lib\\jsdom\\living\\events\\EventTarget-impl.js:104:17)",
+      "at Document.dispatchEvent (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\node_modules\\jsdom\\lib\\jsdom\\living\\generated\\EventTarget.js:241:34)",
+      "at dispatchEsc (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\src\\hooks\\gsm.js:7982:18)",
+      "at quitNativeRunForMenus (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\src\\hooks\\gsm.js:7998:5)",
+      "at Object.showDeathScreen (C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\src\\hooks\\gsm.js:6747:14)"
+    ]
+  ],
+  "released": true
+}

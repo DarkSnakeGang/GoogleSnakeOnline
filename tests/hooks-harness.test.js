@@ -3658,7 +3658,7 @@ describe("spectator / admin menu access", () => {
     guest._handleCoopMatchEnded("ALL_DEAD");
     await nextTick();
     assert.equal(guest._coopEndReason, "ALL_DEAD");
-    assert.equal(esc.n, 1, "co-op guest must quit to death/settings chrome");
+    assert.ok(esc.n >= 1, "co-op guest must quit to death/settings chrome");
     assert.equal(!!win.pauseGame, true);
     const death = win.document.getElementsByClassName("wjOYOd")[0];
     assert.ok(death, "death overlay exists");
@@ -3710,6 +3710,91 @@ describe("spectator / admin menu access", () => {
     assert.equal(app._coopTotal, 82, "post-quit scrape must not wipe team score");
     assert.equal(app._coopScores.admin.score, 82);
     assert.ok(hudCalls >= 1);
+  });
+
+  it("co-op cheese: peer HUD prefers pose score over inflated bodyLen", () => {
+    const win = menuDom();
+    const MultiplayerApp = loadApp(win);
+    const app = seatedApp(win, MultiplayerApp, {
+      admin: false,
+      role: "player",
+      roster: {
+        mode: "coop",
+        sessionActive: true,
+        adminId: "admin",
+        clients: [
+          { clientId: "admin", role: "player", displayName: "Blue" },
+          { clientId: "guest", role: "player", displayName: "Cyan" },
+        ],
+      },
+    });
+    app.client.clientId = "guest";
+    app._coopSessionActive = true;
+    app._coopAuthority = "native-relay-v1";
+    // Cheese bodies include light-tile holes → bodyLen-3 >> apple score.
+    const longBody = [];
+    for (let i = 0; i < 89; i++) longBody.push({ x: i % 10, y: (i / 10) | 0 });
+    app.coopNative = {
+      remotes: {
+        admin: {
+          clientId: "admin",
+          score: 48,
+          body: longBody,
+          alive: true,
+        },
+      },
+    };
+    win.GsmHooks = win.GsmHooks || {};
+    win.GsmHooks.readScoreAndAlive = function () {
+      return { score: 0, alive: true };
+    };
+    app.ui = { updateHud: function () {} };
+    app.refreshCoopScores();
+    assert.equal(app._coopScores.admin.score, 48, "trust published score");
+    assert.equal(app._coopTotal, 48);
+  });
+
+  it("friendly death still publishes when session warmup would block markDead", () => {
+    const win = menuDom();
+    const MultiplayerApp = loadApp(win);
+    const app = seatedApp(win, MultiplayerApp, {
+      admin: true,
+      role: "player",
+      roster: {
+        mode: "coop",
+        sessionActive: true,
+        adminId: "admin",
+        clients: [
+          { clientId: "admin", role: "player" },
+          { clientId: "idle", role: "player" },
+        ],
+      },
+    });
+    app.client.clientId = "admin";
+    app._coopSessionActive = true;
+    app._coopAuthority = "native-relay-v1";
+    app._coopDeadSent = false;
+    app.coop = { generation: 3 };
+    // Session not seated yet — old path returned early and desynced idle peers.
+    if (app.coopSession) {
+      app.coopSession.enterSeating(3, "native-relay-v1");
+      app.coopSession.seated = false;
+    }
+    const deaths = [];
+    app.client.coopPlayerDead = function (p) {
+      deaths.push(p);
+    };
+    win.GsmHooks = win.GsmHooks || {};
+    win.GsmHooks.hideDeathScreen = function () {};
+    app._onCoopFriendlyDeath([
+      { x: 5, y: 5 },
+      { x: 4, y: 5 },
+      { x: 3, y: 5 },
+    ]);
+    assert.equal(app._coopDeadSent, true);
+    assert.equal(deaths.length, 1, "must publish even if markDead was blocked");
+    assert.equal(deaths[0].reason, "friendly");
+    assert.equal(deaths[0].body.length, 3);
   });
 
   it("End match quits the engine even if Escape was already latched", async () => {

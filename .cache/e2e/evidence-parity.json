@@ -1,0 +1,533 @@
+{
+  "idA": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
+  "idB": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
+  "bLocal": {
+    "ok": true,
+    "role": "local",
+    "clientId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
+    "bodyLen": 3,
+    "liveSc": "#19D8E6",
+    "liveYc": "#15B5C1",
+    "bodyColor": {
+      "r": 24,
+      "g": 211,
+      "b": 224,
+      "hex": "#18D3E0",
+      "n": 25
+    },
+    "headPatch": {
+      "r": 24,
+      "g": 211,
+      "b": 224,
+      "hex": "#18D3E0",
+      "n": 25
+    },
+    "midCell": {
+      "x": 4,
+      "y": 5,
+      "i": 1
+    },
+    "tail": {
+      "ok": true,
+      "proj": 0.005172413793103154,
+      "outRatio": 0.504950495049505,
+      "outward": 5508,
+      "inward": 5400,
+      "u": {
+        "x": -1,
+        "y": 0
+      },
+      "tip": {
+        "x": 3,
+        "y": 5
+      },
+      "neck": {
+        "x": 4,
+        "y": 5
+      },
+      "mass": 11664,
+      "facingOk": false
+    },
+    "corner": {
+      "ok": false,
+      "reason": "no-corner"
+    },
+    "eyeFringe": {
+      "ok": true,
+      "fringeN": 85,
+      "median": {
+        "r": 119,
+        "g": 230,
+        "b": 237
+      },
+      "medianHex": "#77E6ED",
+      "liveSc": "#19D8E6",
+      "scDist": 115
+    },
+    "head": {
+      "ok": true,
+      "proj": 0.1279501196868736,
+      "f": {
+        "x": 1,
+        "y": 0
+      },
+      "head": {
+        "x": 4,
+        "y": 5
+      },
+      "mass": 533,
+      "pupils": 25,
+      "sclera": 508,
+      "marks": 0,
+      "paintedIndex": 1,
+      "dirs": {
+        "movementDir": "NONE",
+        "headDir": "RIGHT",
+        "transitionDir": "NONE"
+      }
+    },
+    "headPx": {
+      "x": 292.77777777777777,
+      "y": 354.44444444444446
+    },
+    "movementDir": "NONE",
+    "headDir": "RIGHT",
+    "transitionDir": "NONE"
+  },
+  "aPeerB": {
+    "ok": true,
+    "role": "peer",
+    "clientId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
+    "bodyLen": 3,
+    "liveSc": "#19D8E6",
+    "liveYc": "#15B5C1",
+    "bodyColor": {
+      "r": 24,
+      "g": 210,
+      "b": 223,
+      "hex": "#18D2DF",
+      "n": 25
+    },
+    "headPatch": {
+      "r": 255,
+      "g": 255,
+      "b": 255,
+      "hex": "#FFFFFF",
+      "n": 25
+    },
+    "midCell": {
+      "x": 4,
+      "y": 5,
+      "i": 1
+    },
+    "tail": {
+      "ok": true,
+      "proj": 0.005172413793103154,
+      "outRatio": 0.504950495049505,
+      "outward": 5508,
+      "inward": 5400,
+      "u": {
+        "x": -1,
+        "y": 0
+      },
+      "tip": {
+        "x": 3,
+        "y": 5
+      },
+      "neck": {
+        "x": 4,
+        "y": 5
+      },
+      "mass": 11664,
+      "facingOk": false
+    },
+    "corner": {
+      "ok": false,
+      "reason": "no-corner"
+    },
+    "eyeFringe": {
+      "ok": true,
+      "fringeN": 106,
+      "median": {
+        "r": 108,
+        "g": 227,
+        "b": 236
+      },
+      "medianHex": "#6CE3EC",
+      "liveSc": "#19D8E6",
+      "scDist": 100
+    },
+    "head": {
+      "ok": true,
+      "proj": -0.04587369236729983,
+      "f": {
+        "x": 1,
+        "y": 0
+      },
+      "head": {
+        "x": 5,
+        "y": 5
+      },
+      "mass": 534,
+      "pupils": 30,
+      "sclera": 504,
+      "marks": 0,
+      "paintedIndex": 0,
+      "dirs": {
+        "movementDir": "RIGHT",
+        "headDir": "RIGHT",
+        "transitionDir": "NONE"
+      }
+    },
+    "headPx": {
+      "x": 357.22222222222223,
+      "y": 354.44444444444446
+    },
+    "movementDir": "RIGHT",
+    "headDir": "RIGHT",
+    "transitionDir": "NONE"
+  },
+  "aLocal": {
+    "ok": true,
+    "role": "local",
+    "clientId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
+    "bodyLen": 3,
+    "liveSc": "#4E7CF6",
+    "liveYc": "#17439F",
+    "bodyColor": {
+      "r": 84,
+      "g": 160,
+      "b": 200,
+      "hex": "#54A0C8",
+      "n": 25
+    },
+    "headPatch": {
+      "r": 84,
+      "g": 160,
+      "b": 200,
+      "hex": "#54A0C8",
+      "n": 25
+    },
+    "midCell": {
+      "x": 8,
+      "y": 3,
+      "i": 0
+    },
+    "tail": {
+      "ok": true,
+      "proj": 0.020559783097156246,
+      "outRatio": 0.5121815138553096,
+      "outward": 5508,
+      "inward": 5246,
+      "u": {
+        "x": -1,
+        "y": 0
+      },
+      "tip": {
+        "x": 6,
+        "y": 3
+      },
+      "neck": {
+        "x": 7,
+        "y": 3
+      },
+      "mass": 11510,
+      "facingOk": true
+    },
+    "corner": {
+      "ok": false,
+      "reason": "no-corner"
+    },
+    "eyeFringe": {
+      "ok": true,
+      "fringeN": 31,
+      "median": {
+        "r": 129,
+        "g": 176,
+        "b": 140
+      },
+      "medianHex": "#81B08C",
+      "liveSc": "#4E7CF6",
+      "scDist": 209
+    },
+    "head": {
+      "ok": true,
+      "proj": -0.1445013979496721,
+      "f": {
+        "x": 1,
+        "y": 0
+      },
+      "head": {
+        "x": 8,
+        "y": 3
+      },
+      "mass": 74,
+      "pupils": 74,
+      "sclera": 0,
+      "marks": 0,
+      "paintedIndex": 0,
+      "dirs": {
+        "movementDir": "RIGHT",
+        "headDir": "RIGHT",
+        "transitionDir": "NONE"
+      }
+    },
+    "headPx": {
+      "x": 550.5555555555554,
+      "y": 225.55555555555554
+    },
+    "movementDir": "RIGHT",
+    "headDir": "RIGHT",
+    "transitionDir": "NONE"
+  },
+  "bPeerA": {
+    "ok": true,
+    "role": "peer",
+    "clientId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
+    "bodyLen": 3,
+    "liveSc": "#4E7CF6",
+    "liveYc": "#17439F",
+    "bodyColor": {
+      "r": 79,
+      "g": 124,
+      "b": 246,
+      "hex": "#4F7CF6",
+      "n": 25
+    },
+    "headPatch": {
+      "r": 87,
+      "g": 138,
+      "b": 52,
+      "hex": "#578A34",
+      "n": 25
+    },
+    "midCell": {
+      "x": 8,
+      "y": 3,
+      "i": 1
+    },
+    "tail": {
+      "ok": true,
+      "proj": 0.006705749506814767,
+      "outRatio": 0.5034274746366877,
+      "outward": 5508,
+      "inward": 5433,
+      "u": {
+        "x": -1,
+        "y": 0
+      },
+      "tip": {
+        "x": 7,
+        "y": 3
+      },
+      "neck": {
+        "x": 8,
+        "y": 3
+      },
+      "mass": 11589,
+      "facingOk": false
+    },
+    "corner": {
+      "ok": false,
+      "reason": "no-corner"
+    },
+    "eyeFringe": {
+      "ok": true,
+      "fringeN": 24,
+      "median": {
+        "r": 118,
+        "g": 164,
+        "b": 157
+      },
+      "medianHex": "#76A49D",
+      "liveSc": "#4E7CF6",
+      "scDist": 169
+    },
+    "head": {
+      "ok": true,
+      "proj": -0.24450139794967404,
+      "f": {
+        "x": 1,
+        "y": 0
+      },
+      "head": {
+        "x": 9,
+        "y": 3
+      },
+      "mass": 74,
+      "pupils": 74,
+      "sclera": 0,
+      "marks": 0,
+      "paintedIndex": 0,
+      "dirs": {
+        "movementDir": "RIGHT",
+        "headDir": "RIGHT",
+        "transitionDir": "NONE"
+      }
+    },
+    "headPx": {
+      "x": 615,
+      "y": 225.55555555555554
+    },
+    "movementDir": "RIGHT",
+    "headDir": "RIGHT",
+    "transitionDir": "NONE"
+  },
+  "eyesBLocal": {
+    "ok": true,
+    "head": {
+      "x": 5,
+      "y": 5
+    },
+    "peerSc": "#19D8E6",
+    "clip": {
+      "x": 316,
+      "y": 313,
+      "width": 82,
+      "height": 82
+    },
+    "ink": 0,
+    "sclera": 2442,
+    "body": 375117,
+    "total": 377580,
+    "inkRatio": 0,
+    "hasPupils": true,
+    "shot": "C:\\Users\\someo\\OneDrive\\Desktop\\Quick Access\\vscode\\GoogleSnakeLAN\\.cache\\e2e\\evidence-eyes-b-local.png"
+  },
+  "lerpA": {
+    "maxHold": 2,
+    "holdPairs": 6,
+    "refreshDelta": 7,
+    "progressChanged": true,
+    "withPeer": 14,
+    "smoothOk": true,
+    "n": 14
+  },
+  "gates": {
+    "bodyRgbDist": 2,
+    "bodyOk": true,
+    "tailA": {
+      "ok": true,
+      "proj": 0.005172413793103154,
+      "outRatio": 0.504950495049505,
+      "outward": 5508,
+      "inward": 5400,
+      "u": {
+        "x": -1,
+        "y": 0
+      },
+      "tip": {
+        "x": 3,
+        "y": 5
+      },
+      "neck": {
+        "x": 4,
+        "y": 5
+      },
+      "mass": 11664,
+      "facingOk": false
+    },
+    "tailB": {
+      "ok": true,
+      "proj": 0.005172413793103154,
+      "outRatio": 0.504950495049505,
+      "outward": 5508,
+      "inward": 5400,
+      "u": {
+        "x": -1,
+        "y": 0
+      },
+      "tip": {
+        "x": 3,
+        "y": 5
+      },
+      "neck": {
+        "x": 4,
+        "y": 5
+      },
+      "mass": 11664,
+      "facingOk": false
+    },
+    "tailOk": true,
+    "cornerA": {
+      "ok": false,
+      "reason": "no-corner"
+    },
+    "cornerB": {
+      "ok": false,
+      "reason": "no-corner"
+    },
+    "cornerOk": true,
+    "fringeA": {
+      "ok": true,
+      "fringeN": 106,
+      "median": {
+        "r": 108,
+        "g": 227,
+        "b": 236
+      },
+      "medianHex": "#6CE3EC",
+      "liveSc": "#19D8E6",
+      "scDist": 100
+    },
+    "fringeB": {
+      "ok": true,
+      "fringeN": 85,
+      "median": {
+        "r": 119,
+        "g": 230,
+        "b": 237
+      },
+      "medianHex": "#77E6ED",
+      "liveSc": "#19D8E6",
+      "scDist": 115
+    },
+    "fringeOk": true,
+    "headA": {
+      "ok": true,
+      "proj": -0.04587369236729983,
+      "f": {
+        "x": 1,
+        "y": 0
+      },
+      "head": {
+        "x": 5,
+        "y": 5
+      },
+      "mass": 534,
+      "pupils": 30,
+      "sclera": 504,
+      "marks": 0,
+      "paintedIndex": 0,
+      "dirs": {
+        "movementDir": "RIGHT",
+        "headDir": "RIGHT",
+        "transitionDir": "NONE"
+      }
+    },
+    "headB": {
+      "ok": true,
+      "proj": 0.1279501196868736,
+      "f": {
+        "x": 1,
+        "y": 0
+      },
+      "head": {
+        "x": 4,
+        "y": 5
+      },
+      "mass": 533,
+      "pupils": 25,
+      "sclera": 508,
+      "marks": 0,
+      "paintedIndex": 1,
+      "dirs": {
+        "movementDir": "NONE",
+        "headDir": "RIGHT",
+        "transitionDir": "NONE"
+      }
+    },
+    "headOk": true,
+    "lerpOk": true
+  }
+}

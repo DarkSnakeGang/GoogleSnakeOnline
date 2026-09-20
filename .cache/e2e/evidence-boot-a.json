@@ -1,0 +1,182 @@
+{
+  "modVersion": "13",
+  "modBuilt": "2026-09-20T19:17:40.217Z",
+  "liveBoard": {
+    "width": 10,
+    "height": 9
+  },
+  "Sa": 1,
+  "Aa": 1,
+  "fruitLen": 1,
+  "fruitFp": "7,4",
+  "fruitPosCloneOk": true,
+  "fruitPos": [
+    {
+      "x": 7,
+      "y": 4,
+      "type": 0
+    }
+  ],
+  "appleType": 0,
+  "cellSize": 58,
+  "boardCss": null,
+  "playSettings": {
+    "_nativeGraphicsCount": 4,
+    "_rowLengths": {
+      "apple": 52,
+      "color": 49,
+      "count": 17,
+      "graphics": 7,
+      "size": 12,
+      "speed": 17,
+      "theme": 19,
+      "trophy": 32
+    },
+    "apple": 0,
+    "count": 0,
+    "size": 1,
+    "speed": 1,
+    "trophy": 0
+  },
+  "matchSettings": {
+    "_nativeGraphicsCount": 4,
+    "_rowLengths": {
+      "apple": 52,
+      "color": 49,
+      "count": 17,
+      "graphics": 7,
+      "size": 12,
+      "speed": 17,
+      "theme": 19,
+      "trophy": 32
+    },
+    "apple": 0,
+    "count": 0,
+    "size": 1,
+    "speed": 1,
+    "trophy": 0
+  },
+  "forceSaBeforeAa": true,
+  "forceSnaRan": true,
+  "playController": true,
+  "alterSnakeRan": true,
+  "alterHadMaEntry": true,
+  "alterHadAaEqSa": true,
+  "alterHadAaSwitch": true,
+  "alterSizePatched": true,
+  "authority": "native-relay-v1",
+  "nativeRenderDebug": {
+    "generation": 1,
+    "backend": "layers",
+    "cadence": 30,
+    "renderCount": 14,
+    "refreshCount": 14,
+    "compositeCount": 13,
+    "layerAllocations": 1,
+    "layerReleases": 0,
+    "bufferGrowth": 3,
+    "fallbackReason": null,
+    "renderExceptions": 0,
+    "averageRefreshMs": 7.591942012570194,
+    "leanPassCount": 13,
+    "fullPassCount": 1,
+    "faceTintCacheBakes": 2,
+    "faceTintBlits": 27,
+    "audited": true,
+    "faceTintSwaps": 1,
+    "faceCtxRetargets": 14,
+    "faceTintRestores": 1
+  },
+  "nativeRenderMetrics": {
+    "generation": 1,
+    "backend": "layers",
+    "cadence": 60,
+    "renderCount": 40,
+    "refreshCount": 40,
+    "compositeCount": 40,
+    "layerAllocations": 1,
+    "layerReleases": 0,
+    "bufferGrowth": 3,
+    "fallbackReason": null,
+    "renderExceptions": 0,
+    "averageRefreshMs": 0.3775959863323145,
+    "leanPassCount": 39,
+    "fullPassCount": 1,
+    "faceTintCacheBakes": 2,
+    "faceTintBlits": 79,
+    "audited": true,
+    "faceTintSwaps": 1,
+    "faceCtxRetargets": 40,
+    "faceTintRestores": 1
+  },
+  "fallbackReason": null,
+  "peerBackend": "layers",
+  "coopEndReason": null,
+  "statusText": "Multiplayer Mod v13 - Connected [5ms] 40fps - Co-op Mode",
+  "local": {
+    "body": [
+      {
+        "x": 5,
+        "y": 3
+      },
+      {
+        "x": 4,
+        "y": 3
+      },
+      {
+        "x": 3,
+        "y": 3
+      }
+    ],
+    "head": {
+      "x": 5,
+      "y": 3
+    },
+    "dir": "NONE",
+    "Sc": "#4E7CF6",
+    "Yc": "#17439F",
+    "score": 0,
+    "clientId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04"
+  },
+  "remotes": {
+    "f3a1d07a-a218-48cb-8162-1e82088e90bc": {
+      "body": [
+        {
+          "x": 5,
+          "y": 5
+        },
+        {
+          "x": 4,
+          "y": 5
+        },
+        {
+          "x": 3,
+          "y": 5
+        }
+      ],
+      "head": {
+        "x": 5,
+        "y": 5
+      },
+      "dir": "RIGHT",
+      "Sc": "#19D8E6",
+      "Yc": "#15B5C1",
+      "score": 0,
+      "colorId": 1
+    }
+  },
+  "hudScores": {
+    "scores": {
+      "1861e322-e8f0-4044-99d4-35d5c2bf7e04": {
+        "score": 0,
+        "alive": true
+      },
+      "f3a1d07a-a218-48cb-8162-1e82088e90bc": {
+        "score": 0,
+        "alive": true
+      }
+    },
+    "total": 0
+  },
+  "poseFp": "L:5,3>4,3>3,3|NONE|#4E7CF6/#17439F##f3a1d07a-a218-48cb-8162-1e82088e90bc:5,5>4,5>3,5|RIGHT|#19D8E6/#15B5C1##7,4"
+}

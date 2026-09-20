@@ -1,0 +1,336 @@
+{
+  "modVersion": "13",
+  "modBuilt": "2026-09-20T04:40:54.166Z",
+  "liveBoard": {
+    "width": 10,
+    "height": 9
+  },
+  "Sa": 1,
+  "Aa": 1,
+  "fruitLen": 14,
+  "fruitFp": "6,5|6,6|6,7|6,8|7,1|7,2|7,3|7,5|7,6|7,7|7,8|8,1|8,2|8,3",
+  "fruitPosCloneOk": true,
+  "fruitPos": [
+    {
+      "x": 6,
+      "y": 5,
+      "type": 0
+    },
+    {
+      "x": 6,
+      "y": 6,
+      "type": 0
+    },
+    {
+      "x": 6,
+      "y": 7,
+      "type": 0
+    },
+    {
+      "x": 6,
+      "y": 8,
+      "type": 0
+    },
+    {
+      "x": 7,
+      "y": 8,
+      "type": 0
+    },
+    {
+      "x": 7,
+      "y": 7,
+      "type": 0
+    },
+    {
+      "x": 7,
+      "y": 6,
+      "type": 0
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "type": 0
+    },
+    {
+      "x": 7,
+      "y": 3,
+      "type": 0
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "type": 0
+    },
+    {
+      "x": 7,
+      "y": 1,
+      "type": 0
+    },
+    {
+      "x": 8,
+      "y": 1,
+      "type": 0
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "type": 0
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "type": 0
+    }
+  ],
+  "appleType": 0,
+  "cellSize": 87,
+  "boardCss": null,
+  "playSettings": null,
+  "matchSettings": {
+    "_nativeGraphicsCount": 4,
+    "_rowLengths": {
+      "apple": 52,
+      "color": 49,
+      "count": 17,
+      "graphics": 7,
+      "size": 12,
+      "speed": 17,
+      "theme": 19,
+      "trophy": 32
+    },
+    "apple": 0,
+    "count": 5,
+    "size": 1,
+    "speed": 1,
+    "trophy": 0
+  },
+  "forceSaBeforeAa": true,
+  "forceSnaRan": true,
+  "playController": true,
+  "alterSnakeRan": true,
+  "alterHadMaEntry": true,
+  "alterHadAaEqSa": true,
+  "alterHadAaSwitch": true,
+  "alterSizePatched": true,
+  "authority": null,
+  "nativeRenderDebug": {
+    "generation": 0,
+    "backend": "layers",
+    "cadence": 60,
+    "renderCount": 0,
+    "refreshCount": 0,
+    "compositeCount": 0,
+    "layerAllocations": 0,
+    "layerReleases": 0,
+    "bufferGrowth": 0,
+    "fallbackReason": null,
+    "renderExceptions": 0,
+    "averageRefreshMs": 0
+  },
+  "nativeRenderMetrics": {
+    "generation": 0,
+    "backend": "layers",
+    "cadence": 60,
+    "renderCount": 0,
+    "refreshCount": 0,
+    "compositeCount": 0,
+    "layerAllocations": 0,
+    "layerReleases": 0,
+    "bufferGrowth": 0,
+    "fallbackReason": null,
+    "renderExceptions": 0,
+    "averageRefreshMs": 0
+  },
+  "fallbackReason": null,
+  "peerBackend": "layers",
+  "coopEndReason": "ALL_APPLES",
+  "statusText": "Multiplayer Mod v13 - Connected [1ms] - Co-op Mode",
+  "local": {
+    "body": [
+      {
+        "x": 6,
+        "y": 4
+      },
+      {
+        "x": 6,
+        "y": 3
+      },
+      {
+        "x": 6,
+        "y": 2
+      },
+      {
+        "x": 6,
+        "y": 1
+      },
+      {
+        "x": 5,
+        "y": 1
+      },
+      {
+        "x": 5,
+        "y": 2
+      },
+      {
+        "x": 5,
+        "y": 3
+      },
+      {
+        "x": 5,
+        "y": 4
+      },
+      {
+        "x": 5,
+        "y": 5
+      },
+      {
+        "x": 5,
+        "y": 6
+      },
+      {
+        "x": 5,
+        "y": 7
+      },
+      {
+        "x": 5,
+        "y": 8
+      },
+      {
+        "x": 4,
+        "y": 8
+      },
+      {
+        "x": 4,
+        "y": 7
+      },
+      {
+        "x": 4,
+        "y": 6
+      },
+      {
+        "x": 4,
+        "y": 5
+      },
+      {
+        "x": 4,
+        "y": 4
+      },
+      {
+        "x": 4,
+        "y": 3
+      },
+      {
+        "x": 4,
+        "y": 2
+      },
+      {
+        "x": 4,
+        "y": 1
+      },
+      {
+        "x": 4,
+        "y": 0
+      },
+      {
+        "x": 5,
+        "y": 0
+      },
+      {
+        "x": 6,
+        "y": 0
+      },
+      {
+        "x": 7,
+        "y": 0
+      },
+      {
+        "x": 8,
+        "y": 0
+      },
+      {
+        "x": 9,
+        "y": 0
+      },
+      {
+        "x": 9,
+        "y": 1
+      },
+      {
+        "x": 9,
+        "y": 2
+      },
+      {
+        "x": 9,
+        "y": 3
+      },
+      {
+        "x": 9,
+        "y": 4
+      },
+      {
+        "x": 9,
+        "y": 5
+      },
+      {
+        "x": 9,
+        "y": 6
+      },
+      {
+        "x": 9,
+        "y": 7
+      },
+      {
+        "x": 9,
+        "y": 8
+      },
+      {
+        "x": 8,
+        "y": 8
+      },
+      {
+        "x": 8,
+        "y": 7
+      },
+      {
+        "x": 8,
+        "y": 6
+      },
+      {
+        "x": 8,
+        "y": 5
+      },
+      {
+        "x": 8,
+        "y": 4
+      },
+      {
+        "x": 7,
+        "y": 4
+      }
+    ],
+    "head": {
+      "x": 6,
+      "y": 4
+    },
+    "dir": "NONE",
+    "Sc": "#4E7CF6",
+    "Yc": "#17439F",
+    "score": 0,
+    "clientId": "e76654b7-60b8-47f5-81f7-9cd2ee58fe60"
+  },
+  "remotes": {},
+  "hudScores": {
+    "scores": {
+      "e76654b7-60b8-47f5-81f7-9cd2ee58fe60": {
+        "score": 0,
+        "alive": false
+      },
+      "e7f889cb-cf23-4dc5-9064-07f93e306ee1": {
+        "score": 33,
+        "alive": true
+      }
+    },
+    "total": 33
+  },
+  "poseFp": "L:6,4>6,3>6,2>6,1>5,1>5,2>5,3>5,4>5,5>5,6>5,7>5,8>4,8>4,7>4,6>4,5>4,4>4,3>4,2>4,1>4,0>5,0>6,0>7,0>8,0>9,0>9,1>9,2>9,3>9,4>9,5>9,6>9,7>9,8>8,8>8,7>8,6>8,5>8,4>7,4|NONE|#4E7CF6/#17439F####6,5|6,6|6,7|6,8|7,1|7,2|7,3|7,5|7,6|7,7|7,8|8,1|8,2|8,3"
+}

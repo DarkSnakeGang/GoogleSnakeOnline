@@ -1,0 +1,281 @@
+{
+  "modVersion": "13",
+  "modBuilt": "2026-09-20T03:40:50.559Z",
+  "liveBoard": {
+    "width": 10,
+    "height": 9
+  },
+  "Sa": 1,
+  "Aa": 1,
+  "fruitLen": 24,
+  "fruitFp": "0,0|0,3|0,5|0,6|0,7|1,2|1,8|2,2|2,5|2,8|3,0|3,1|3,4|4,4|4,8|5,7|6,0|6,2|7,7|8,4|8,5|8,7|9,1|9,7",
+  "fruitPosCloneOk": true,
+  "fruitPos": [
+    {
+      "x": 8,
+      "y": 5,
+      "type": 0
+    },
+    {
+      "x": 2,
+      "y": 8,
+      "type": 0
+    },
+    {
+      "x": 5,
+      "y": 7,
+      "type": 0
+    },
+    {
+      "x": 0,
+      "y": 7,
+      "type": 0
+    },
+    {
+      "x": 3,
+      "y": 4,
+      "type": 0
+    },
+    {
+      "x": 8,
+      "y": 7,
+      "type": 0
+    },
+    {
+      "x": 3,
+      "y": 1,
+      "type": 0
+    },
+    {
+      "x": 7,
+      "y": 7,
+      "type": 0
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "type": 0
+    },
+    {
+      "x": 6,
+      "y": 2,
+      "type": 0
+    },
+    {
+      "x": 2,
+      "y": 5,
+      "type": 0
+    },
+    {
+      "x": 1,
+      "y": 2,
+      "type": 0
+    },
+    {
+      "x": 2,
+      "y": 2,
+      "type": 0
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "type": 0
+    },
+    {
+      "x": 4,
+      "y": 4,
+      "type": 0
+    },
+    {
+      "x": 0,
+      "y": 6,
+      "type": 0
+    },
+    {
+      "x": 0,
+      "y": 5,
+      "type": 0
+    },
+    {
+      "x": 8,
+      "y": 4,
+      "type": 0
+    },
+    {
+      "x": 9,
+      "y": 1,
+      "type": 0
+    },
+    {
+      "x": 0,
+      "y": 3,
+      "type": 0
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "type": 0
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "type": 0
+    },
+    {
+      "x": 1,
+      "y": 8,
+      "type": 0
+    },
+    {
+      "x": 4,
+      "y": 8,
+      "type": 0
+    }
+  ],
+  "appleType": 0,
+  "cellSize": 87,
+  "boardCss": null,
+  "playSettings": {
+    "_nativeGraphicsCount": 4,
+    "_rowLengths": {
+      "apple": 52,
+      "color": 49,
+      "count": 17,
+      "graphics": 7,
+      "size": 12,
+      "speed": 17,
+      "theme": 19,
+      "trophy": 32
+    },
+    "apple": 0,
+    "count": 5,
+    "size": 1,
+    "speed": 1,
+    "trophy": 0
+  },
+  "matchSettings": {
+    "_nativeGraphicsCount": 4,
+    "_rowLengths": {
+      "apple": 52,
+      "color": 49,
+      "count": 17,
+      "graphics": 7,
+      "size": 12,
+      "speed": 17,
+      "theme": 19,
+      "trophy": 32
+    },
+    "apple": 0,
+    "count": 5,
+    "size": 1,
+    "speed": 1,
+    "trophy": 0
+  },
+  "forceSaBeforeAa": true,
+  "forceSnaRan": true,
+  "playController": true,
+  "alterSnakeRan": true,
+  "alterHadMaEntry": true,
+  "alterHadAaEqSa": true,
+  "alterHadAaSwitch": true,
+  "alterSizePatched": true,
+  "authority": "native-relay-v1",
+  "nativeRenderDebug": {
+    "generation": 1,
+    "backend": "layers",
+    "cadence": 60,
+    "renderCount": 92,
+    "refreshCount": 92,
+    "compositeCount": 92,
+    "layerAllocations": 1,
+    "layerReleases": 0,
+    "bufferGrowth": 4,
+    "fallbackReason": null,
+    "renderExceptions": 0,
+    "averageRefreshMs": 0.20962215647180843
+  },
+  "nativeRenderMetrics": {
+    "generation": 1,
+    "backend": "layers",
+    "cadence": 60,
+    "renderCount": 106,
+    "refreshCount": 106,
+    "compositeCount": 106,
+    "layerAllocations": 1,
+    "layerReleases": 0,
+    "bufferGrowth": 4,
+    "fallbackReason": null,
+    "renderExceptions": 0,
+    "averageRefreshMs": 0.3102544697008
+  },
+  "fallbackReason": null,
+  "peerBackend": "layers",
+  "coopEndReason": null,
+  "statusText": "Multiplayer Mod v13 - Connected [7ms] - Co-op Mode",
+  "local": {
+    "body": [
+      {
+        "x": 5,
+        "y": 5
+      },
+      {
+        "x": 4,
+        "y": 5
+      },
+      {
+        "x": 3,
+        "y": 5
+      }
+    ],
+    "head": {
+      "x": 5,
+      "y": 5
+    },
+    "dir": null,
+    "Sc": "#19D8E6",
+    "Yc": "#15B5C1",
+    "score": 0,
+    "clientId": "02f563f8-e9f8-4d42-af2f-034ec1279d4a"
+  },
+  "remotes": {
+    "719660e2-7ada-4a2f-ab83-d6b0ded02fd0": {
+      "body": [
+        {
+          "x": 5,
+          "y": 3
+        },
+        {
+          "x": 4,
+          "y": 3
+        },
+        {
+          "x": 3,
+          "y": 3
+        }
+      ],
+      "head": {
+        "x": 5,
+        "y": 3
+      },
+      "dir": "RIGHT",
+      "Sc": "#4E7CF6",
+      "Yc": "#17439F",
+      "score": 1,
+      "colorId": 0
+    }
+  },
+  "hudScores": {
+    "scores": {
+      "719660e2-7ada-4a2f-ab83-d6b0ded02fd0": {
+        "score": 1,
+        "alive": true
+      },
+      "02f563f8-e9f8-4d42-af2f-034ec1279d4a": {
+        "score": 0,
+        "alive": true
+      }
+    },
+    "total": 1
+  },
+  "poseFp": "L:5,5>4,5>3,5||#19D8E6/#15B5C1##719660e2-7ada-4a2f-ab83-d6b0ded02fd0:5,3>4,3>3,3|RIGHT|#4E7CF6/#17439F##0,0|0,3|0,5|0,6|0,7|1,2|1,8|2,2|2,5|2,8|3,0|3,1|3,4|4,4|4,8|5,7|6,0|6,2|7,7|8,4|8,5|8,7|9,1|9,7"
+}

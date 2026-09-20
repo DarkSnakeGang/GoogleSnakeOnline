@@ -1,0 +1,111 @@
+{
+  "modVersion": "13",
+  "modBuilt": "2026-09-20T00:41:00.654Z",
+  "liveBoard": {
+    "width": 10,
+    "height": 9
+  },
+  "Sa": 1,
+  "Aa": 1,
+  "fruitLen": 5,
+  "fruitFp": "4,2|4,6|6,4|8,2|8,6",
+  "fruitPos": [
+    {
+      "x": 6,
+      "y": 4,
+      "type": 0
+    },
+    {
+      "x": 4,
+      "y": 2,
+      "type": 0
+    },
+    {
+      "x": 4,
+      "y": 6,
+      "type": 0
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "type": 0
+    },
+    {
+      "x": 8,
+      "y": 6,
+      "type": 0
+    }
+  ],
+  "appleType": 0,
+  "cellSize": 58,
+  "boardCss": null,
+  "playSettings": {
+    "_nativeGraphicsCount": 4,
+    "_rowLengths": {
+      "apple": 52,
+      "color": 49,
+      "count": 17,
+      "graphics": 7,
+      "size": 12,
+      "speed": 17,
+      "theme": 19,
+      "trophy": 32
+    },
+    "apple": 0,
+    "count": 2,
+    "size": 1,
+    "speed": 1,
+    "trophy": 0
+  },
+  "matchSettings": {
+    "_nativeGraphicsCount": 4,
+    "_rowLengths": {
+      "apple": 52,
+      "color": 49,
+      "count": 17,
+      "graphics": 7,
+      "size": 12,
+      "speed": 17,
+      "theme": 19,
+      "trophy": 32
+    },
+    "apple": 0,
+    "count": 2,
+    "size": 1,
+    "speed": 1,
+    "trophy": 0
+  },
+  "forceSaBeforeAa": true,
+  "forceSnaRan": true,
+  "playController": true,
+  "alterSnakeRan": true,
+  "alterHadMaEntry": true,
+  "alterHadAaEqSa": true,
+  "alterHadAaSwitch": true,
+  "alterSizePatched": true,
+  "authority": "native-relay-v1",
+  "nativeRenderDebug": {
+    "generation": 1,
+    "backend": "layers",
+    "fallbackReason": null,
+    "resetAt": 1789865220753
+  },
+  "nativeRenderMetrics": {
+    "generation": 1,
+    "backend": "layers",
+    "cadence": 60,
+    "renderCount": 8,
+    "refreshCount": 8,
+    "compositeCount": 8,
+    "layerAllocations": 1,
+    "layerReleases": 0,
+    "bufferGrowth": 3,
+    "fallbackReason": null,
+    "renderExceptions": 0,
+    "averageRefreshMs": 0.35154304873428355
+  },
+  "fallbackReason": null,
+  "peerBackend": "layers",
+  "coopEndReason": null,
+  "statusText": "Multiplayer Mod v13 - Connected [14ms] - Co-op Mode"
+}

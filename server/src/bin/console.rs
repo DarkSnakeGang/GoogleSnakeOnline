@@ -111,6 +111,7 @@ impl Shared {
     }
 
     fn push_log(&self, line: String) {
+        let line = strip_ansi(&line);
         {
             let mut lines = self.log_lines.lock();
             lines.push(line.clone());
@@ -121,6 +122,48 @@ impl Shared {
         }
         let _ = self.log_tx.send(line);
     }
+}
+
+/// Drop CSI / OSC color codes so the HTML log pane stays readable.
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek().copied() {
+            Some('[') => {
+                // CSI: ESC [ ... final-byte
+                chars.next();
+                while let Some(n) = chars.next() {
+                    if ('\x40'..='\x7e').contains(&n) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                // OSC: ESC ] ... BEL or ST (ESC \)
+                chars.next();
+                while let Some(n) = chars.next() {
+                    if n == '\u{7}' {
+                        break;
+                    }
+                    if n == '\u{1b}' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            Some(_) => {
+                // Skip a single-char intermediate escape if present.
+                chars.next();
+            }
+            None => {}
+        }
+    }
+    out
 }
 
 fn resolve_paths(manifest_arg: &str) -> (PathBuf, PathBuf, PathBuf) {
@@ -507,6 +550,9 @@ async fn start_server_inner(
         .current_dir(&s.repo_root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // Piped into the HTML log — never emit ANSI (also covers older bins).
+        .env("NO_COLOR", "1")
+        .env("RUST_LOG_STYLE", "never")
         .kill_on_drop(true);
 
     match cmd.spawn() {
@@ -1679,3 +1725,25 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
 </body>
 </html>
 "##;
+
+#[cfg(test)]
+mod tests {
+    use super::strip_ansi;
+
+    #[test]
+    fn strip_ansi_removes_tracing_style_codes() {
+        let raw = "\u{1b}[2m2026-09-20T19:28:48.123Z\u{1b}[0m \u{1b}[32mINFO\u{1b}[0m \u{1b}[3mroomId\u{1b}[0m\u{1b}[2m=\u{1b}[0mA6L6 event=coop_session_end";
+        let clean = strip_ansi(raw);
+        assert_eq!(
+            clean,
+            "2026-09-20T19:28:48.123Z INFO roomId=A6L6 event=coop_session_end"
+        );
+        assert!(!clean.contains('\u{1b}'));
+        assert!(!clean.contains("[32m"));
+    }
+
+    #[test]
+    fn strip_ansi_leaves_plain_text_alone() {
+        assert_eq!(strip_ansi("[err] hello"), "[err] hello");
+    }
+}

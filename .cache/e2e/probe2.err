@@ -1,0 +1,5 @@
+error: unexpected argument 'Access\vscode\GoogleSnakeLAN\.cache\e2e-certs\cert.pem' found
+
+Usage: multiplayer-server.exe [OPTIONS]
+
+For more information, try '--help'.

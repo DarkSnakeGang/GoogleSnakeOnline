@@ -2054,8 +2054,10 @@ impl Room {
         if moved && !board_ready {
             return Err("board_not_ready".into());
         }
+        // Dead seats: ignore late corpse poses instead of ERROR seat_dead
+        // (clients keep a tick or two of SNAKE_DELTA after COOP_PLAYER_DEAD).
         if !self.coop_alive.get(from).copied().unwrap_or(false) {
-            return Err("seat_dead".into());
+            return Ok(());
         }
 
         let mut clean = payload.clone();
@@ -2294,16 +2296,11 @@ impl Room {
             return Ok(());
         }
         let (generation, event_seq) = self.require_native_sender(from, payload)?;
-        if !self
-            .native_relay
-            .as_ref()
-            .map(|s| s.board_ready)
-            .unwrap_or(false)
-        {
-            return Err("board_not_ready".into());
-        }
+        // Accept death even before board_ready / seated ACK — a mover can die
+        // on an idle peer's spawn body before those flags land, and rejecting
+        // leaves the local corpse desynced from idle clients.
         if !self.coop_seated.get(from).copied().unwrap_or(false) {
-            return Err("seat_not_seated".into());
+            self.coop_seated.insert(from.to_string(), true);
         }
         if let Some(body) = payload.get("body") {
             // Empty array means "no corpse body supplied" — use last pose.
@@ -4383,6 +4380,48 @@ mod tests {
         }));
         assert_eq!(r.coop_alive.get("a"), Some(&false));
         assert_eq!(r.coop_alive.get("b"), Some(&true));
+
+        // Late corpse pose must not ERROR seat_dead (was flashing on clients).
+        r.cmd_snake_delta("a", &native_pose(generation, 11, 11, true))
+            .expect("dead seat pose is ignored, not an error");
+        let after = r.take_outbox();
+        assert!(
+            !after.iter().any(|(_, e)| e.msg_type == "SNAKE_DELTA"),
+            "dead seat must not fan out a live pose"
+        );
+    }
+
+    #[test]
+    fn native_player_dead_syncs_before_seated_or_board_ready() {
+        // Mover dies on an idle peer before seated ACK / board_ready — must
+        // still fan out COOP_PLAYER_DEAD or idle clients stay desynced.
+        let mut r = native_room(&["a", "b"]);
+        let generation = r.coop_generation;
+        assert!(r.coop_seated.get("a").copied().unwrap_or(false) == false);
+        assert!(!r
+            .native_relay
+            .as_ref()
+            .map(|s| s.board_ready)
+            .unwrap_or(false));
+        r.cmd_coop_player_dead(
+            "a",
+            &json!({
+                "generation": generation,
+                "eventSeq": 1,
+                "body": [{"x": 8, "y": 7}, {"x": 7, "y": 7}],
+                "reason": "friendly",
+            }),
+        )
+        .expect("death before seated/board_ready must be accepted");
+        assert_eq!(r.coop_seated.get("a"), Some(&true));
+        assert_eq!(r.coop_alive.get("a"), Some(&false));
+        let out = r.take_outbox();
+        assert!(out.iter().any(|(_, e)| {
+            e.msg_type == "COOP_PLAYER_DEAD" && e.payload["reason"] == "friendly"
+        }));
+        // B still alive — match continues until B also dies.
+        assert_eq!(r.coop_alive.get("b"), Some(&true));
+        assert!(r.session_active);
     }
 
     #[test]

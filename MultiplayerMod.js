@@ -1,10 +1,10 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-20T19:38:09.895Z */
+/* Built: 2026-09-20T19:51:56.606Z */
 
 window.__MP_MOD_VERSION="13";
 
-window.__MP_MOD_BUILT="2026-09-20T19:38:09.895Z";
+window.__MP_MOD_BUILT="2026-09-20T19:51:56.606Z";
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -54490,6 +54490,16 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     this.client.on(P.TYPES.ERROR, function (p) {
       // Late SNAKE_DELTA / COLLECTABLES after ALL_DEAD — expected, not a UI error
       if (p && p.code === "not_coop_session") return;
+      // Dead seat still ticking poses (or a peer's late corpse) — ignore.
+      if (
+        p &&
+        (p.code === "seat_dead" ||
+          p.code === "stale_pose_seq" ||
+          p.code === "stale_generation" ||
+          p.code === "seat_not_seated")
+      ) {
+        return;
+      }
       // Pre-join race (should be gated client-side) — don't flash over real join errors
       if (p && p.code === "not_joined") return;
       console.warn("Multiplayer ERROR", p);
@@ -57440,6 +57450,11 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     if (!this._coopSeatedPublish && !opts.seated) {
       return;
     }
+    // Corpse already published via COOP_PLAYER_DEAD — further SNAKE_DELTA
+    // hits seat_dead on the server and flashes "Error: seat_dead" on peers.
+    if (this._coopDeadSent && !opts.forceColors) {
+      return;
+    }
 
     const needColors = opts.forceColors || !this._coopColorsSent;
     const scrape =
@@ -57555,6 +57570,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
   /**
    * Peer body collision (native-relay): publish death immediately with the
    * pre-die body snapshot so peers see the corpse / · down without scrape lag.
+   * Always announce — killLocalOnRemote already killed the local engine, so
+   * skipping the publish (warmup / not seated) leaves idle peers desynced.
    */
   MultiplayerApp.prototype._onCoopFriendlyDeath = function (bodySnap) {
     if (this._coopAuthority !== "native-relay-v1") return;
@@ -57563,8 +57580,10 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     if (this.coopSession) {
       const marked = this.coopSession.markDead("friendly_hit");
       if (!marked.ok) {
-        this._logCoopDeath("warmup", marked.reason);
-        return;
+        // Local nj is already set — latch death anyway so we still publish.
+        this.coopSession.localDead = true;
+        this.coopSession.deadSent = true;
+        this._logCoopDeath("friendly_hit_forced", marked.reason);
       }
     }
     const body =
@@ -58011,15 +58030,19 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         alive = s.alive !== false && !self._coopDeadSent;
       } else if (remotes[p.clientId]) {
         const r = remotes[p.clientId];
-        score = r.score != null ? r.score | 0 : 0;
-        const bodyLen =
-          r.body && r.body.length
-            ? r.body.length
-            : r.ka && r.ka.length
-              ? r.ka.length
-              : 0;
-        if (bodyLen >= 3) {
-          score = Math.max(score, bodyLen - 3);
+        // Prefer the publisher's authoritative score. Cheese / portal / fog
+        // bodies are longer than apple-count, so bodyLen-3 over-reports
+        // (e.g. 86 on peer while local HUD shows 48).
+        if (r.score != null && Number.isFinite(Number(r.score))) {
+          score = Number(r.score) | 0;
+        } else {
+          const bodyLen =
+            r.body && r.body.length
+              ? r.body.length
+              : r.ka && r.ka.length
+                ? r.ka.length
+                : 0;
+          score = bodyLen >= 3 ? bodyLen - 3 : 0;
         }
         alive = r.alive !== false;
         // Sticky peer-down only after authoritative COOP_PLAYER_DEAD.
@@ -58480,17 +58503,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
               body: self._coopLastBody || undefined,
               reason: "native",
             });
-            const delta = Gsm.scrapeCoopSnakeDelta
-              ? Gsm.scrapeCoopSnakeDelta(me.colorId)
-              : Gsm.scrapeSnakeDelta
-                ? Gsm.scrapeSnakeDelta(me.colorId)
-                : null;
-            if (delta) {
-              delta.alive = false;
-              delta.seated = true;
-              if (self._coopLastBody) delta.body = self._coopLastBody;
-              self.client.snakeDelta(delta);
-            }
+            // Do not follow with SNAKE_DELTA — dead seats used to ERROR seat_dead
+            // and flash on the status bar / peer clients during the next start.
             if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
           }
           if (typeof self.refreshCoopScores === "function") {

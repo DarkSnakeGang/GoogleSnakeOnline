@@ -1,0 +1,5 @@
+2026-09-20T02:14:09.716080Z  INFO multiplayer_server: coopNativeRelay=true coopAuthority="native-relay-v1" event="coop_authority_config"
+2026-09-20T02:14:09.718628Z  INFO multiplayer_server: bind=127.0.0.1:60556 event="listen_tls" hint="Clients connect with wss://<host>:60556/ws"
+Multiplayer server (TLS) listening on https://127.0.0.1:60556
+Share wss://<host>:60556/ws
+(LAN friends can still use a non-TLS process without --tls-*)

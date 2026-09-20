@@ -1,0 +1,214 @@
+{
+  "modVersion": "13",
+  "modBuilt": "2026-09-20T00:41:00.654Z",
+  "liveBoard": {
+    "width": 10,
+    "height": 9
+  },
+  "Sa": 1,
+  "Aa": 1,
+  "fruitLen": 24,
+  "fruitFp": "0,2|0,4|1,2|1,4|1,7|2,1|2,5|2,6|3,0|3,3|4,3|4,6|5,1|7,0|7,8|8,2|8,3|8,5|8,7|8,8|9,2|9,5|9,7|9,8",
+  "fruitPos": [
+    {
+      "x": 9,
+      "y": 8,
+      "type": 0
+    },
+    {
+      "x": 8,
+      "y": 8,
+      "type": 0
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "type": 0
+    },
+    {
+      "x": 8,
+      "y": 5,
+      "type": 0
+    },
+    {
+      "x": 4,
+      "y": 6,
+      "type": 0
+    },
+    {
+      "x": 2,
+      "y": 1,
+      "type": 0
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "type": 0
+    },
+    {
+      "x": 1,
+      "y": 4,
+      "type": 0
+    },
+    {
+      "x": 9,
+      "y": 2,
+      "type": 0
+    },
+    {
+      "x": 2,
+      "y": 6,
+      "type": 0
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "type": 0
+    },
+    {
+      "x": 9,
+      "y": 5,
+      "type": 0
+    },
+    {
+      "x": 4,
+      "y": 3,
+      "type": 0
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "type": 0
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "type": 0
+    },
+    {
+      "x": 3,
+      "y": 3,
+      "type": 0
+    },
+    {
+      "x": 0,
+      "y": 2,
+      "type": 0
+    },
+    {
+      "x": 2,
+      "y": 5,
+      "type": 0
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "type": 0
+    },
+    {
+      "x": 1,
+      "y": 2,
+      "type": 0
+    },
+    {
+      "x": 7,
+      "y": 8,
+      "type": 0
+    },
+    {
+      "x": 0,
+      "y": 4,
+      "type": 0
+    },
+    {
+      "x": 8,
+      "y": 7,
+      "type": 0
+    },
+    {
+      "x": 1,
+      "y": 7,
+      "type": 0
+    }
+  ],
+  "appleType": 0,
+  "cellSize": 58,
+  "boardCss": null,
+  "playSettings": {
+    "_nativeGraphicsCount": 4,
+    "_rowLengths": {
+      "apple": 52,
+      "color": 49,
+      "count": 17,
+      "graphics": 7,
+      "size": 12,
+      "speed": 17,
+      "theme": 19,
+      "trophy": 32
+    },
+    "apple": 0,
+    "count": 5,
+    "size": 1,
+    "speed": 1,
+    "trophy": 0
+  },
+  "matchSettings": {
+    "_nativeGraphicsCount": 4,
+    "_rowLengths": {
+      "apple": 52,
+      "color": 49,
+      "count": 17,
+      "graphics": 7,
+      "size": 12,
+      "speed": 17,
+      "theme": 19,
+      "trophy": 32
+    },
+    "apple": 0,
+    "count": 5,
+    "size": 1,
+    "speed": 1,
+    "trophy": 0
+  },
+  "forceSaBeforeAa": true,
+  "forceSnaRan": true,
+  "playController": true,
+  "alterSnakeRan": true,
+  "alterHadMaEntry": true,
+  "alterHadAaEqSa": true,
+  "alterHadAaSwitch": true,
+  "alterSizePatched": true,
+  "authority": "native-relay-v1",
+  "nativeRenderDebug": {
+    "generation": 1,
+    "backend": "layers",
+    "cadence": 60,
+    "renderCount": 34,
+    "refreshCount": 34,
+    "compositeCount": 34,
+    "layerAllocations": 1,
+    "layerReleases": 0,
+    "bufferGrowth": 3,
+    "fallbackReason": null,
+    "renderExceptions": 0,
+    "averageRefreshMs": 0.26520300371914607
+  },
+  "nativeRenderMetrics": {
+    "generation": 1,
+    "backend": "layers",
+    "cadence": 60,
+    "renderCount": 46,
+    "refreshCount": 46,
+    "compositeCount": 46,
+    "layerAllocations": 1,
+    "layerReleases": 0,
+    "bufferGrowth": 3,
+    "fallbackReason": null,
+    "renderExceptions": 0,
+    "averageRefreshMs": 0.2842602225471167
+  },
+  "fallbackReason": null,
+  "peerBackend": "layers",
+  "coopEndReason": null,
+  "statusText": "Multiplayer Mod v13 - Connected [15ms] - Co-op Mode"
+}

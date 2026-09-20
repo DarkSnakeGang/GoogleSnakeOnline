@@ -1,0 +1,463 @@
+[
+  {
+    "t": "colors",
+    "a": 0,
+    "b": 1
+  },
+  {
+    "t": "goal",
+    "goal": 84
+  },
+  {
+    "t": "speed",
+    "speedIdx": 1,
+    "Fb": 320
+  },
+  {
+    "t": "tick-plan",
+    "ticks": 58,
+    "goal": 84,
+    "aBand": "right",
+    "bBand": "left",
+    "bombPack": 24
+  },
+  {
+    "t": "tick",
+    "i": 1,
+    "note": "approach",
+    "planTotal": 0,
+    "planHead": {
+      "x": 6,
+      "y": 3
+    },
+    "face": {
+      "ticks": 1,
+      "dir": "NONE",
+      "Ca": "RIGHT",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 1,
+      "total": 0,
+      "end": null,
+      "head": {
+        "x": 6,
+        "y": 3
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 2,
+    "note": "approach",
+    "planTotal": 0,
+    "planHead": {
+      "x": 7,
+      "y": 3
+    },
+    "face": {
+      "ticks": 2,
+      "dir": "NONE",
+      "Ca": "RIGHT",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": false
+    },
+    "snap": {
+      "fruitLen": 1,
+      "total": 0,
+      "end": null,
+      "head": {
+        "x": 7,
+        "y": 3
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 3,
+    "note": "bomb24-place",
+    "planTotal": 1,
+    "planHead": {
+      "x": 7,
+      "y": 4
+    },
+    "face": {
+      "ticks": 3,
+      "dir": "NONE",
+      "Ca": "DOWN",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 24,
+      "total": 0,
+      "end": null,
+      "head": {
+        "x": 7,
+        "y": 4
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 4,
+    "note": "enter",
+    "planTotal": 1,
+    "planHead": {
+      "x": 8,
+      "y": 4
+    },
+    "face": {
+      "ticks": 4,
+      "dir": "NONE",
+      "Ca": "RIGHT",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 24,
+      "total": 1,
+      "end": null,
+      "head": {
+        "x": 8,
+        "y": 4
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 5,
+    "note": "enter",
+    "planTotal": 1,
+    "planHead": {
+      "x": 8,
+      "y": 5
+    },
+    "face": {
+      "ticks": 5,
+      "dir": "NONE",
+      "Ca": "DOWN",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 24,
+      "total": 2,
+      "end": null,
+      "head": {
+        "x": 8,
+        "y": 5
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 6,
+    "note": "cover-eat",
+    "planTotal": 3,
+    "planHead": {
+      "x": 8,
+      "y": 6
+    },
+    "face": {
+      "ticks": 6,
+      "dir": "NONE",
+      "Ca": "DOWN",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 24,
+      "total": 4,
+      "end": null,
+      "head": {
+        "x": 8,
+        "y": 6
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 7,
+    "note": "cover-eat",
+    "planTotal": 5,
+    "planHead": {
+      "x": 8,
+      "y": 7
+    },
+    "face": {
+      "ticks": 7,
+      "dir": "NONE",
+      "Ca": "DOWN",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 24,
+      "total": 6,
+      "end": null,
+      "head": {
+        "x": 8,
+        "y": 7
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 8,
+    "note": "cover-eat",
+    "planTotal": 7,
+    "planHead": {
+      "x": 8,
+      "y": 8
+    },
+    "face": {
+      "ticks": 8,
+      "dir": "NONE",
+      "Ca": "DOWN",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 24,
+      "total": 8,
+      "end": null,
+      "head": {
+        "x": 8,
+        "y": 8
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 10,
+    "note": "cover-eat",
+    "planTotal": 11,
+    "planHead": {
+      "x": 9,
+      "y": 7
+    },
+    "face": {
+      "ticks": 10,
+      "dir": "NONE",
+      "Ca": "UP",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 24,
+      "total": 11,
+      "end": null,
+      "head": {
+        "x": 9,
+        "y": 7
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 15,
+    "note": "cover-eat",
+    "planTotal": 21,
+    "planHead": {
+      "x": 9,
+      "y": 2
+    },
+    "face": {
+      "ticks": 15,
+      "dir": "NONE",
+      "Ca": "UP",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 24,
+      "total": 22,
+      "end": null,
+      "head": {
+        "x": 9,
+        "y": 2
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 20,
+    "note": "cover-eat",
+    "planTotal": 31,
+    "planHead": {
+      "x": 6,
+      "y": 0
+    },
+    "face": {
+      "ticks": 20,
+      "dir": "NONE",
+      "Ca": "LEFT",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 23,
+      "total": 32,
+      "end": null,
+      "head": {
+        "x": 6,
+        "y": 0
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 25,
+    "note": "cover-eat",
+    "planTotal": 40,
+    "planHead": {
+      "x": 4,
+      "y": 3
+    },
+    "face": {
+      "ticks": 25,
+      "dir": "NONE",
+      "Ca": "DOWN",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 24,
+      "total": 39,
+      "end": null,
+      "head": {
+        "x": 4,
+        "y": 3
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 30,
+    "note": "cover-eat",
+    "planTotal": 50,
+    "planHead": {
+      "x": 4,
+      "y": 8
+    },
+    "face": {
+      "ticks": 30,
+      "dir": "NONE",
+      "Ca": "DOWN",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 23,
+      "total": 50,
+      "end": null,
+      "head": {
+        "x": 4,
+        "y": 8
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 35,
+    "note": "cover-eat",
+    "planTotal": 60,
+    "planHead": {
+      "x": 5,
+      "y": 4
+    },
+    "face": {
+      "ticks": 35,
+      "dir": "NONE",
+      "Ca": "UP",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 23,
+      "total": 60,
+      "end": null,
+      "head": {
+        "x": 5,
+        "y": 4
+      }
+    }
+  },
+  {
+    "t": "tick",
+    "i": 40,
+    "note": "cover-eat",
+    "planTotal": 67,
+    "planHead": {
+      "x": 6,
+      "y": 2
+    },
+    "face": {
+      "ticks": 40,
+      "dir": "NONE",
+      "Ca": "DOWN",
+      "Ga": "NONE",
+      "yb": "NONE",
+      "Qb": false,
+      "pause": true
+    },
+    "snap": {
+      "fruitLen": 16,
+      "total": 69,
+      "end": null,
+      "head": {
+        "x": 6,
+        "y": 2
+      }
+    }
+  },
+  {
+    "t": "false-all",
+    "i": 42,
+    "total": 33,
+    "fruitLen": 14,
+    "goal": 84
+  },
+  {
+    "t": "fruit-cap",
+    "fruitMaxAfterBomb": 24,
+    "bombPack": 24
+  },
+  {
+    "t": "final",
+    "endA": "ALL_APPLES",
+    "endB": "ALL_APPLES",
+    "peerA": "layers",
+    "peerB": "layers"
+  }
+]

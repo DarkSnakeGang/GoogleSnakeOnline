@@ -1,0 +1,118 @@
+{
+  "modVersion": "13",
+  "modBuilt": "2026-09-20T00:41:00.654Z",
+  "liveBoard": {
+    "width": 10,
+    "height": 9
+  },
+  "Sa": 1,
+  "Aa": 1,
+  "fruitLen": 4,
+  "fruitFp": "4,2|4,6|6,4|8,6",
+  "fruitPos": [
+    {
+      "x": 8,
+      "y": 6,
+      "type": 0,
+      "seq": 4
+    },
+    {
+      "x": 4,
+      "y": 2,
+      "type": 0,
+      "seq": 5
+    },
+    {
+      "x": 4,
+      "y": 6,
+      "type": 0,
+      "seq": 3
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "type": 0,
+      "seq": 1
+    }
+  ],
+  "appleType": 0,
+  "cellSize": 58,
+  "boardCss": null,
+  "playSettings": {
+    "_nativeGraphicsCount": 4,
+    "_rowLengths": {
+      "apple": 52,
+      "color": 49,
+      "count": 17,
+      "graphics": 7,
+      "size": 12,
+      "speed": 17,
+      "theme": 19,
+      "trophy": 32
+    },
+    "apple": 0,
+    "count": 6,
+    "size": 1,
+    "speed": 1,
+    "trophy": 0
+  },
+  "matchSettings": {
+    "_nativeGraphicsCount": 4,
+    "_rowLengths": {
+      "apple": 52,
+      "color": 49,
+      "count": 17,
+      "graphics": 7,
+      "size": 12,
+      "speed": 17,
+      "theme": 19,
+      "trophy": 32
+    },
+    "apple": 0,
+    "count": 6,
+    "size": 1,
+    "speed": 1,
+    "trophy": 0
+  },
+  "forceSaBeforeAa": true,
+  "forceSnaRan": true,
+  "playController": true,
+  "alterSnakeRan": true,
+  "alterHadMaEntry": true,
+  "alterHadAaEqSa": true,
+  "alterHadAaSwitch": true,
+  "alterSizePatched": true,
+  "authority": "native-relay-v1",
+  "nativeRenderDebug": {
+    "generation": 1,
+    "backend": "layers",
+    "cadence": 60,
+    "renderCount": 70,
+    "refreshCount": 70,
+    "compositeCount": 70,
+    "layerAllocations": 1,
+    "layerReleases": 0,
+    "bufferGrowth": 4,
+    "fallbackReason": null,
+    "renderExceptions": 0,
+    "averageRefreshMs": 0.317520609642982
+  },
+  "nativeRenderMetrics": {
+    "generation": 1,
+    "backend": "layers",
+    "cadence": 60,
+    "renderCount": 91,
+    "refreshCount": 91,
+    "compositeCount": 91,
+    "layerAllocations": 1,
+    "layerReleases": 0,
+    "bufferGrowth": 4,
+    "fallbackReason": null,
+    "renderExceptions": 0,
+    "averageRefreshMs": 0.29263750157315666
+  },
+  "fallbackReason": null,
+  "peerBackend": "layers",
+  "coopEndReason": null,
+  "statusText": "Multiplayer Mod v13 - Connected [15ms] - Co-op Mode"
+}
