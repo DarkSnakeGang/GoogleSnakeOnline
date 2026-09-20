@@ -33,6 +33,13 @@ describe("colors palette", () => {
     assert.equal(Colors.displayNameFor(roster[0], roster), "Blue");
     assert.equal(Colors.displayNameFor(roster[1], roster), "Blue 2");
   });
+
+  it("nextFreeClaimable wraps and skips taken", () => {
+    assert.equal(Colors.nextFreeClaimable(0, [0]), 1);
+    assert.equal(Colors.nextFreeClaimable(0, [1]), 2);
+    assert.equal(Colors.nextFreeClaimable(45, []), 0);
+    assert.equal(Colors.nextFreeClaimable(45, [0]), 1);
+  });
 });
 
 describe("protocol", () => {
@@ -73,8 +80,84 @@ describe("ready gate", () => {
   it("coop spawn offsets depend on player count", () => {
     assert.deepEqual(Session.coopSpawnOffsets(1), [0]);
     assert.deepEqual(Session.coopSpawnOffsets(2), [-1, 1]);
-    assert.deepEqual(Session.coopSpawnOffsets(3), [0, 3, -2]);
-    assert.deepEqual(Session.coopSpawnOffsets(4), [-1, 1, -4, 4]);
+    assert.deepEqual(Session.coopSpawnOffsets(3), [0, 2, -2]);
+    assert.deepEqual(Session.coopSpawnOffsets(4), [-1, 1, 2, -2]);
+  });
+
+  it("playerCap matches server Race≤9 / Co-op≤4", () => {
+    assert.equal(Session.playerCap("race"), 9);
+    assert.equal(Session.playerCap("coop"), 4);
+    assert.equal(Session.playerCap(undefined), 9);
+  });
+
+  it("seatAllAsPlayers promotes spectators in join order up to cap", () => {
+    const calls = [];
+    const roster = {
+      mode: "coop",
+      clients: [
+        { clientId: "a", role: "player", joinOrder: 1 },
+        { clientId: "c", role: "spectator", joinOrder: 3 },
+        { clientId: "b", role: "spectator", joinOrder: 2 },
+        { clientId: "d", role: "spectator", joinOrder: 4 },
+        { clientId: "e", role: "spectator", joinOrder: 5 },
+      ],
+    };
+    const out = Session.seatAllAsPlayers(roster, function (id, role) {
+      calls.push([id, role]);
+    });
+    assert.equal(out.cap, 4);
+    assert.equal(out.promoted, 3);
+    assert.equal(out.playerCount, 4);
+    assert.deepEqual(calls, [
+      ["b", "player"],
+      ["c", "player"],
+      ["d", "player"],
+    ]);
+    assert.equal(roster.clients.find((c) => c.clientId === "e").role, "spectator");
+  });
+
+  it("canSeatAllAsPlayers hides when cap full or no spectators", () => {
+    assert.equal(
+      Session.canSeatAllAsPlayers({
+        mode: "coop",
+        clients: [
+          { role: "player" },
+          { role: "spectator" },
+        ],
+      }),
+      true
+    );
+    assert.equal(
+      Session.canSeatAllAsPlayers({
+        mode: "coop",
+        clients: [
+          { role: "player" },
+          { role: "player" },
+          { role: "player" },
+          { role: "player" },
+          { role: "spectator" },
+        ],
+      }),
+      false,
+      "cap reached"
+    );
+    assert.equal(
+      Session.canSeatAllAsPlayers({
+        mode: "race",
+        clients: [{ role: "player" }, { role: "player" }],
+      }),
+      false,
+      "all already players"
+    );
+    assert.equal(
+      Session.canSeatAllAsPlayers({
+        mode: "coop",
+        sessionActive: true,
+        clients: [{ role: "player" }, { role: "spectator" }],
+      }),
+      false,
+      "live match"
+    );
   });
 });
 
@@ -1874,7 +1957,7 @@ describe("coop body collision", () => {
     assert.equal(game.Ca.wa[0][2], 0, "no stamp on remote body");
   });
 
-  it("does not client-kill on remote body during coop session", () => {
+  it("kills local snake when stepping onto a remote body", () => {
     loadNative();
     const { CoopNative } = require(path.join(root, "src/coop/native.js"));
     const cn = new CoopNative();
@@ -1890,6 +1973,43 @@ describe("coop body collision", () => {
     global.__mpCoopInject = true;
     global.__mpCoopMyId = "me";
     global.__mpCoopLocalDead = false;
+    global.__mpCoopServerAuth = false;
+    delete global.ModeRegistry;
+    let died = false;
+    const game = {
+      Ca: { wa: [[0, 0, 0]] },
+      oa: {
+        ka: [{ x: 0, y: 0 }],
+        direction: "RIGHT",
+      },
+      die: function () {
+        died = true;
+        this.nj = true;
+      },
+      Tb: function () {},
+    };
+    global.__mpCoopOnTick(game);
+    assert.equal(died, true, "native-relay must die on peer body");
+    assert.equal(global.__mpCoopLocalDead, true);
+  });
+
+  it("server-auth skips client kill on remote body", () => {
+    loadNative();
+    const { CoopNative } = require(path.join(root, "src/coop/native.js"));
+    const cn = new CoopNative();
+    cn.sessionActive = true;
+    cn.injectEnabled = true;
+    cn.myClientId = "me";
+    cn.applySnakeDelta({
+      clientId: "other",
+      body: [{ x: 1, y: 0 }],
+      alive: true,
+    });
+    global.__mpCoopSession = true;
+    global.__mpCoopInject = true;
+    global.__mpCoopMyId = "me";
+    global.__mpCoopLocalDead = false;
+    global.__mpCoopServerAuth = true;
     let died = false;
     const game = {
       Ca: { wa: [[0, 0, 0]] },
@@ -1906,6 +2026,7 @@ describe("coop body collision", () => {
     global.__mpCoopOnTick(game);
     assert.equal(died, false, "server STATE owns death — no client die()");
     assert.equal(global.__mpCoopLocalDead, false);
+    global.__mpCoopServerAuth = false;
   });
 
   it("yin yang skips friendly body collision", () => {
@@ -2233,6 +2354,75 @@ describe("coop player seat", () => {
       assert.equal(app.coopSession.state, "Seating");
       assert.equal(app.coopSession.deadSent, false);
     }
+  });
+
+  it("blocks Space native-start for non-admin co-op clients only", () => {
+    const MultiplayerApp = loadApp();
+    const listeners = [];
+    global.addEventListener = function (type, fn, opts) {
+      listeners.push({ type: type, fn: fn, opts: opts });
+    };
+    global.removeEventListener = function () {};
+    const app = new MultiplayerApp();
+    app.client = {
+      connected: true,
+      isAdmin: function () {
+        return false;
+      },
+      me: function () {
+        return { role: "player", ready: true };
+      },
+      roster: { mode: "coop", sessionActive: false, clients: [] },
+    };
+    assert.equal(app.shouldBlockCoopNativeStartKey(), true);
+
+    app.client.isAdmin = function () {
+      return true;
+    };
+    assert.equal(app.shouldBlockCoopNativeStartKey(), false, "admin never blocked");
+
+    app.client.isAdmin = function () {
+      return false;
+    };
+    app.client.roster.mode = "race";
+    assert.equal(app.shouldBlockCoopNativeStartKey(), false, "race: no block");
+
+    app.client.roster.mode = "coop";
+    app.client.connected = false;
+    assert.equal(app.shouldBlockCoopNativeStartKey(), false, "disconnected: no block");
+
+    app.client.connected = true;
+    app.hookCoopNativeStartBlock();
+    const keyHook = listeners.find(function (l) {
+      return l.type === "keydown" && l.opts === true;
+    });
+    assert.ok(keyHook, "capture keydown installed");
+    let prevented = 0;
+    const ev = {
+      key: " ",
+      code: "Space",
+      keyCode: 32,
+      which: 32,
+      target: { tagName: "BODY" },
+      preventDefault: function () {
+        prevented++;
+      },
+      stopPropagation: function () {
+        prevented++;
+      },
+      stopImmediatePropagation: function () {
+        prevented++;
+      },
+    };
+    keyHook.fn(ev);
+    assert.ok(prevented >= 2, "Space swallowed for non-admin coop");
+
+    prevented = 0;
+    app.client.isAdmin = function () {
+      return true;
+    };
+    keyHook.fn(ev);
+    assert.equal(prevented, 0, "admin Space not swallowed");
   });
 });
 

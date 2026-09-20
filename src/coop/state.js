@@ -49,6 +49,14 @@
         payload.collectablesOwnerId !== undefined
           ? payload.collectablesOwnerId
           : current.collectablesOwnerId,
+      boardWidth: validInt(
+        payload.boardWidth != null ? payload.boardWidth : current.boardWidth,
+        1
+      ),
+      boardHeight: validInt(
+        payload.boardHeight != null ? payload.boardHeight : current.boardHeight,
+        1
+      ),
       boardRevision:
         revision == null ? current.boardRevision : revision,
       boardReady:
@@ -72,6 +80,8 @@
       "settings",
       "slots",
       "collectablesOwnerId",
+      "boardWidth",
+      "boardHeight",
       "boardRevision",
       "boardReady",
       "speedEpoch",
@@ -90,6 +100,8 @@
     this.settings = null;
     this.slots = [];
     this.collectablesOwnerId = null;
+    this.boardWidth = null;
+    this.boardHeight = null;
     this.boardRevision = 0;
     this.boardReady = false;
     this.speedEpoch = 0;
@@ -298,6 +310,8 @@
     this.settings = null;
     this.slots = [];
     this.collectablesOwnerId = null;
+    this.boardWidth = null;
+    this.boardHeight = null;
     this.boardRevision = 0;
     this.boardReady = false;
     this.speedEpoch = 0;

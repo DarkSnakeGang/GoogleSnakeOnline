@@ -49,6 +49,7 @@ describe("coop session reset clears eat leftovers", () => {
     };
     win.__mpCoopServerAuth = true;
     win.timeKeeper = { _dead: false, _lastScore: 12, lastAppleTime: 999 };
+    delete require.cache[require.resolve(path.join(ROOT, "src/hooks/gsm.js"))];
     require(path.join(ROOT, "src/hooks/gsm.js"));
   });
 
@@ -61,6 +62,30 @@ describe("coop session reset clears eat leftovers", () => {
     assert.equal(win.__mpGame.oa.eating, false);
     assert.equal(win.__mpCoopLastState, null, "stale COOP_STATE dropped");
     assert.equal(win.timeKeeper._lastScore, 0);
+  });
+
+  it("resetCoopBoardForNewSession zeros score, timer, and endscreen flags", () => {
+    const Gsm = win.MultiplayerGsm;
+    win.__mpGame.nj = true;
+    win.__mpGame.Sh = 52;
+    win.__mpGame.Oh = 52;
+    win.timeKeeper._lastScore = 52;
+    win.timeKeeper._lastTimeMs = 12345;
+    win.timeKeeper.lastAppleTime = 12345;
+    win.timeKeeper.__mpCoopStartedAtMs = 999;
+    win.timeKeeper.playing = true;
+    Gsm.resetCoopBoardForNewSession();
+    assert.equal(win.__mpGame.nj, false);
+    assert.equal(win.__mpGame.Sh, 0);
+    assert.equal(win.__mpGame.Oh, 0);
+    assert.equal(win.timeKeeper._lastScore, 0);
+    assert.equal(win.timeKeeper._lastTimeMs, 0);
+    assert.equal(win.timeKeeper.lastAppleTime, 0);
+    assert.equal(win.timeKeeper.playing, false);
+    assert.ok(
+      win.timeKeeper.__mpCoopStartedAtMs == null,
+      "shared timer anchor cleared"
+    );
   });
 
   it("reapplyLastState ignores ended previous match", () => {

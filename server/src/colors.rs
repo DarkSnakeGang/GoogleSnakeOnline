@@ -287,6 +287,31 @@ pub fn first_free_claimable(taken: &[u8]) -> Option<u8> {
     None
 }
 
+/// Next claimable color after `from_id` (wrap), skipping ids in `taken`.
+/// If `from_id` is not in the claimable list, starts from the beginning.
+pub fn next_free_claimable(from_id: u8, taken: &[u8]) -> Option<u8> {
+    let claimables: Vec<u8> = SNAKE_COLORS
+        .iter()
+        .filter(|c| c.kind != ColorKind::Random)
+        .map(|c| c.id)
+        .collect();
+    if claimables.is_empty() {
+        return None;
+    }
+    let start = claimables
+        .iter()
+        .position(|&id| id == from_id)
+        .map(|i| (i + 1) % claimables.len())
+        .unwrap_or(0);
+    for offset in 0..claimables.len() {
+        let id = claimables[(start + offset) % claimables.len()];
+        if !taken.contains(&id) {
+            return Some(id);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +326,16 @@ mod tests {
         assert_eq!(SNAKE_COLORS.len(), 47);
         assert_eq!(first_free_claimable(&[]), Some(0));
         assert_eq!(first_free_claimable(&[0, 1]), Some(2));
+    }
+
+    #[test]
+    fn next_free_wraps_and_skips_taken() {
+        assert_eq!(next_free_claimable(0, &[0]), Some(1));
+        assert_eq!(next_free_claimable(0, &[1]), Some(2));
+        // Last claimable (45) wraps to first free (0) when 0 free
+        assert_eq!(next_free_claimable(45, &[]), Some(0));
+        assert_eq!(next_free_claimable(45, &[0]), Some(1));
+        // Collision: peer already has 0, self on 0 → next is 1
+        assert_eq!(next_free_claimable(0, &[0]), Some(1));
     }
 }

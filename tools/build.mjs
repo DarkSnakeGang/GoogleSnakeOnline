@@ -45,8 +45,19 @@ const layerFiles = [
 ];
 
 const parts = [];
+const builtAt = new Date().toISOString();
 parts.push("/* MultiplayerMod — Remix + Multiplayer LAN layer */\n");
-parts.push("/* Built: " + new Date().toISOString() + " */\n");
+parts.push("/* Built: " + builtAt + " */\n");
+
+// HUD version — keep in sync with Remix Mod vN (see RemixInit indicator).
+const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const modDisplayVersion = String(
+  pkg.modDisplayVersion != null ? pkg.modDisplayVersion : "13"
+);
+parts.push(
+  "window.__MP_MOD_VERSION=" + JSON.stringify(modDisplayVersion) + ";\n"
+);
+parts.push("window.__MP_MOD_BUILT=" + JSON.stringify(builtAt) + ";\n");
 
 if (remixSrc) {
   console.log("Bundling Remix from", remixSrc);

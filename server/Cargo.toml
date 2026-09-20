@@ -1,6 +1,6 @@
 [package]
 name = "multiplayer-server"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "Dedicated Google Snake LAN multiplayer room server"
 license = "MIT"
@@ -8,6 +8,10 @@ license = "MIT"
 [[bin]]
 name = "multiplayer-server"
 path = "src/main.rs"
+
+[[bin]]
+name = "multiplayer-console"
+path = "src/bin/console.rs"
 
 [lib]
 name = "multiplayer_server"
@@ -27,10 +31,13 @@ clap = { version = "4", features = ["derive", "env"] }
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 futures-util = "0.3"
+async-stream = "0.3"
 tokio-tungstenite = "0.26"
 thiserror = "2"
 parking_lot = "0.12"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.26", features = ["connect"] }

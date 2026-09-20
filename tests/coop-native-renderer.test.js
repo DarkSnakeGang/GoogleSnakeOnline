@@ -63,6 +63,9 @@ function loadHarness(options) {
     "__mpCoopRenderParked",
     "__mpCoopNativeRenderMetrics",
     "__mpCoopNativeRenderDebug",
+    "__slotFaceRef",
+    "__mpFaceTintSc",
+    "__slotA7",
   ].forEach(function (k) { delete global[k]; });
   delete require.cache[require.resolve(NATIVE)];
 
@@ -107,13 +110,20 @@ function loadHarness(options) {
     ka: { ka: 20 },
     settings: { modeKey: options.mode || "classic", light: false },
     statusHost: { alive: true },
+    nj: false,
+    dead: false,
+    isDead: false,
   };
   const main = fakeContext(options.width, options.height);
+  const faceEye = { context: main, name: "oa" };
+  const faceMouth = { context: main, name: "Aa" };
   const calls = [];
   let throwRemaining = options.throwRemote || 0;
   const renderer = {
     wb: game,
     ka: main,
+    oa: faceEye,
+    Aa: faceMouth,
     settings: { modeKey: options.mode || "classic" },
     render: function (progress, flag, args) {
       const remote = game.oa !== local;
@@ -122,7 +132,9 @@ function loadHarness(options) {
         head: game.oa.ka[0].x,
         bodyRef: game.oa.ka,
         ctx: this.ka,
+        faceCtx: faceEye.context,
         progress: progress,
+        nj: !!game.nj,
       });
       if (remote && options.mutateUnknown) game.unexpectedMutation = true;
       if (remote && options.mutateLocalPoint) local.ka[0].x = 99;
@@ -164,6 +176,8 @@ function loadHarness(options) {
     local: local,
     companion: companion,
     main: main,
+    faceEye: faceEye,
+    faceMouth: faceMouth,
     layers: layers,
     calls: calls,
   };
@@ -265,7 +279,11 @@ test("mutation audit rejects unknown host changes for the generation", function 
   const h = loadHarness({ mutateUnknown: true, mosaic: mosaic });
   global.__mpCoopRemotes.peer = remote("peer", 1, 8, false);
   h.renderer.render(0.5, true, {});
-  const first = global.__mpCoopNativeRendererMetrics();
+  // First unknown mutation is a soft retry (not sticky disable yet)
+  let first = global.__mpCoopNativeRendererMetrics();
+  assert.notEqual(first.fallbackReason, "mutation-audit");
+  h.renderer.render(0.5, true, {});
+  first = global.__mpCoopNativeRendererMetrics();
   assert.equal(first.backend, "mosaic");
   assert.equal(first.fallbackReason, "mutation-audit");
   assert.equal(h.game.unexpectedMutation, undefined, "unknown mutation restored");
@@ -276,7 +294,7 @@ test("mutation audit rejects unknown host changes for the generation", function 
     nativeCalls,
     "native remains disabled for generation"
   );
-  assert.ok(mosaic.length >= 2);
+  assert.ok(mosaic.length >= 1);
 });
 
 test("restoration failure and unknown YY mode gate fail safely to mosaic", function () {
@@ -352,9 +370,17 @@ test("dirty layers reuse buffers, resize releases, and composite every frame", f
   global.__mpCoopRemotes.peer = remote("peer", 1, 8, false);
   h.renderer.render(0.5, true, {});
   const first = Object.assign({}, global.__mpCoopNativeRendererMetrics());
-  const firstBodyRef = h.calls[1].bodyRef;
+  const firstBodyRef = h.calls.filter(function (c) {
+    return c.remote;
+  })[0].bodyRef;
+  // Pose change so the second frame still refreshes.
+  global.__mpCoopNativeRendererMetrics().cadence = 60;
+  global.__mpCoopRemotes.peer.body[0].x = 9;
   h.renderer.render(0.5, true, {});
-  const secondRemote = h.calls.filter(function (c) { return c.remote; })[1];
+  const secondRemote = h.calls.filter(function (c) {
+    return c.remote;
+  })[1];
+  assert.ok(secondRemote, "expected a second peer refresh");
   assert.equal(secondRemote.bodyRef, firstBodyRef, "point buffer array is reused");
   assert.equal(global.__mpCoopNativeRendererMetrics().layerAllocations, 1);
   assert.equal(h.main.composites, 2, "cached layer composites every local frame");
@@ -362,32 +388,255 @@ test("dirty layers reuse buffers, resize releases, and composite every frame", f
 
   h.main.canvas.width = 680;
   h.main.canvas.height = 600;
+  global.__mpCoopNativeRendererMetrics().cadence = 60;
   h.renderer.render(0.5, true, {});
   const resized = global.__mpCoopNativeRendererMetrics();
   assert.equal(resized.layerAllocations, 2);
   assert.equal(resized.layerReleases, 1);
 });
 
-test("adaptive cadence drops to 20 while cached layers still composite", function () {
+test("adaptive cadence still tracks paint cost; every peer P5E every frame", function () {
   const realPerformance = global.performance;
   let tick = 0;
   global.performance = { now: function () { tick += 10; return tick; } };
   try {
     const h = loadHarness();
-    global.__mpCoopRemotes.peer = remote("peer", 1, 8, false);
+    global.__mpCoopRemotes = {
+      a: remote("a", 1, 4, false),
+      b: remote("b", 2, 8, false),
+    };
     h.renderer.render(0.5, true, {});
-    const refresh = global.__mpCoopNativeRendererMetrics().refreshCount;
     assert.equal(global.__mpCoopNativeRendererMetrics().cadence, 20);
+    const refresh = global.__mpCoopNativeRendererMetrics().refreshCount;
+    const renders = global.__mpCoopNativeRendererMetrics().renderCount;
+    // Same poses — still refresh both peers every frame (no stride/budget).
+    global.__mpCoopNativeRendererMetrics().cadence = 20;
     h.renderer.render(0.5, true, {});
     assert.equal(
       global.__mpCoopNativeRendererMetrics().refreshCount,
-      refresh,
-      "20fps cadence reuses cached layer on next frame"
+      refresh + 2,
+      "multi-peer refreshes all seats every frame"
     );
-    assert.equal(h.main.composites, 2);
+    assert.equal(
+      global.__mpCoopNativeRendererMetrics().renderCount,
+      renders + 2,
+      "two peers → two P5E per frame"
+    );
+    assert.equal(h.main.composites, 4, "two peers × two frames still composite");
   } finally {
     global.performance = realPerformance;
   }
+});
+
+test("single peer refreshes every frame at cadence 60", function () {
+  const h = loadHarness();
+  global.__mpCoopRemotes.peer = remote("peer", 1, 8, false);
+  h.renderer.render(0.25, true, {});
+  const afterFirst = global.__mpCoopNativeRendererMetrics().renderCount;
+  for (let i = 0; i < 5; i++) {
+    global.__mpCoopNativeRendererMetrics().cadence = 60;
+    global.__mpCoopNativeRendererMetrics().averageRefreshMs = 2;
+    h.renderer.render(0.25 + i * 0.1, true, {});
+  }
+  assert.equal(
+    global.__mpCoopNativeRendererMetrics().renderCount,
+    afterFirst + 5,
+    "1v1 at cadence 60 must P5E every frame"
+  );
+  assert.equal(h.main.composites, 6);
+});
+
+test("single peer refreshes every frame even at cadence 20", function () {
+  const h = loadHarness();
+  global.__mpCoopRemotes.peer = remote("peer", 1, 8, false);
+  h.renderer.render(0.5, true, {});
+  const afterFirst = global.__mpCoopNativeRendererMetrics().renderCount;
+  for (let i = 0; i < 6; i++) {
+    global.__mpCoopNativeRendererMetrics().cadence = 20;
+    global.__mpCoopNativeRendererMetrics().averageRefreshMs = 10;
+    global.__mpCoopRemotes.peer.body[0].x = 9 + i;
+    h.renderer.render(0.5, true, {});
+  }
+  const m = global.__mpCoopNativeRendererMetrics();
+  assert.equal(
+    m.renderCount,
+    afterFirst + 6,
+    "1v1 P5E every frame regardless of cadence metrics"
+  );
+});
+
+test("two moving peers both refresh every frame", function () {
+  const h = loadHarness();
+  global.__mpCoopRemotes = {
+    a: remote("a", 1, 4, false),
+    b: remote("b", 2, 8, false),
+  };
+  global.__mpCoopNativeRendererMetrics(); // ensure native wrapped
+  h.renderer.render(0.5, true, {});
+  global.__mpCoopNativeRendererMetrics().cadence = 20;
+  const afterFirst = global.__mpCoopNativeRendererMetrics().renderCount;
+  const compositesAfterFirst = h.main.composites;
+  for (let i = 0; i < 6; i++) {
+    global.__mpCoopNativeRendererMetrics().cadence = 20;
+    global.__mpCoopRemotes.a.body[0].x = 5 + i;
+    global.__mpCoopRemotes.b.body[0].x = 9 + i;
+    h.renderer.render(0.5, true, {});
+  }
+  const m = global.__mpCoopNativeRendererMetrics();
+  assert.equal(
+    m.renderCount,
+    afterFirst + 12,
+    "two peers × six frames → 12 P5E (no budget)"
+  );
+  assert.equal(
+    h.main.composites,
+    compositesAfterFirst + 12,
+    "two peer layers still composite every frame"
+  );
+});
+
+test("peer pass uses local lerp progress when finite", function () {
+  const h = loadHarness();
+  global.__mpCoopRemotes.peer = remote("peer", 1, 8, false);
+  h.renderer.render(0.37, true, {});
+  const remoteCalls = h.calls.filter(function (c) {
+    return c.remote;
+  });
+  assert.ok(remoteCalls.length >= 1);
+  assert.equal(
+    remoteCalls[0].progress,
+    0.37,
+    "peer origRender must receive wrap progress for mid-tick lerp"
+  );
+});
+
+test("audited frames stay every-frame via lean path (pose changes included)", function () {
+  const h = loadHarness();
+  global.__mpCoopRemotes.peer = remote("peer", 1, 8, false);
+  h.renderer.render(0.1, true, {});
+  assert.equal(global.__mpCoopNativeRendererMetrics().renderCount, 1);
+  for (let i = 0; i < 5; i++) {
+    // Pose changes must also stay every-frame once audited (lean pin-swap).
+    global.__mpCoopRemotes.peer.body[0].x = 9 + i;
+    h.renderer.render(0.2 + i * 0.1, true, {});
+  }
+  assert.equal(
+    global.__mpCoopNativeRendererMetrics().renderCount,
+    6,
+    "audited frames must P5E every frame without full host snapshots"
+  );
+});
+
+test("lean frames blit face cache without re-a7 every frame", function () {
+  const h = loadHarness();
+  const a7Calls = [];
+  function makeSheet() {
+    const pixels = new Uint8ClampedArray([80, 130, 242, 255]);
+    return {
+      ka: {
+        canvas: { width: 1, height: 1 },
+        drawImage: function () {},
+        getImageData: function () {
+          return {
+            data: new Uint8ClampedArray(pixels),
+            width: 1,
+            height: 1,
+          };
+        },
+        putImageData: function (img) {
+          for (let i = 0; i < 4; i++) pixels[i] = img.data[i];
+        },
+      },
+    };
+  }
+  function host(name) {
+    return {
+      name: name,
+      context: h.main,
+      ka: 0,
+      oa: makeSheet(),
+      Ba: makeSheet(),
+    };
+  }
+  h.renderer.oa = host("oa");
+  h.renderer.Aa = host("Aa");
+  h.renderer.Ba = host("Ba");
+  global.__slotFaceRef = h.renderer;
+  h.local.Sc = "#4E7CF6";
+  global.__mpFaceTintSc = "#4E7CF6";
+  global.__slotA7 = function (faceHost, from, to) {
+    a7Calls.push({
+      host: faceHost && faceHost.name,
+      from: String(from).toUpperCase(),
+      to: String(to).toUpperCase(),
+    });
+  };
+  global.MultiplayerColors = {
+    getColor: function () {
+      return { kind: "solid", primary: "#19D8E6", secondary: "#15B5C1" };
+    },
+  };
+  global.__mpCoopRemotes.peer = Object.assign(remote("peer", 1, 8, false), {
+    colorId: 1,
+    Sc: "#19D8E6",
+    Yc: "#15B5C1",
+  });
+  h.renderer.render(0.2, true, {});
+  const a7AfterFirst = a7Calls.length;
+  assert.ok(a7AfterFirst >= 1, "first pass tints peer faces via a7");
+  for (let i = 0; i < 5; i++) {
+    h.renderer.render(0.3 + i * 0.1, true, {});
+  }
+  const m = global.__mpCoopNativeRendererMetrics();
+  assert.equal(m.renderCount, 6, "still every-frame peer P5E");
+  assert.ok(
+    a7Calls.length <= a7AfterFirst + 4,
+    "lean frames must not a7 every frame (a7=" +
+      a7Calls.length +
+      " afterFirst=" +
+      a7AfterFirst +
+      ")"
+  );
+  assert.ok(
+    (m.faceTintCacheBakes | 0) + (m.faceTintBlits | 0) >= 1,
+    "face cache bake or blit metrics recorded"
+  );
+});
+
+test("remoteColorInfo prefers live Sc then stock table then palette", function () {
+  delete require.cache[require.resolve(NATIVE)];
+  global.window = global;
+  const api = require(NATIVE);
+  let info = api.remoteColorInfo(
+    { Sc: "#AABBCC", Yc: "#112233", colorId: 1 },
+    1
+  );
+  assert.equal(String(info.primary).toUpperCase(), "#AABBCC");
+  assert.equal(String(info.secondary).toUpperCase(), "#112233");
+
+  global.__slotSnakeColorTable = [
+    ["#4E7CF6", "#17439F"],
+    ["#00C8D8", "#00A0B0"],
+  ];
+  global.MultiplayerColors = {
+    getColor: function (id) {
+      if (id === 1) {
+        return { kind: "solid", primary: "#19D8E6", secondary: "#15B5C1" };
+      }
+      return null;
+    },
+    syncFromStockTable: function () {},
+  };
+  info = api.remoteColorInfo({ colorId: 1 }, 1);
+  assert.equal(
+    String(info.primary).toUpperCase(),
+    "#00C8D8",
+    "stock h3E beats static palette when scrape missed Sc"
+  );
+
+  delete global.__slotSnakeColorTable;
+  info = api.remoteColorInfo({ colorId: 1 }, 1);
+  assert.equal(String(info.primary).toUpperCase(), "#19D8E6");
 });
 
 test("direct-main native is used only when layer creation passes its budget", function () {
@@ -403,4 +652,446 @@ test("direct-main native is used only when layer creation passes its budget", fu
     h.main
   );
   delete global.__mpCoopNativeDirectBudgetMs;
+});
+
+test("buildPeerSnake isolates head hosts from local snake", function () {
+  delete require.cache[require.resolve(NATIVE)];
+  global.window = global;
+  global.__mpGame = { ka: { ka: 20 } };
+  const api = require(NATIVE);
+  const localDc = point(10, 20);
+  const localUk = point(1, 2);
+  const localUb = [{ x: 1, y: 1 }];
+  const localAa = {
+    pCa: 0,
+    RRa: 0,
+    kfa: 1.57,
+    l2: 0.8,
+    Maa: true,
+    RPa: 1,
+    zZa: 0,
+    sAa: false,
+    light: 2,
+  };
+  const local = {
+    ka: [point(5, 5), point(4, 5)],
+    wa: [true, true],
+    Dc: localDc,
+    Jb: point(10, 20),
+    Uk: localUk,
+    yc: point(0, 0),
+    Ya: point(0, 0),
+    ub: localUb,
+    Aa: localAa,
+    Ba: Object.assign({}, localAa, { kfa: 2.1 }),
+    Ma: [{ kma: 0, Fcb: point(5, 5), Yoc: false }],
+    Ja: 5,
+    hb: true,
+    Oa: true,
+    Ka: 2,
+    Lc: 3,
+    Sc: "#00f",
+    Yc: "#008",
+    direction: "RIGHT",
+    Ca: "RIGHT",
+    Ga: "RIGHT",
+  };
+  const remote = {
+    body: [{ x: 8, y: 3 }, { x: 7, y: 3 }],
+    movementDir: "UP",
+    Sc: "#0ff",
+    Yc: "#088",
+  };
+  const built = api.buildPeerSnake(
+    {},
+    local,
+    remote,
+    remote.body,
+    "",
+    { metrics: { bufferGrowth: 0 } }
+  );
+  const peer = built.snake;
+  assert.ok(peer.Dc);
+  assert.notEqual(peer.Dc, localDc, "Dc must not alias local");
+  assert.notEqual(peer.Uk, localUk, "Uk must not alias local");
+  assert.notEqual(peer.ub, localUb, "ub (relative wrap) must not alias local");
+  assert.notEqual(peer.Aa, localAa, "Aa face host must not alias local");
+  assert.ok(
+    Math.abs(peer.Aa.kfa - 0) < 1e-9,
+    "peer eye look-at seeded from body facing RIGHT"
+  );
+  assert.equal(peer.Aa.l2, 0, "peer must not inherit local mouth");
+  assert.equal(peer.Ma.length, 0, "peer must not inherit local eat particles");
+  assert.equal(peer.Ja, 0, "peer must not inherit local poison face");
+  assert.equal(peer.hb, false);
+  assert.equal(peer.Oa, false);
+  assert.equal(peer.Ka, 0);
+  assert.equal(peer.Lc, 0);
+  // Pixel-space seed: cell=20 → head (8,3) center = (170, 70)
+  assert.equal(peer.Dc.x, 170);
+  assert.equal(peer.Dc.y, 70);
+  // Ya/yc seeded one cell *beyond* the tip (tip=7,3 → beyond=6,3):
+  // tipPx=(150,70), beyond=(130,70)
+  assert.equal(peer.Ya.x, 130, "Ya past tip along exit");
+  assert.equal(peer.Ya.y, 70);
+  assert.equal(peer.yc.x, 130);
+  assert.equal(peer.yc.y, 70);
+  // Facing follows body geometry (RIGHT), movementDir still UP for crawl
+  assert.equal(peer.direction, "UP");
+  assert.equal(peer.Ca, "RIGHT");
+  assert.equal(peer.Ga, "RIGHT");
+  peer.Dc.x = 99;
+  assert.equal(localDc.x, 10, "mutating peer Dc must not change local");
+  assert.equal(peer.Dc.x, 99);
+  assert.equal(peer.Dc.y, 70);
+  peer.ub.push({ x: 9, y: 9 });
+  assert.equal(localUb.length, 1, "mutating peer ub must not change local");
+  peer.Aa.kfa = 9;
+  assert.equal(localAa.kfa, 1.57, "mutating peer Aa must not change local");
+});
+
+test("buildPeerSnake infers Qa for non-adjacent body gaps", function () {
+  delete require.cache[require.resolve(NATIVE)];
+  global.window = global;
+  global.__mpGame = { ka: { ka: 20 } };
+  const api = require(NATIVE);
+  const local = {
+    ka: [point(1, 1), point(0, 1)],
+    wa: [true, true],
+    direction: "RIGHT",
+    Ca: "RIGHT",
+    Ga: "RIGHT",
+    Sc: "#00f",
+    Yc: "#008",
+    Dc: point(30, 30),
+    Aa: { kfa: 0, l2: 0 },
+    Ba: { kfa: 0, l2: 0 },
+    ub: [],
+    Ma: [],
+    Qa: ["LEFT", "LEFT"],
+  };
+  // Gap between (5,3) and (2,3) → LEFT portal dir at index 0
+  const body = [point(5, 3), point(2, 3), point(2, 4)];
+  const remote = {
+    body: body,
+    movementDir: "DOWN",
+    headDir: "DOWN",
+    Sc: "#0ff",
+    Yc: "#088",
+  };
+  const peer = api.buildPeerSnake(
+    {},
+    local,
+    remote,
+    body,
+    "",
+    { metrics: { bufferGrowth: 0 } }
+  ).snake;
+  assert.ok(Array.isArray(peer.Qa), "Qa must be an array");
+  assert.equal(peer.Qa.length, body.length);
+  assert.equal(peer.Qa[0], "LEFT", "gap head→next stores exit dir");
+  assert.equal(peer.Qa[1], undefined, "adjacent step stays undefined");
+});
+
+test("peer pass recolors shared face sprites to peer Sc then restores", function () {
+  const h = loadHarness();
+  const a7Calls = [];
+  const faceHost = function (name) {
+    return { name: name, ka: 0 };
+  };
+  // Production: __slotFaceRef / wrapped P5E holds oa/Aa/Ba directly.
+  h.renderer.oa = faceHost("oa");
+  h.renderer.Aa = faceHost("Aa");
+  h.renderer.Ba = faceHost("Ba");
+  h.renderer.Ga = faceHost("Ga-blink");
+  h.renderer.Ja = faceHost("Ja-eat");
+  h.renderer.Sa = faceHost("Sa-mouth");
+  global.__slotFaceRef = h.renderer;
+  h.local.Sc = "#4E7CF6";
+  h.renderer.settings.wa = 0;
+  // Stale tracker still on stock base while body is claimable Blue — restore
+  // must target Sc (#4E7CF6), not the stale #5282F2.
+  global.__mpFaceTintSc = "#5282F2";
+  global.__slotA7 = function (host, from, to) {
+    a7Calls.push({
+      host: host.name,
+      from: String(from).toUpperCase(),
+      to: String(to).toUpperCase(),
+    });
+  };
+  global.MultiplayerColors = {
+    getColor: function (id) {
+      if (id === 1) {
+        return { kind: "solid", primary: "#19D8E6", secondary: "#15B5C1" };
+      }
+      return null;
+    },
+  };
+  global.__mpCoopRemotes.peer = Object.assign(remote("peer", 1, 8, false), {
+    colorId: 1,
+    Sc: "#19D8E6",
+    Yc: "#15B5C1",
+  });
+  h.renderer.render(0.5, true, {});
+  const toPeer = a7Calls.filter(function (c) {
+    return c.to === "#19D8E6";
+  });
+  const restore = a7Calls.filter(function (c) {
+    return c.from === "#19D8E6" && c.to === "#4E7CF6";
+  });
+  assert.ok(toPeer.length >= 1, "peer face hosts tint to peer Sc");
+  assert.ok(
+    restore.length >= 1,
+    "local face tint restored to body Sc after peer pass"
+  );
+  const restoreHosts = restore.map(function (c) {
+    return c.host;
+  });
+  assert.ok(
+    restoreHosts.indexOf("Ga-blink") >= 0 || toPeer.some(function (c) {
+      return c.host === "Ga-blink";
+    }),
+    "Ga overlay must be in faceSheetHosts tint path"
+  );
+  assert.ok(
+    restoreHosts.indexOf("Ja-eat") >= 0 || toPeer.some(function (c) {
+      return c.host === "Ja-eat";
+    }),
+    "Ja overlay must be in faceSheetHosts tint path"
+  );
+  assert.equal(String(global.__mpFaceTintSc).toUpperCase(), "#4E7CF6");
+  assert.equal(h.main.composites, 1, "peer layer still composites on top");
+});
+
+test("buildPeerSnake uses published headDir for face Ca", function () {
+  delete require.cache[require.resolve(NATIVE)];
+  global.window = global;
+  global.__mpGame = { ka: { ka: 20 } };
+  const api = require(NATIVE);
+  const local = {
+    ka: [point(1, 1), point(0, 1)],
+    wa: [true, true],
+    direction: "RIGHT",
+    Ca: "RIGHT",
+    Ga: "RIGHT",
+    Sc: "#00f",
+    Yc: "#008",
+    Dc: point(30, 30),
+    Aa: { kfa: 0, l2: 0 },
+    Ba: { kfa: 0, l2: 0 },
+    ub: [],
+    Ma: [],
+  };
+  const remote = {
+    body: [{ x: 5, y: 4 }, { x: 5, y: 5 }], // body says UP
+    movementDir: "LEFT",
+    headDir: "DOWN",
+    transitionDir: "DOWN",
+    Sc: "#f00",
+    Yc: "#800",
+    colorId: 2,
+  };
+  global.MultiplayerColors = {
+    getColor: function (id) {
+      if (id === 2) return { kind: "solid", primary: "#f00", secondary: "#800" };
+      return null;
+    },
+  };
+  const peer = api.buildPeerSnake(
+    {},
+    local,
+    remote,
+    remote.body,
+    "",
+    { metrics: { bufferGrowth: 0 } }
+  ).snake;
+  assert.equal(peer.direction, "LEFT", "movement follows movementDir");
+  assert.equal(peer.Ca, "UP", "face follows body geometry over stale headDir");
+  assert.equal(peer.Ga, "DOWN", "transition follows transitionDir");
+  assert.equal(peer.Sc, "#f00");
+  assert.equal(peer.Yc, "#800");
+});
+
+test("renderPeerPass forces tick-complete b so peer head stays at peer cell", function () {
+  delete require.cache[require.resolve(NATIVE)];
+  global.window = global;
+  const calls = [];
+  const peerBody = [{ x: 8, y: 3 }, { x: 7, y: 3 }];
+  const localDc = point(30, 30); // local head pixels
+  const game = {
+    ka: { ka: 20 },
+    oa: {
+      ka: [point(1, 1), point(0, 1)],
+      wa: [true, true],
+      Dc: localDc,
+      Jb: point(30, 30),
+      Uk: point(30, 30),
+      yc: point(10, 30),
+      Ya: point(10, 30),
+      ub: [],
+      Oa: false,
+      Ka: 0,
+      Lc: 0,
+      Sc: "#0ff",
+      Yc: "#088",
+      direction: "RIGHT",
+      Ca: "RIGHT",
+    },
+  };
+  global.__mpGame = game;
+  global.__remixGame = game;
+  const api = require(NATIVE);
+  const ctx = fakeContext(340, 300);
+  const renderer = {
+    ka: ctx,
+    wb: game,
+    render: function (progress, b, c) {
+      calls.push({ progress: progress, b: b, c: c, oaDc: game.oa && game.oa.Dc && {
+        x: game.oa.Dc.x,
+        y: game.oa.Dc.y,
+      }});
+      // Mimic P5E: when b falsy and dirs differ, lerp toward Dc (bug path)
+      if (!b && game.oa && game.oa.direction !== game.oa.Ca && game.oa.Dc) {
+        game.oa.Dc.x = localDc.x;
+        game.oa.Dc.y = localDc.y;
+      }
+    },
+  };
+  const state = {
+    metrics: { bufferGrowth: 0, renderCount: 0 },
+    audited: true,
+  };
+  const remotePose = {
+    body: peerBody,
+    movementDir: "UP",
+    headDir: "RIGHT", // intentional mismatch — old path would lerp
+    Sc: "#00f",
+    Yc: "#008",
+    alive: true,
+  };
+  const built = api.buildPeerSnake({}, game.oa, remotePose, peerBody, "", state);
+  assert.equal(built.snake.Dc.x, 170);
+  const prev = game.oa;
+  game.oa = built.snake;
+  renderer.render(0.5, true, null);
+  game.oa = prev;
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].b, true, "peer pass must force b=true");
+  assert.equal(built.snake.Dc.x, 170, "forced b must not drag Dc to local head");
+  assert.equal(localDc.x, 30);
+});
+
+test("layers peer pass retargets face sheet context onto seat ctx", function () {
+  const h = loadHarness();
+  global.__mpCoopRemotes.peer = remote("peer", 1, 8, false);
+  h.renderer.render(0.5, true, {});
+  const remoteCalls = h.calls.filter(function (c) {
+    return c.remote && c.faceCtx;
+  });
+  assert.ok(remoteCalls.length >= 1, "expected a remote peer render");
+  const seatCtx = h.layers[0];
+  assert.ok(seatCtx, "expected a seat layer canvas");
+  assert.equal(
+    remoteCalls[0].faceCtx,
+    seatCtx,
+    "face b7.context must be the seat ctx during peer paint (not main)"
+  );
+  assert.equal(
+    remoteCalls[0].ctx,
+    seatCtx,
+    "renderer.ka must be the seat ctx during peer paint"
+  );
+  // Restored after the pass
+  assert.equal(h.faceEye.context, h.main, "face context restored to main");
+  assert.equal(h.faceMouth.context, h.main, "mouth context restored to main");
+  const m = global.__mpCoopNativeRendererMetrics();
+  assert.ok((m.faceCtxRetargets | 0) >= 1, "metrics should count face retargets");
+});
+
+test("deferred face tint restore: one restore per dirty frame not per peer", function () {
+  const h = loadHarness();
+  let a7Calls = 0;
+  global.__slotA7 = function () {
+    a7Calls++;
+  };
+  global.__mpFaceTintSc = "#0000FF";
+  h.local.Sc = "#0000FF";
+  global.__mpCoopRemotes.p1 = remote("p1", 1, 8, false);
+  global.__mpCoopRemotes.p1.Sc = "#FF0000";
+  global.__mpCoopRemotes.p2 = remote("p2", 2, 12, false);
+  global.__mpCoopRemotes.p2.Sc = "#FF0000";
+  // Two remotes same peer tint — swap once, restore once (not 2×2)
+  a7Calls = 0;
+  h.renderer.render(0.5, true, {});
+  const m = global.__mpCoopNativeRendererMetrics();
+  assert.ok((m.faceTintSwaps | 0) >= 1, "should tint to peer once");
+  assert.equal(
+    m.faceTintRestores | 0,
+    1,
+    "one deferred restore per frame, not per peer pass"
+  );
+  assert.equal(h.faceEye.context, h.main);
+  delete global.__slotA7;
+  delete global.__mpFaceTintSc;
+});
+
+test("alive peer pass clears local game.nj so peer heads stay alive", function () {
+  const h = loadHarness();
+  h.game.nj = true;
+  h.game.dead = true;
+  h.game.isDead = true;
+  global.__mpCoopRemotes.peer = remote("peer", 1, 8, false);
+  h.renderer.render(0.5, true, {});
+  const remoteCalls = h.calls.filter(function (c) {
+    return c.remote && c.nj != null;
+  });
+  assert.ok(remoteCalls.length >= 1, "expected peer render");
+  assert.equal(
+    remoteCalls[0].nj,
+    false,
+    "alive peer must paint with game.nj cleared"
+  );
+  assert.equal(h.game.nj, true, "local nj restored after peer pass");
+  assert.equal(h.game.dead, true);
+  assert.equal(h.game.isDead, true);
+});
+
+test("dead peer pass sets game.nj for die face then restores", function () {
+  const h = loadHarness();
+  h.game.nj = false;
+  h.game.dead = false;
+  h.game.isDead = false;
+  const corpse = remote("peer", 1, 8, false);
+  corpse.alive = false;
+  global.__mpCoopRemotes.peer = corpse;
+  h.renderer.render(0.5, true, {});
+  const remoteCalls = h.calls.filter(function (c) {
+    return c.remote && c.nj != null;
+  });
+  assert.ok(remoteCalls.length >= 1, "dead peer still paints natively");
+  assert.equal(
+    remoteCalls[0].nj,
+    true,
+    "dead peer must paint with game.nj true (die face)"
+  );
+  assert.equal(h.game.nj, false, "local nj restored after dead peer pass");
+});
+
+test("peer nj allowlist: introducing game.nj on bare host does not audit-fail", function () {
+  const h = loadHarness();
+  delete h.game.nj;
+  delete h.game.dead;
+  delete h.game.isDead;
+  global.__mpCoopRemotes.peer = remote("peer", 1, 8, false);
+  h.renderer.render(0.5, true, {});
+  const remoteCalls = h.calls.filter(function (c) {
+    return c.remote;
+  });
+  assert.ok(remoteCalls.length >= 1, "peer still paints");
+  assert.equal(
+    global.__mpCoopNativeRendererMetrics().backend,
+    "layers",
+    "adding nj during pass must not trip mutation-audit"
+  );
+  assert.equal("nj" in h.game, false, "absent nj stays absent after restore");
 });

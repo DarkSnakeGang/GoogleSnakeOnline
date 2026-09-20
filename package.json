@@ -1,21 +1,25 @@
 {
   "name": "google-snake-lan",
   "version": "0.1.0",
+  "modDisplayVersion": "13",
   "private": true,
   "description": "MultiplayerMod — Google Snake LAN multiplayer on Remix + Rust room server",
   "scripts": {
     "build": "node tools/build.mjs",
-    "test": "node --test --test-force-exit tests/client.test.js tests/gsm.test.js tests/hooks-harness.test.js tests/integration.test.js tests/coop-experience.test.js tests/coop-live-dual.test.js tests/coop-server-auth.test.js tests/coop-relay-foundation.test.js tests/coop-peer-pose.test.js tests/coop-native-renderer.test.js tests/coop-native-renderer-browser.test.js tests/coop-start-bind.test.js tests/coop-first-draw.test.js tests/coop-dual-gate.test.js tests/coop-soft-reset.test.js tests/coop-wall-p6e.test.js tests/coop-wall-chrome.test.js tests/menus-offline-playwright.test.js tests/coop-polish.test.js",
+    "test": "node --test --test-force-exit tests/client.test.js tests/gsm.test.js tests/hooks-harness.test.js tests/integration.test.js tests/coop-experience.test.js tests/coop-live-dual.test.js tests/coop-server-auth.test.js tests/coop-relay-foundation.test.js tests/coop-peer-pose.test.js tests/coop-native-renderer.test.js tests/coop-native-renderer-browser.test.js tests/coop-start-bind.test.js tests/coop-first-draw.test.js tests/coop-dual-gate.test.js tests/coop-soft-reset.test.js tests/coop-wall-p6e.test.js tests/coop-wall-chrome.test.js tests/menus-offline-playwright.test.js tests/coop-polish.test.js tests/coop-prestart-seats.test.js tests/coop-plan35-bake.test.js tests/coop-fruit-pool.test.js",
     "test:chrome": "node --test --test-force-exit tests/coop-native-renderer-browser.test.js tests/coop-wall-chrome.test.js tests/menus-offline-playwright.test.js",
     "test:server": "cargo test --manifest-path server/Cargo.toml",
     "test:all": "npm test && npm run test:server",
     "server": "cargo run --manifest-path server/Cargo.toml -- --bind 0.0.0.0:7777",
+    "server:sim": "cargo run --manifest-path server/Cargo.toml -- --bind 0.0.0.0:7777 --coop-native-relay=false",
     "server:release": "cargo build --release --manifest-path server/Cargo.toml"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "jsdom": "^26.1.0",
-    "playwright": "^1.62.1"
+    "pixelmatch": "^7.2.0",
+    "playwright": "^1.62.1",
+    "pngjs": "^7.0.0"
   },
   "engines": {
     "node": ">=18"

@@ -1,16 +1,18 @@
 //! Optional TLS for wss:// — friends on LAN keep using plain ws://.
 
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{State, WebSocketUpgrade};
+use axum::extract::{Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
+use axum::Json;
 use axum::Router;
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use multiplayer_server::protocol::{parse_envelope, Envelope};
 use multiplayer_server::room::{generate_room_code, Room, MAX_CONNECTIONS};
 use parking_lot::Mutex;
-use serde_json::json;
+use serde::Deserialize;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -48,8 +50,8 @@ struct Args {
     #[arg(long, env = "MULTIPLAYER_TLS_KEY")]
     tls_key: Option<PathBuf>,
 
-    /// Experimental native co-op relay (default keeps the Rust server simulation)
-    #[arg(long, env = "MULTIPLAYER_COOP_NATIVE_RELAY", default_value_t = false)]
+    /// Co-op product path is native-relay. Set false / 0 for legacy server-sim tests.
+    #[arg(long, env = "MULTIPLAYER_COOP_NATIVE_RELAY", default_value_t = true)]
     coop_native_relay: bool,
 }
 
@@ -200,6 +202,11 @@ impl AppState {
 
 #[tokio::main]
 async fn main() {
+    // rustls 0.23: both aws-lc-rs and ring may be linked — pick ring explicitly.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("rustls CryptoProvider::install_default(ring) failed");
+
     let args = Args::parse();
     std::fs::create_dir_all(&args.log_dir).ok();
 
@@ -268,6 +275,8 @@ async fn main() {
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/health", get(|| async { "ok" }))
+        .route("/api/rooms", get(api_rooms))
+        .route("/api/spectate", get(api_spectate))
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
 
@@ -315,6 +324,82 @@ async fn main() {
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SpectateQuery {
+    /// Optional room code. When omitted, prefer an active session room.
+    room: Option<String>,
+}
+
+async fn api_rooms(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let rooms = state.rooms.lock();
+    let mut list: Vec<Value> = rooms.values().map(|r| r.room_summary()).collect();
+    list.sort_by(|a, b| {
+        a["roomCode"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["roomCode"].as_str().unwrap_or(""))
+    });
+    Json(json!({ "rooms": list }))
+}
+
+async fn api_spectate(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<SpectateQuery>,
+) -> Json<Value> {
+    let rooms = state.rooms.lock();
+    let mut room_list: Vec<Value> = rooms.values().map(|r| r.room_summary()).collect();
+    room_list.sort_by(|a, b| {
+        a["roomCode"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["roomCode"].as_str().unwrap_or(""))
+    });
+
+    if let Some(code) = q.room.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let code_up = code.to_ascii_uppercase();
+        if let Some(room) = rooms.get(&code_up).or_else(|| rooms.get(code)) {
+            let mut snap = room.spectate_snapshot();
+            if let Some(obj) = snap.as_object_mut() {
+                obj.insert("rooms".into(), json!(room_list));
+            }
+            return Json(snap);
+        }
+        return Json(json!({
+            "error": "room_not_found",
+            "roomCode": code_up,
+            "mode": null,
+            "sessionActive": false,
+            "players": [],
+            "boards": {},
+            "board": null,
+            "rooms": room_list,
+        }));
+    }
+
+    let picked = rooms
+        .values()
+        .find(|r| r.session_active)
+        .or_else(|| rooms.values().next());
+    match picked {
+        Some(room) => {
+            let mut snap = room.spectate_snapshot();
+            if let Some(obj) = snap.as_object_mut() {
+                obj.insert("rooms".into(), json!(room_list));
+            }
+            Json(snap)
+        }
+        None => Json(json!({
+            "mode": null,
+            "sessionActive": false,
+            "players": [],
+            "boards": {},
+            "board": null,
+            "rooms": room_list,
+            "message": "No rooms yet — waiting for clients",
+        })),
+    }
 }
 
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {

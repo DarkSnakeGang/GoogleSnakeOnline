@@ -717,6 +717,12 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     modeRow.appendChild(versusBtn);
     adminBox.appendChild(modeRow);
 
+    const seatAllBtn = themedBtn("Seat all as players");
+    seatAllBtn.id = "mp-seat-all-players";
+    seatAllBtn.title =
+      "Promote everyone to player in join order (Race ≤9, Co-op ≤4)";
+    adminBox.appendChild(seatAllBtn);
+
     function paintModeButtons(mode) {
       const raceOn = mode === "race";
       const coopOn = mode === "coop";
@@ -1006,6 +1012,18 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       if (self.app && self.app._paintPlayAsStartMatch) {
         self.app._paintPlayAsStartMatch();
       }
+    };
+    seatAllBtn.onclick = function () {
+      if (!self.app.client || !self.app.client.connected) return;
+      if (!self.app.client.isAdmin()) return;
+      const roster = self.app.client.roster;
+      if (!roster || roster.sessionActive) return;
+      const Session = root.MultiplayerSession;
+      if (!Session || !Session.seatAllAsPlayers) return;
+      Session.seatAllAsPlayers(roster, function (id, role) {
+        self.app.client.setRole(id, role);
+      });
+      self.renderRoster(roster);
     };
     dur.onchange = function () {
       const mins = Math.max(1, parseInt(dur.value, 10) || 30);
@@ -1389,6 +1407,19 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       const showEnd = !!(isAdmin && (sessionOn || coopLive));
       endBtn.classList.toggle("hidden", !showEnd);
       endBtn.style.display = showEnd ? "" : "none";
+      // Lobby-only: hide when cap is full or everyone is already a player.
+      const Session = root.MultiplayerSession;
+      const showSeatAll = !!(
+        isAdmin &&
+        connected &&
+        !sessionOn &&
+        Session &&
+        Session.canSeatAllAsPlayers &&
+        Session.canSeatAllAsPlayers(rosterData)
+      );
+      seatAllBtn.classList.toggle("hidden", !showSeatAll);
+      seatAllBtn.style.display = showSeatAll ? "" : "none";
+      seatAllBtn.disabled = !showSeatAll;
       // Native Play is Start Match / Start Co-op for the admin
       if (self.app && self.app._paintPlayAsStartMatch) {
         self.app._paintPlayAsStartMatch();
@@ -1607,12 +1638,12 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           const promo = themedBtn(c.role === "player" ? "Spec" : "Play", "mp-mini");
           promo.setAttribute("data-mp-act", "role");
           promo.setAttribute("data-mp-id", c.clientId);
-          const kick = themedBtn("Kick", "mp-mini mp-danger");
-          kick.setAttribute("data-mp-act", "kick");
-          kick.setAttribute("data-mp-id", c.clientId);
           actions.appendChild(promo);
-          actions.appendChild(kick);
           if (c.clientId !== myId) {
+            const kick = themedBtn("Kick", "mp-mini mp-danger");
+            kick.setAttribute("data-mp-act", "kick");
+            kick.setAttribute("data-mp-id", c.clientId);
+            actions.appendChild(kick);
             const pass = themedBtn("Pass admin", "mp-mini");
             pass.setAttribute("data-mp-act", "admin");
             pass.setAttribute("data-mp-id", c.clientId);
@@ -1679,12 +1710,11 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         return;
       }
       this.hud.style.display = "block";
-      const goal =
-        app._coopGoal != null
+      const goal = app.ensureCoopAppleGoal
+        ? app.ensureCoopAppleGoal()
+        : app._coopGoal != null
           ? app._coopGoal
-          : app.ensureCoopAppleGoal
-            ? app.ensureCoopAppleGoal()
-            : "—";
+          : "—";
       const total = app._coopTotal != null ? app._coopTotal : 0;
       let runMs = null;
       if (

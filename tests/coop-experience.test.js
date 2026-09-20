@@ -389,6 +389,7 @@ describe("co-op experience review", () => {
       };
 
       win.__mpCoopOnLocalReset = function () {};
+      win.__mpCoopSeatOnPlayLive = function () {};
       win.__mpLastCoopSpawnPose = { x: 8, y: 7, dir: "RIGHT" };
       win.__mpCoopBoardFull = true;
       win.__mpCoopSession = true;
@@ -398,10 +399,14 @@ describe("co-op experience review", () => {
 
       assert.equal(app._coopSessionActive, false);
       assert.equal(win.__mpCoopOnLocalReset, null);
+      assert.equal(win.__mpCoopSeatOnPlayLive, null);
       assert.equal(win.__mpLastCoopSpawnPose, null);
       assert.equal(win.__mpCoopBoardFull, false);
       assert.equal(win.__mpCoopSession, false);
       assert.equal(win.__mpCoopInject, false);
+      assert.equal(app._coopTimerStartedAtMs, null);
+      assert.equal(app._coopTimerArmed, false);
+      assert.equal(app._coopAuthority, null);
     });
   });
 });

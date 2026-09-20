@@ -36,6 +36,7 @@ pub fn count_target(count_index: u8, _rng: &mut u64) -> u32 {
         3 => 10, // 10a
         4 => 1,  // Dice — starts/refills at 1
         5 => 1,  // Bomb — starts/refills at 1
+        6 => 5,  // Tally — five sequenced apples
         _ => 1,
     }
 }
@@ -58,8 +59,8 @@ fn classic_initial_fruit(width: i32, height: i32, count_index: u8) -> Vec<Point>
         0 | 4 | 5 => vec![at(0, 0)],
         // 3a
         1 => vec![at(0, 0), at(-2, -2), at(-2, 2)],
-        // 5a, and the first five of 10a
-        2 | 3 => {
+        // 5a, Tally (5 sequenced), and the first five of 10a (shifted cluster)
+        2 | 3 | 6 => {
             let mut pts = vec![at(0, 0), at(-2, -2), at(-2, 2), at(2, -2), at(2, 2)];
             let shift = if width >= 20 { 2 } else { 1 };
             for p in &mut pts {
@@ -89,8 +90,8 @@ pub fn spawn_offsets(player_count: usize) -> &'static [i32] {
     match player_count {
         0 | 1 => &[0],
         2 => &[-1, 1],
-        3 => &[0, 3, -2],
-        _ => &[-1, 1, -4, 4],
+        3 => &[0, 2, -2],
+        _ => &[-1, 1, 2, -2],
     }
 }
 
@@ -373,14 +374,6 @@ impl CoopGame {
         cells
     }
 
-    fn occupied_snakes_only(&self) -> Vec<Point> {
-        let mut cells = Vec::new();
-        for s in &self.snakes {
-            cells.extend(s.body.iter().cloned());
-        }
-        cells
-    }
-
     fn cell_free_for_fruit(&self, x: i32, y: i32, ignore_fruit: bool) -> bool {
         if x < 0 || y < 0 || x >= self.width || y >= self.height {
             return false;
@@ -651,6 +644,8 @@ mod tests {
     #[test]
     fn spawn_offsets_layout() {
         assert_eq!(super::spawn_offsets(2), &[-1, 1]);
+        assert_eq!(super::spawn_offsets(3), &[0, 2, -2]);
+        assert_eq!(super::spawn_offsets(4), &[-1, 1, 2, -2]);
         let g = CoopGame::new(&[("a".into(), 0, 0), ("b".into(), 1, 1)], cfg_default());
         assert_eq!(g.width, 17);
         assert_eq!(g.height, 15);

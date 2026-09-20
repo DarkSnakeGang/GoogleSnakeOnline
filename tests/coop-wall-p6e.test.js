@@ -232,7 +232,7 @@ describe("co-op first-apple p6E wall Map", () => {
       if (calls === 1) {
         throw new TypeError("a.has is not a function");
       }
-      return { x: 1, y: 1 };
+      return { x: 10, y: 10 };
     };
     // Install wrap via tick hook path
     win.__mpCoopOnTickInstalled = false;
@@ -242,7 +242,7 @@ describe("co-op first-apple p6E wall Map", () => {
     win.__mpCoopOnTick(g);
     assert.equal(typeof g.Rb, "function");
     assert.doesNotThrow(function () {
-      const p = g.Rb(null, 0);
+      const p = g.Rb(null, 5);
       assert.ok(p);
     });
     assert.equal(typeof g.Ca.Aa.has, "function");
@@ -262,16 +262,16 @@ describe("co-op first-apple p6E wall Map", () => {
       if (calls === 1) {
         throw new TypeError("Cannot read properties of null (reading 'size')");
       }
-      return { x: 2, y: 2 };
+      return { x: 10, y: 10 };
     };
     win.__mpCoopOnTickInstalled = false;
     delete require.cache[require.resolve(path.join(ROOT, "src/coop/native.js"))];
     require(path.join(ROOT, "src/coop/native.js"));
     win.__mpCoopOnTick(g);
     assert.doesNotThrow(function () {
-      const p = g.Rb(null, 0);
+      const p = g.Rb(null, 5);
       assert.ok(p);
-      assert.equal(p.x, 2);
+      assert.equal(p.x, 10);
     });
     assert.ok(g.Ca.Aa);
     assert.equal(typeof g.Ca.Aa.size, "number");

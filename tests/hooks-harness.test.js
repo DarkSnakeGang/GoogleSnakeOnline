@@ -1320,7 +1320,7 @@ describe("GSM hook harness", () => {
   });
 
   it("applyCoopSpawnOffset clamps oy onto small boards", () => {
-    // Small size (~7×7): server oy ±4 would paint off the grid
+    // Small size (~7×7): large oy would paint off the grid
     const w = 7;
     const h = 7;
     win.__remixGame.Ca = { wa: [], Aa: new Map() };
@@ -3623,7 +3623,42 @@ describe("spectator / admin menu access", () => {
     });
     guest.returnToMenus({ fromRemote: true });
     await nextTick();
-    assert.equal(esc.n, 0, "non-admins still leave on their own Escape");
+    assert.equal(esc.n, 0, "race non-admins still leave on their own Escape");
+  });
+
+  it("co-op ALL_DEAD/ALL_APPLES: every player gets the death screen quit", async () => {
+    const win = menuDom();
+    const MultiplayerApp = loadApp(win);
+    const esc = countEscapes(win);
+    const guest = seatedApp(win, MultiplayerApp, {
+      admin: false,
+      role: "player",
+      roster: {
+        mode: "coop",
+        sessionActive: false,
+        adminId: "admin",
+        clients: [
+          { clientId: "admin", role: "player" },
+          { clientId: "guest", role: "player" },
+        ],
+      },
+    });
+    guest.client.clientId = "guest";
+    guest.client.me = function () {
+      return { clientId: "guest", role: "player" };
+    };
+    guest._handleCoopMatchEnded("ALL_DEAD");
+    await nextTick();
+    assert.equal(guest._coopEndReason, "ALL_DEAD");
+    assert.equal(esc.n, 1, "co-op guest must quit to death/settings chrome");
+    assert.equal(!!win.pauseGame, true);
+    const death = win.document.getElementsByClassName("wjOYOd")[0];
+    assert.ok(death, "death overlay exists");
+    assert.notEqual(
+      death.style.visibility,
+      "hidden",
+      "ALL_DEAD must leave .wjOYOd visible"
+    );
   });
 
   it("End match quits the engine even if Escape was already latched", async () => {

@@ -17,6 +17,8 @@ describe("gsm hooks", () => {
     assert.equal(typeof Gsm.applySpectateState, "function");
     assert.equal(typeof Gsm.resolveThemeColors, "function");
     assert.equal(typeof Gsm.applyCoopSpawnOffset, "function");
+    assert.equal(typeof Gsm.forceEngineSizeForPlay, "function");
+    assert.equal(typeof Gsm.forceMatchSettingsForPlay, "function");
     assert.equal(typeof Gsm.parkLocalSnakeOffBoard, "function");
     assert.equal(typeof Gsm.emptyLocalSnakeBody, "function");
     assert.equal(typeof Gsm.hideControlHelper, "function");
@@ -30,6 +32,65 @@ describe("gsm hooks", () => {
     assert.equal(typeof Gsm.snakeDeltaFingerprint, "function");
     assert.equal(typeof Gsm.resolveAppleImageUrl, "function");
     assert.equal(typeof Gsm.drawWallSolverStyleSnake, "function");
+    assert.equal(typeof Gsm.applySnakeColor, "function");
+    assert.equal(typeof Gsm.tintLiveFaceSprites, "function");
+  });
+
+  it("applySnakeColor stamps Sc/Yc and recolors face sprites via a7", () => {
+    const a7Calls = [];
+    const faceHost = function (name) {
+      return { name: name, ka: 0 };
+    };
+    const Ga = {
+      oa: faceHost("oa"),
+      Aa: faceHost("Aa"),
+      Ba: faceHost("Ba"),
+    };
+    const snake = { Sc: "#4E7CF6", Yc: "#17439F" };
+    const settings = { wa: 0, Ja: 0, Jb: 0 };
+    const game = { oa: snake, settings: settings, snakeBodyConfig: {} };
+    global.__slotA7 = function (host, from, to) {
+      a7Calls.push({ host: host.name, from: from, to: to });
+    };
+    global.__mpCoopPlayerRenderer = { Ga: Ga };
+    global.__mpFaceTintSc = "#5282F2";
+    global.__remixGame = game;
+    global.__mpGame = game;
+    global.MultiplayerColors = {
+      getColor: function (id) {
+        if (id === 1) {
+          return { kind: "solid", primary: "#19D8E6", secondary: "#15B5C1" };
+        }
+        return null;
+      },
+    };
+    global.puddingMenuSelect = function () {
+      return true;
+    };
+
+    const ok = Gsm.applySnakeColor(1);
+    assert.equal(ok, true);
+    assert.equal(snake.Sc.toUpperCase(), "#19D8E6");
+    assert.equal(snake.Yc.toUpperCase(), "#15B5C1");
+    assert.equal(settings.wa, 1);
+    assert.ok(
+      a7Calls.some(function (c) {
+        return (
+          c.host === "oa" &&
+          String(c.from).toUpperCase() === "#5282F2" &&
+          String(c.to).toUpperCase() === "#19D8E6"
+        );
+      }),
+      "eye-ring hosts must a7 from stock base to new Sc"
+    );
+    assert.equal(String(global.__mpFaceTintSc).toUpperCase(), "#19D8E6");
+    delete global.__mpGame;
+    delete global.__remixGame;
+    delete global.__mpCoopPlayerRenderer;
+    delete global.__mpFaceTintSc;
+    delete global.__slotA7;
+    delete global.MultiplayerColors;
+    delete global.puddingMenuSelect;
   });
 
   it("patches __remixGame expose to also set __mpGame", () => {
@@ -39,6 +100,19 @@ describe("gsm hooks", () => {
     assert.ok(out.indexOf("window.__remixGame=this") >= 0);
     assert.ok(out.indexOf("__mpCoopOnTick") >= 0);
     assert.ok(out.indexOf("__mpRaceFocusOnTick") >= 0);
+  });
+
+  it("keeps BurgerMod comma-chain after __remixGame=this parseable", () => {
+    // BurgerMod rewrites l4E call sites as:
+    //   window.__remixGame=this,window.burger_settings_snapshot&&...,e7(...)&&...
+    // ExposeGame must inject with commas/IIFEs, not statement try/catch.
+    const inCode =
+      "window.__remixGame=this,window.burger_settings_snapshot&&window.burger_settings_snapshot(this.settings),e7(this.settings,10)&&l4E(this.wa);";
+    const out = Gsm.alterSnakeCodeExposeGame(inCode);
+    assert.ok(out.indexOf("window.__mpGame=this") >= 0);
+    assert.ok(out.indexOf("__mpCoopOnTick") >= 0);
+    assert.equal(out.includes("}catch(_mpVf){},"), false);
+    assert.doesNotThrow(() => new Function(out));
   });
 
   it("injects __mpGame on plain tick(){", () => {
@@ -1768,22 +1842,28 @@ describe("gsm hooks", () => {
   it("resolveSokoGoalUrl follows the Distinct Soko Goals toggle", () => {
     const prev = global.pudding_settings;
     const prevGfx = global.graphics_selected;
+    const prevGoal = global.distinct_soko_goal;
+    const prevPx = global.distinct_soko_goal_px;
+    const DATA = "data:image/png;base64,AAA";
+    const DATA_PX = "data:image/png;base64,BBB";
     try {
+      global.distinct_soko_goal = { src: DATA, currentSrc: DATA };
+      global.distinct_soko_goal_px = { src: DATA_PX, currentSrc: DATA_PX };
       // Remix ships the toggle on, so an absent setting still means distinct
       delete global.pudding_settings;
       global.graphics_selected = 0;
-      assert.equal(Gsm.resolveSokoGoalUrl(null), Gsm.SOKO_GOAL_DISTINCT_URL);
+      assert.equal(Gsm.resolveSokoGoalUrl(null), DATA);
 
       global.pudding_settings = { SokoGoals: true };
-      assert.equal(Gsm.resolveSokoGoalUrl({}), Gsm.SOKO_GOAL_DISTINCT_URL);
+      assert.equal(Gsm.resolveSokoGoalUrl({}), DATA);
       // Pixel graphics follows the scraped board, not the viewer
       assert.equal(
         Gsm.resolveSokoGoalUrl({ graphicsIndex: 1 }),
-        Gsm.SOKO_GOAL_DISTINCT_PX_URL
+        DATA_PX
       );
       assert.equal(
         Gsm.resolveSokoGoalUrl({ graphicsIndex: 2 }),
-        Gsm.SOKO_GOAL_DISTINCT_URL
+        DATA
       );
 
       global.pudding_settings = { SokoGoals: false };
@@ -1797,6 +1877,10 @@ describe("gsm hooks", () => {
       else global.pudding_settings = prev;
       if (prevGfx === undefined) delete global.graphics_selected;
       else global.graphics_selected = prevGfx;
+      if (prevGoal === undefined) delete global.distinct_soko_goal;
+      else global.distinct_soko_goal = prevGoal;
+      if (prevPx === undefined) delete global.distinct_soko_goal_px;
+      else global.distinct_soko_goal_px = prevPx;
     }
   });
 
@@ -1805,6 +1889,11 @@ describe("gsm hooks", () => {
     const bySrc = {};
     const prevImg = global.Image;
     const prevSettings = global.pudding_settings;
+    const prevGoal = global.distinct_soko_goal;
+    const prevPx = global.distinct_soko_goal_px;
+    const DATA = "data:image/png;base64,DISTINCT";
+    global.distinct_soko_goal = { src: DATA, currentSrc: DATA };
+    global.distinct_soko_goal_px = { src: DATA, currentSrc: DATA };
     global.Image = function () {
       const img = {
         complete: true,
@@ -1882,7 +1971,7 @@ describe("gsm hooks", () => {
         return d.frame === 0;
       });
       assert.ok(goal, "goal frame drawn");
-      assert.equal(goal.src, Gsm.SOKO_GOAL_DISTINCT_URL);
+      assert.equal(goal.src, DATA);
       assert.ok(box, "box frame drawn");
       assert.equal(box.src, Gsm.SOKO_BOX_URL, "boxes keep the native sheet");
 
@@ -1898,6 +1987,10 @@ describe("gsm hooks", () => {
       else delete global.Image;
       if (prevSettings === undefined) delete global.pudding_settings;
       else global.pudding_settings = prevSettings;
+      if (prevGoal === undefined) delete global.distinct_soko_goal;
+      else global.distinct_soko_goal = prevGoal;
+      if (prevPx === undefined) delete global.distinct_soko_goal_px;
+      else global.distinct_soko_goal_px = prevPx;
     }
   });
 
@@ -3101,6 +3194,36 @@ describe("gsm hooks", () => {
     assert.equal(delta.dir, "RIGHT");
   });
 
+  it("readScoreAndAlive prefers live Sh over stale timeKeeper._lastScore 0", () => {
+    const g = typeof globalThis !== "undefined" ? globalThis : global;
+    g.__mpCoopSession = true;
+    g.timeKeeper = {
+      _lastScore: 0,
+      _lastTimeMs: 0,
+      _dead: false,
+      shouldTrack: function () {
+        return false;
+      },
+    };
+    g.__remixGame = {
+      oa: {
+        ka: [
+          { x: 1, y: 2 },
+          { x: 0, y: 2 },
+          { x: 0, y: 1 },
+          { x: 0, y: 0 },
+        ],
+        direction: "RIGHT",
+      },
+      Sh: 34,
+    };
+    g.__mpGame = g.__remixGame;
+    const info = Gsm.readScoreAndAlive();
+    assert.equal(info.score, 34, "must not wipe live Sh with TK=0");
+    const delta = Gsm.scrapeCoopSnakeDelta(0);
+    assert.equal(delta.score, 34);
+  });
+
   it("co-op lag: slim pose + fruit-only collectables stay small", () => {
     const g = typeof globalThis !== "undefined" ? globalThis : global;
     g.document = g.document || {
@@ -3771,7 +3894,7 @@ describe("gsm hooks", () => {
     );
   });
 
-  it("nudgeCoopApplesOffSnakes drops unplaceable fruit and sets board-full", () => {
+  it("nudgeCoopApplesOffSnakes drops unplaceable fruit; board-full only when packed", () => {
     const g = typeof globalThis !== "undefined" ? globalThis : global;
     g.__mpCoopSession = true;
     g.__mpCoopInject = true;
@@ -3794,6 +3917,38 @@ describe("gsm hooks", () => {
     assert.equal(out.length, 0);
     assert.equal(g.__mpCoopBoardFull, true);
     assert.ok(fullCalls >= 1);
+
+    // Occupancy leaves a free cell but findFree returns null — drop without win
+    fullCalls = 0;
+    g.__mpCoopBoardFull = false;
+    g.__mpCoopReadSpawnOccupancy = function () {
+      return { "0,0": true, "1,0": true, "0,1": true };
+    };
+    g.__mpCoopFindFreeSpawn = function () {
+      return null;
+    };
+    const outDrop = Gsm.nudgeCoopApplesOffSnakes([{ x: 0, y: 0 }], game);
+    // Scan finds (1,1) so fruit relocates
+    assert.equal(outDrop.length, 1);
+    assert.equal(fullCalls, 0);
+
+    // Force drop: findFree null and mark all cells occupied in scan via walls
+    fullCalls = 0;
+    g.__mpCoopBoardFull = false;
+    g.__mpCoopReadSpawnOccupancy = function () {
+      return { "0,0": true };
+    };
+    g.__mpCoopFindFreeSpawn = function () {
+      return null;
+    };
+    g.__mpCoopIsSolidWall = function (_game, x, y) {
+      return !(x === 0 && y === 0); // only (0,0) non-wall but occupied
+    };
+    const outEmpty = Gsm.nudgeCoopApplesOffSnakes([{ x: 0, y: 0 }], game);
+    assert.equal(outEmpty.length, 0);
+    // (0,0) occupied; other cells are "walls" — packed → board-full
+    assert.equal(g.__mpCoopBoardFull, true);
+
     delete g.__mpCoopSession;
     delete g.__mpCoopInject;
     delete g.__mpCoopOnBoardFull;

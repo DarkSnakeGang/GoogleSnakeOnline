@@ -140,6 +140,32 @@
     return BY_ID[id] || null;
   }
 
+  /**
+   * Overlay solid primary/secondary from stock engine h3E
+   * (`window.__slotSnakeColorTable`) so clients match in-game Play colors.
+   */
+  let _stockSynced = false;
+  function syncFromStockTable(table) {
+    if (_stockSynced || !table || typeof table !== "object") return false;
+    let any = false;
+    const len = Array.isArray(table) ? table.length : 48;
+    for (let i = 0; i < len; i++) {
+      const row = table[i];
+      if (!Array.isArray(row) || !row[0]) continue;
+      const existing = BY_ID[i];
+      if (!existing || existing.kind !== "solid") continue;
+      const primary = String(row[0]);
+      const secondary = String(row[1] || row[0]);
+      if (existing.primary !== primary || existing.secondary !== secondary) {
+        existing.primary = primary;
+        existing.secondary = secondary;
+        any = true;
+      }
+    }
+    _stockSynced = true;
+    return any;
+  }
+
   function colorName(id) {
     const c = getColor(id);
     return c ? c.name : "Spectator";
@@ -157,6 +183,27 @@
     });
     for (let i = 0; i < CLAIMABLE_IDS.length; i++) {
       const id = CLAIMABLE_IDS[i];
+      if (!taken[id]) return id;
+    }
+    return null;
+  }
+
+  /**
+   * Next claimable id after fromId (wrap), skipping takenIds.
+   * If fromId is not claimable, starts from the first claimable.
+   */
+  function nextFreeClaimable(fromId, takenIds) {
+    const taken = {};
+    (takenIds || []).forEach(function (id) {
+      if (id != null) taken[Number(id)] = true;
+    });
+    if (!CLAIMABLE_IDS.length) return null;
+    let start = 0;
+    const from = Number(fromId);
+    const idx = CLAIMABLE_IDS.indexOf(from);
+    if (idx >= 0) start = (idx + 1) % CLAIMABLE_IDS.length;
+    for (let offset = 0; offset < CLAIMABLE_IDS.length; offset++) {
+      const id = CLAIMABLE_IDS[(start + offset) % CLAIMABLE_IDS.length];
       if (!taken[id]) return id;
     }
     return null;
@@ -195,9 +242,11 @@
     CLAIMABLE_IDS,
     DEFAULT_RAINBOW,
     getColor,
+    syncFromStockTable,
     colorName,
     isClaimable,
     firstFreeClaimable,
+    nextFreeClaimable,
     displayNameFor,
   };
 

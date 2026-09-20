@@ -1,6 +1,6 @@
 //! Room state machine: roster, roles, modes, Race relay, Co-op sim.
 
-use crate::colors::{color_name, first_free_claimable, is_claimable};
+use crate::colors::{color_name, first_free_claimable, is_claimable, next_free_claimable};
 use crate::coop::{board_dims, CoopGame, CoopStartConfig, Dir};
 use crate::protocol::{error_envelope, Envelope};
 use serde_json::{json, Value};
@@ -256,6 +256,8 @@ pub struct Room {
     pub coop_run_settings: Option<Value>,
     /// Native-only generation state. Never populated for server simulation.
     pub native_relay: Option<NativeRelayState>,
+    /// Admin (or last publisher) board theme for console spectate.
+    pub coop_theme_colors: Option<Value>,
     pub outbox: Vec<(Option<String>, Envelope)>, // None = broadcast
     pub server_seq: u64,
 }
@@ -297,6 +299,7 @@ impl Room {
             coop_authority: None,
             coop_run_settings: None,
             native_relay: None,
+            coop_theme_colors: None,
             outbox: Vec::new(),
             server_seq: 0,
         }
@@ -310,19 +313,6 @@ impl Room {
     fn push_broadcast(&mut self, mut env: Envelope) {
         env.seq = self.next_seq();
         self.outbox.push((None, env));
-    }
-
-    fn push_broadcast_except(&mut self, except: &str, mut env: Envelope) {
-        env.seq = self.next_seq();
-        let targets: Vec<String> = self
-            .clients
-            .keys()
-            .filter(|id| id.as_str() != except)
-            .cloned()
-            .collect();
-        for tid in targets {
-            self.outbox.push((Some(tid), env.clone()));
-        }
     }
 
     fn push_to(&mut self, client_id: &str, mut env: Envelope) {
@@ -559,6 +549,310 @@ impl Room {
     pub fn broadcast_roster(&mut self) {
         let payload = self.roster_payload();
         self.push_broadcast(Envelope::new("ROSTER", payload));
+    }
+
+    /// HTTP/console spectate dump: race = per-player boards; co-op = one shared board.
+    pub fn spectate_snapshot(&self) -> Value {
+        let mut players: Vec<Value> = self
+            .clients
+            .values()
+            .map(|c| {
+                let resolved = resolve_display_name(c, &self.clients);
+                let score = self.race_scores.get(&c.client_id);
+                json!({
+                    "clientId": c.client_id,
+                    "displayName": c.display_name,
+                    "resolvedName": resolved,
+                    "role": c.role.as_str(),
+                    "colorId": c.color_id,
+                    "ready": c.ready,
+                    "isAdmin": self.admin_id.as_deref() == Some(c.client_id.as_str()),
+                    "alive": score.map(|s| s.alive).or_else(|| self.coop_alive.get(&c.client_id).copied()),
+                    "score": score.map(|s| s.score).or_else(|| {
+                        self.coop_snakes
+                            .get(&c.client_id)
+                            .and_then(|v| v.get("score"))
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32)
+                    }),
+                    "timeMs": score.map(|s| s.time_ms),
+                })
+            })
+            .collect();
+        players.sort_by_key(|v| {
+            self.clients
+                .get(v["clientId"].as_str().unwrap_or(""))
+                .map(|c| c.join_order)
+                .unwrap_or(0)
+        });
+
+        let rooms_meta = json!({
+            "roomCode": self.code,
+            "mode": self.mode.as_str(),
+            "sessionActive": self.session_active,
+            "clientCount": self.clients.len(),
+            "playerCount": self.players().len(),
+        });
+
+        match self.mode {
+            Mode::Race => {
+                let mut boards = serde_json::Map::new();
+                for (id, board) in &self.race_boards {
+                    let mut enriched = board.clone();
+                    if let Some(obj) = enriched.as_object_mut() {
+                        if let Some(c) = self.clients.get(id) {
+                            if obj.get("colorId").and_then(|v| v.as_u64()).is_none() {
+                                if let Some(cid) = c.color_id {
+                                    obj.insert("colorId".into(), json!(cid));
+                                }
+                            }
+                            obj.insert(
+                                "displayName".into(),
+                                json!(resolve_display_name(c, &self.clients)),
+                            );
+                        }
+                        if let Some(sc) = self.race_scores.get(id) {
+                            obj.entry("score".to_string())
+                                .or_insert_with(|| json!(sc.score));
+                            obj.entry("alive".to_string())
+                                .or_insert_with(|| json!(sc.alive));
+                            obj.entry("timeMs".to_string())
+                                .or_insert_with(|| json!(sc.time_ms));
+                        }
+                    }
+                    boards.insert(id.clone(), enriched);
+                }
+                json!({
+                    "roomCode": self.code,
+                    "mode": "race",
+                    "sessionActive": self.session_active,
+                    "raceGoal": self.race_goal.as_str(),
+                    "players": players,
+                    "boards": boards,
+                    "settings": self.settings,
+                    "room": rooms_meta,
+                })
+            }
+            Mode::Coop => {
+                let board = self.build_coop_spectate_board();
+                json!({
+                    "roomCode": self.code,
+                    "mode": "coop",
+                    "sessionActive": self.session_active,
+                    "coopAuthority": self.coop_authority.map(|a| a.as_str()),
+                    "coopGeneration": self.coop_generation,
+                    "players": players,
+                    "board": board,
+                    "settings": self.coop_run_settings.as_ref().unwrap_or(&self.settings),
+                    "room": rooms_meta,
+                })
+            }
+        }
+    }
+
+    fn build_coop_spectate_board(&self) -> Value {
+        let theme = self.resolve_coop_theme_colors();
+
+        if let Some(game) = &self.coop {
+            let mut snap = game.snapshot();
+            if let Some(obj) = snap.as_object_mut() {
+                obj.insert("themeColors".into(), theme);
+                obj.insert("body".into(), json!([]));
+                obj.insert(
+                    "appleIndex".into(),
+                    self.coop_run_settings
+                        .as_ref()
+                        .or(Some(&self.settings))
+                        .and_then(|s| s.get("apple"))
+                        .cloned()
+                        .unwrap_or(json!(0)),
+                );
+                // Promote sim snakes into drawBoard-compatible shape
+                if let Some(Value::Array(snakes)) = obj.get_mut("snakes") {
+                    for snake in snakes.iter_mut() {
+                        if let Some(s) = snake.as_object_mut() {
+                            if let Some(cid) = s.get("clientId").and_then(|v| v.as_str()) {
+                                if let Some(c) = self.clients.get(cid) {
+                                    s.insert(
+                                        "displayName".into(),
+                                        json!(resolve_display_name(c, &self.clients)),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return snap;
+        }
+
+        let (width, height) = self.active_board_dims();
+        let board_src = self
+            .native_relay
+            .as_ref()
+            .and_then(|s| s.board_snapshot.as_ref())
+            .or(self.coop_collectables.as_ref());
+        let apples = board_src
+            .and_then(|b| b.get("apples").or_else(|| b.get("collectables")))
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        let apple_index = self
+            .coop_run_settings
+            .as_ref()
+            .or(Some(&self.settings))
+            .and_then(|s| s.get("apple"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        // Ensure every fruit carries a type so console sprites resolve (missing
+        // type previously fell through to the red-dot fallback).
+        let apples = match apples {
+            Value::Array(list) => Value::Array(
+                list.into_iter()
+                    .map(|item| {
+                        let mut obj = match item {
+                            Value::Object(map) => map,
+                            other => {
+                                let mut map = serde_json::Map::new();
+                                if let Some(arr) = other.as_array() {
+                                    if arr.len() >= 2 {
+                                        map.insert("x".into(), arr[0].clone());
+                                        map.insert("y".into(), arr[1].clone());
+                                    }
+                                }
+                                map
+                            }
+                        };
+                        if obj.get("type").and_then(|v| v.as_i64()).is_none()
+                            && obj.get("type_id").and_then(|v| v.as_i64()).is_none()
+                        {
+                            obj.insert("type".into(), json!(apple_index));
+                        }
+                        Value::Object(obj)
+                    })
+                    .collect(),
+            ),
+            other => other,
+        };
+        let walls = board_src
+            .and_then(|b| b.get("walls"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let mode_key = self
+            .native_relay
+            .as_ref()
+            .and_then(|s| s.mode_key.clone())
+            .unwrap_or_else(|| "classic".into());
+
+        let mut snakes: Vec<Value> = Vec::new();
+        let order: Vec<String> = if !self.coop_slots.is_empty() {
+            self.coop_slots.clone()
+        } else {
+            self.players()
+                .into_iter()
+                .map(|p| p.client_id.clone())
+                .collect()
+        };
+        for id in order {
+            let Some(pose) = self.coop_snakes.get(&id) else {
+                continue;
+            };
+            let body = pose.get("body").cloned().unwrap_or_else(|| json!([]));
+            if body.as_array().map(|a| a.is_empty()).unwrap_or(true) {
+                continue;
+            }
+            let client = self.clients.get(&id);
+            let color_id = pose
+                .get("colorId")
+                .and_then(|v| v.as_u64())
+                .or_else(|| client.and_then(|c| c.color_id.map(|x| x as u64)));
+            snakes.push(json!({
+                "clientId": id,
+                "displayName": client.map(|c| resolve_display_name(c, &self.clients)),
+                "body": body,
+                "body2": pose.get("body2"),
+                "dir": pose.get("dir").cloned().unwrap_or(json!("RIGHT")),
+                "dir2": pose.get("dir2"),
+                "alive": self.coop_alive.get(&id).copied().unwrap_or(true),
+                "colorId": color_id,
+                "Sc": pose.get("Sc"),
+                "Yc": pose.get("Yc"),
+                "score": pose.get("score"),
+            }));
+        }
+
+        json!({
+            "width": width,
+            "height": height,
+            "body": [],
+            "apples": apples,
+            "walls": walls,
+            "snakes": snakes,
+            "modeKey": mode_key,
+            "themeColors": theme,
+            "appleIndex": apple_index,
+            "boardRevision": self.native_relay.as_ref().map(|s| s.board_revision).unwrap_or(0),
+            "boardReady": self.native_relay.as_ref().map(|s| s.board_ready).unwrap_or(false),
+        })
+    }
+
+    fn resolve_coop_theme_colors(&self) -> Value {
+        let default = json!({
+            "light": "#aad751",
+            "dark": "#a2d149",
+            "border": "#578a34",
+            "apple": "#e7471d",
+        });
+        if let Some(t) = &self.coop_theme_colors {
+            if t.get("light").is_some() {
+                return t.clone();
+            }
+        }
+        let board_src = self
+            .native_relay
+            .as_ref()
+            .and_then(|s| s.board_snapshot.as_ref())
+            .or(self.coop_collectables.as_ref());
+        if let Some(t) = board_src.and_then(|b| b.get("themeColors")) {
+            if t.get("light").is_some() {
+                return t.clone();
+            }
+        }
+        // Prefer admin pose theme if clients start embedding it on SNAKE_DELTA
+        if let Some(admin) = &self.admin_id {
+            if let Some(t) = self
+                .coop_snakes
+                .get(admin)
+                .and_then(|p| p.get("themeColors"))
+            {
+                if t.get("light").is_some() {
+                    return t.clone();
+                }
+            }
+        }
+        default
+    }
+
+    fn maybe_store_coop_theme(&mut self, from: &str, payload: &Value) {
+        let Some(theme) = payload.get("themeColors") else {
+            return;
+        };
+        if theme.get("light").is_none() {
+            return;
+        }
+        let from_admin = self.admin_id.as_deref() == Some(from);
+        if from_admin || self.coop_theme_colors.is_none() {
+            self.coop_theme_colors = Some(theme.clone());
+        }
+    }
+
+    pub fn room_summary(&self) -> Value {
+        json!({
+            "roomCode": self.code,
+            "mode": self.mode.as_str(),
+            "sessionActive": self.session_active,
+            "clientCount": self.clients.len(),
+            "playerCount": self.players().len(),
+        })
     }
 
     pub fn join(
@@ -900,14 +1194,41 @@ impl Room {
     }
 
     fn cmd_ready(&mut self, from: &str, payload: &Value) -> Result<(), String> {
-        let client = self.clients.get_mut(from).ok_or("unknown_client")?;
-        if client.role != Role::Player {
-            return Err("spectators_cannot_ready".into());
-        }
         let ready = payload
             .get("ready")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
+        {
+            let client = self.clients.get(from).ok_or("unknown_client")?;
+            if client.role != Role::Player {
+                return Err("spectators_cannot_ready".into());
+            }
+        }
+        if ready && self.mode == Mode::Coop {
+            // Bump color if it collides with another already-ready player's claim.
+            let taken: Vec<u8> = self
+                .clients
+                .values()
+                .filter(|c| c.client_id != from && c.role == Role::Player && c.ready)
+                .filter_map(|c| c.color_id)
+                .collect();
+            let current = self.clients.get(from).and_then(|c| c.color_id);
+            let needs_bump = match current {
+                None => true,
+                Some(id) if !is_claimable(id) => true,
+                Some(id) if taken.contains(&id) => true,
+                Some(_) => false,
+            };
+            if needs_bump {
+                let from_id = current.unwrap_or(0);
+                if let Some(free) = next_free_claimable(from_id, &taken) {
+                    if let Some(c) = self.clients.get_mut(from) {
+                        c.color_id.replace(free);
+                    }
+                }
+            }
+        }
+        let client = self.clients.get_mut(from).ok_or("unknown_client")?;
         client.ready = ready;
         self.broadcast_roster();
         Ok(())
@@ -922,8 +1243,12 @@ impl Room {
             return Err("color_not_claimable".into());
         }
         if self.mode == Mode::Coop {
+            // Only ready players lock a color; unready peers may share until Ready bumps.
             let taken = self.clients.values().any(|c| {
-                c.client_id != from && c.color_id == Some(color_id) && c.role == Role::Player
+                c.client_id != from
+                    && c.color_id == Some(color_id)
+                    && c.role == Role::Player
+                    && c.ready
             });
             if taken {
                 return Err("color_taken".into());
@@ -959,6 +1284,7 @@ impl Room {
         self.coop_snakes.clear();
         self.coop_collectables = None;
         self.collectables_owner = None;
+        self.coop_theme_colors = None;
         self.coop_alive.clear();
         self.coop_seated.clear();
         self.coop_timer_started_at_ms = None;
@@ -1147,6 +1473,7 @@ impl Room {
         self.coop = None;
         self.coop_snakes.clear();
         self.coop_collectables = None;
+        self.coop_theme_colors = None;
         self.coop_alive.clear();
         self.coop_seated.clear();
         self.coop_timer_started_at_ms = None;
@@ -1853,54 +2180,103 @@ impl Room {
             return Ok(());
         }
         let (generation, event_seq) = self.require_native_sender(from, payload)?;
-        let state = self.native_relay.as_ref().ok_or("not_native_relay")?;
-        if state.initializer_id.as_deref() != Some(from) {
-            return Err("not_board_initializer".into());
+        let board_ready = self
+            .native_relay
+            .as_ref()
+            .map(|s| s.board_ready)
+            .unwrap_or(false);
+        let initial = payload.get("initial").and_then(|v| v.as_bool()) == Some(true);
+
+        if !board_ready {
+            // Initial commit — initializer only, revision 0 → 1
+            let state = self.native_relay.as_ref().ok_or("not_native_relay")?;
+            if state.initializer_id.as_deref() != Some(from) {
+                return Err("not_board_initializer".into());
+            }
+            if state.board_revision != 0 {
+                return Err("runtime_board_updates_disabled".into());
+            }
+            if !initial || payload.get("baseRevision").and_then(|v| v.as_u64()) != Some(0)
+            {
+                return Err("initial_board_required".into());
+            }
+            if !self.coop_seated.get(from).copied().unwrap_or(false) {
+                return Err("initializer_not_seated".into());
+            }
+            let mode_key =
+                Self::normalize_native_mode_key(payload.get("modeKey").ok_or("missing_mode_key")?)?;
+            self.validate_native_board(payload)?;
+            let mut clean = payload.clone();
+            let object = clean.as_object_mut().ok_or("bad_board")?;
+            object.insert("clientId".into(), json!(from));
+            object.insert("generation".into(), json!(generation));
+            object.insert("eventSeq".into(), json!(event_seq));
+            object.insert("revision".into(), json!(1));
+            object.insert("initial".into(), json!(true));
+            object.insert("modeKey".into(), json!(mode_key));
+            let state = self.native_relay.as_mut().ok_or("not_native_relay")?;
+            state.last_event_seq.insert(from.to_string(), event_seq);
+            state.board_revision = 1;
+            state.board_ready = true;
+            state.mode_key.replace(mode_key.clone());
+            state.board_snapshot = Some(clean.clone());
+            state.poses.clear();
+            self.coop_snakes.clear();
+            self.coop_collectables = Some(clean.clone());
+            self.maybe_store_coop_theme(from, &clean);
+            self.push_broadcast(Envelope::new("COLLECTABLES_DELTA", clean));
+            self.push_broadcast(Envelope::new(
+                "COOP_BOARD_READY",
+                json!({
+                    "generation": self.coop_generation,
+                    "revision": 1,
+                    "collectablesOwnerId": from,
+                    "modeKey": mode_key,
+                }),
+            ));
+            return Ok(());
         }
-        if state.board_revision != 0 || state.board_ready {
-            return Err("runtime_board_updates_disabled".into());
-        }
-        if payload.get("initial").and_then(|v| v.as_bool()) != Some(true)
-            || payload.get("baseRevision").and_then(|v| v.as_u64()) != Some(0)
-        {
-            return Err("initial_board_required".into());
+
+        // Runtime mid-match fruit — any seated player, rev-ordered, no second BOARD_READY
+        if initial {
+            return Err("initial_already_committed".into());
         }
         if !self.coop_seated.get(from).copied().unwrap_or(false) {
-            return Err("initializer_not_seated".into());
+            return Err("seat_not_seated".into());
         }
-        let mode_key =
-            Self::normalize_native_mode_key(payload.get("modeKey").ok_or("missing_mode_key")?)?;
+        let state = self.native_relay.as_ref().ok_or("not_native_relay")?;
+        let base = payload
+            .get("baseRevision")
+            .and_then(|v| v.as_u64())
+            .ok_or("missing_base_revision")?;
+        if base != state.board_revision {
+            return Err("stale_board_revision".into());
+        }
+        let mode_key = payload
+            .get("modeKey")
+            .map(Self::normalize_native_mode_key)
+            .transpose()?
+            .or_else(|| state.mode_key.clone())
+            .unwrap_or_else(|| "classic".to_string());
         self.validate_native_board(payload)?;
+        let next_rev = state.board_revision.saturating_add(1);
         let mut clean = payload.clone();
         let object = clean.as_object_mut().ok_or("bad_board")?;
         object.insert("clientId".into(), json!(from));
         object.insert("generation".into(), json!(generation));
         object.insert("eventSeq".into(), json!(event_seq));
-        object.insert("revision".into(), json!(1));
-        object.insert("initial".into(), json!(true));
+        object.insert("revision".into(), json!(next_rev));
+        object.insert("rev".into(), json!(next_rev));
+        object.insert("initial".into(), json!(false));
+        object.insert("baseRevision".into(), json!(base));
         object.insert("modeKey".into(), json!(mode_key));
         let state = self.native_relay.as_mut().ok_or("not_native_relay")?;
         state.last_event_seq.insert(from.to_string(), event_seq);
-        state.board_revision = 1;
-        state.board_ready = true;
-        state.mode_key = Some(mode_key.clone());
+        state.board_revision = next_rev;
         state.board_snapshot = Some(clean.clone());
-        // Pre-board poses establish seating only. They are not board-ready
-        // render state and may have been scraped before the canonical mode was
-        // available, so never replay them after revision 1.
-        state.poses.clear();
-        self.coop_snakes.clear();
         self.coop_collectables = Some(clean.clone());
+        self.maybe_store_coop_theme(from, &clean);
         self.push_broadcast(Envelope::new("COLLECTABLES_DELTA", clean));
-        self.push_broadcast(Envelope::new(
-            "COOP_BOARD_READY",
-            json!({
-                "generation": self.coop_generation,
-                "revision": 1,
-                "collectablesOwnerId": from,
-                "modeKey": mode_key,
-            }),
-        ));
         Ok(())
     }
 
@@ -1930,10 +2306,17 @@ impl Room {
             return Err("seat_not_seated".into());
         }
         if let Some(body) = payload.get("body") {
-            self.validate_native_body(body)?;
+            // Empty array means "no corpse body supplied" — use last pose.
+            if !body.as_array().is_some_and(|cells| cells.is_empty()) {
+                self.validate_native_body(body)?;
+            }
         }
         if let Some(body2) = payload.get("body2").filter(|v| !v.is_null()) {
-            self.validate_native_body(body2)?;
+            // Non-yin-yang deaths historically sent body2:[] which must not
+            // reject COOP_PLAYER_DEAD (peers never learned the seat was down).
+            if !body2.as_array().is_some_and(|cells| cells.is_empty()) {
+                self.validate_native_body(body2)?;
+            }
         }
         let reason = payload
             .get("reason")
@@ -1943,9 +2326,38 @@ impl Room {
         Ok(())
     }
 
-    fn cmd_coop_goal(&mut self, from: &str, _payload: &Value) -> Result<(), String> {
-        // Plan 1: all-apples is decided by the server sim, not clients.
-        let _ = from;
+    fn cmd_coop_goal(&mut self, from: &str, payload: &Value) -> Result<(), String> {
+        if self.mode != Mode::Coop || !self.session_active {
+            return Ok(());
+        }
+        if self.current_coop_authority() != CoopAuthority::NativeRelay {
+            // Server-sim decides ALL_APPLES itself
+            return Ok(());
+        }
+        if !self.coop_seated.get(from).copied().unwrap_or(false) {
+            return Err("seat_not_seated".into());
+        }
+        if !self
+            .native_relay
+            .as_ref()
+            .map(|s| s.board_ready)
+            .unwrap_or(false)
+        {
+            return Err("board_not_ready".into());
+        }
+        let reason = payload
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ALL_APPLES");
+        if reason != "ALL_APPLES" {
+            return Err("bad_goal_reason".into());
+        }
+        if let Some(gen) = payload.get("generation").and_then(|v| v.as_u64()) {
+            if gen != self.coop_generation {
+                return Err("stale_generation".into());
+            }
+        }
+        self.end_coop_session("ALL_APPLES");
         Ok(())
     }
 
@@ -3010,10 +3422,33 @@ mod tests {
         r.cmd_set_role("a", &json!({"clientId": "b", "role": "player"}))
             .unwrap();
         r.cmd_color_claim("a", &json!({"colorId": 0})).unwrap();
+        // Unready peers may share a pick; Ready locks it.
+        r.cmd_color_claim("b", &json!({"colorId": 0})).unwrap();
+        r.cmd_ready("a", &json!({"ready": true})).unwrap();
         assert_eq!(
             r.cmd_color_claim("b", &json!({"colorId": 0})).unwrap_err(),
             "color_taken"
         );
+    }
+
+    #[test]
+    fn coop_ready_bumps_color_held_by_ready_peer() {
+        let mut r = room();
+        r.join("a".into(), None, None).unwrap();
+        r.join("b".into(), None, None).unwrap();
+        r.cmd_mode_change("a", &json!({"mode": "coop"})).unwrap();
+        r.cmd_set_role("a", &json!({"clientId": "a", "role": "player"}))
+            .unwrap();
+        r.cmd_set_role("a", &json!({"clientId": "b", "role": "player"}))
+            .unwrap();
+        r.cmd_color_claim("a", &json!({"colorId": 0})).unwrap();
+        r.cmd_color_claim("b", &json!({"colorId": 0})).unwrap();
+        r.cmd_ready("a", &json!({"ready": true})).unwrap();
+        assert_eq!(r.clients.get("a").and_then(|c| c.color_id), Some(0));
+        r.cmd_ready("b", &json!({"ready": true})).unwrap();
+        assert_eq!(r.clients.get("a").and_then(|c| c.color_id), Some(0));
+        assert_eq!(r.clients.get("b").and_then(|c| c.color_id), Some(1));
+        assert!(r.clients.get("b").map(|c| c.ready).unwrap_or(false));
     }
 
     #[test]
@@ -3708,7 +4143,8 @@ mod tests {
     }
 
     #[test]
-    fn native_gate_freezes_authority_and_preserves_server_sim_default() {
+    fn native_gate_freezes_authority_and_preserves_room_new_server_sim() {
+        // Room::new() stays server-sim for unit tests; the binary defaults to native-relay.
         let mut normal = room();
         normal.join("a".into(), None, None).unwrap();
         normal
@@ -3743,6 +4179,28 @@ mod tests {
     }
 
     #[test]
+    fn native_coop_goal_all_apples_ends_session() {
+        let mut r = native_room(&["a", "b"]);
+        let generation = r.coop_generation;
+        r.take_outbox();
+        make_native_board_ready(&mut r, "a", 1, 2);
+        r.take_outbox();
+        r.cmd_coop_goal(
+            "a",
+            &json!({
+                "generation": generation,
+                "reason": "ALL_APPLES",
+            }),
+        )
+        .unwrap();
+        let out = r.take_outbox();
+        assert!(out.iter().any(|(_, e)| {
+            e.msg_type == "SESSION_END" && e.payload["reason"] == "ALL_APPLES"
+        }));
+        assert!(!r.session_active);
+    }
+
+    #[test]
     fn native_board_handshake_sequences_and_timer_are_server_owned() {
         let mut r = native_room(&["a", "b"]);
         let generation = r.coop_generation;
@@ -3773,21 +4231,60 @@ mod tests {
             .iter()
             .any(|(_, e)| e.msg_type == "COOP_BOARD_READY"));
         assert_eq!(r.native_relay.as_ref().unwrap().board_revision, 1);
+        // Runtime fruit from a seated player (initializer) after board_ready
+        r.cmd_collectables_delta(
+            "a",
+            &json!({
+                "generation": generation,
+                "eventSeq": 3,
+                "initial": false,
+                "baseRevision": 1,
+                "modeKey": "classic",
+                "collectables": [{"x": 5, "y": 5, "type": "apple"}],
+            }),
+        )
+        .unwrap();
+        assert_eq!(r.native_relay.as_ref().unwrap().board_revision, 2);
+        let runtime_out = r.take_outbox();
+        assert!(runtime_out
+            .iter()
+            .any(|(_, e)| e.msg_type == "COLLECTABLES_DELTA" && e.payload["initial"] == false));
+        assert!(!runtime_out
+            .iter()
+            .any(|(_, e)| e.msg_type == "COOP_BOARD_READY"));
+        // Seat peer b, then peer may also publish runtime fruit
+        r.cmd_snake_delta("b", &native_pose(generation, 1, 1, false))
+            .unwrap();
+        r.take_outbox();
+        r.cmd_collectables_delta(
+            "b",
+            &json!({
+                "generation": generation,
+                "eventSeq": 2,
+                "initial": false,
+                "baseRevision": 2,
+                "modeKey": "classic",
+                "collectables": [{"x": 6, "y": 6, "type": "apple"}],
+            }),
+        )
+        .unwrap();
+        assert_eq!(r.native_relay.as_ref().unwrap().board_revision, 3);
+        // Stale baseRevision rejected
         assert_eq!(
             r.cmd_collectables_delta(
                 "a",
                 &json!({
                     "generation": generation,
-                    "eventSeq": 3,
+                    "eventSeq": 4,
                     "initial": false,
                     "baseRevision": 1,
-                    "collectables": [],
+                    "collectables": [{"x": 1, "y": 1, "type": "apple"}],
                 }),
             )
             .unwrap_err(),
-            "runtime_board_updates_disabled"
+            "stale_board_revision"
         );
-        r.cmd_snake_delta("b", &native_pose(generation, 1, 1, true))
+        r.cmd_snake_delta("b", &native_pose(generation, 3, 2, true))
             .unwrap();
         let timer_out = r.take_outbox();
         assert_eq!(
@@ -3797,19 +4294,19 @@ mod tests {
                 .count(),
             1
         );
-        r.cmd_snake_delta("b", &native_pose(generation, 2, 2, true))
+        r.cmd_snake_delta("b", &native_pose(generation, 4, 3, true))
             .unwrap();
         assert!(!r
             .take_outbox()
             .iter()
             .any(|(_, e)| e.msg_type == "COOP_TIMER_START"));
         assert_eq!(
-            r.cmd_snake_delta("b", &native_pose(generation, 2, 3, true))
+            r.cmd_snake_delta("b", &native_pose(generation, 4, 5, true))
                 .unwrap_err(),
             "stale_event_seq"
         );
         assert_eq!(
-            r.cmd_snake_delta("b", &native_pose(generation, 3, 2, true))
+            r.cmd_snake_delta("b", &native_pose(generation, 5, 3, true))
                 .unwrap_err(),
             "stale_pose_seq"
         );
@@ -3858,6 +4355,34 @@ mod tests {
             1
         );
         assert!(!r.session_active);
+    }
+
+    #[test]
+    fn native_player_dead_accepts_empty_body2() {
+        let mut r = native_room(&["a", "b"]);
+        let generation = r.coop_generation;
+        make_native_board_ready(&mut r, "a", 1, 2);
+        // Seat B so only A dying does not end the match.
+        r.cmd_snake_delta("b", &native_pose(generation, 1, 1, true))
+            .unwrap();
+        r.take_outbox();
+        r.cmd_coop_player_dead(
+            "a",
+            &json!({
+                "generation": generation,
+                "eventSeq": 10,
+                "body": [{"x": 1, "y": 1}, {"x": 0, "y": 1}],
+                "body2": [],
+                "reason": "native",
+            }),
+        )
+        .expect("empty body2 must not reject death");
+        let out = r.take_outbox();
+        assert!(out.iter().any(|(_, e)| {
+            e.msg_type == "COOP_PLAYER_DEAD" && e.payload["clientId"] == "a"
+        }));
+        assert_eq!(r.coop_alive.get("a"), Some(&false));
+        assert_eq!(r.coop_alive.get("b"), Some(&true));
     }
 
     #[test]
@@ -4182,5 +4707,66 @@ mod tests {
         assert_eq!(pose.1.payload["turns"].as_array().unwrap().len(), 3);
         assert_eq!(pose.1.payload["turns"][2]["turnSeq"], 3);
         assert_eq!(r.native_relay.as_ref().unwrap().last_turn_seq["a"], 3);
+    }
+
+    #[test]
+    fn spectate_snapshot_race_includes_boards() {
+        let mut r = room();
+        r.join("admin".into(), Some("Host".into()), None).unwrap();
+        r.join("p1".into(), Some("Alice".into()), None).unwrap();
+        r.cmd_set_role("admin", &json!({"clientId": "p1", "role": "player"}))
+            .unwrap();
+        r.race_boards.insert(
+            "p1".into(),
+            json!({
+                "width": 17,
+                "height": 15,
+                "body": [{"x": 1, "y": 2}, {"x": 0, "y": 2}],
+                "dir": "RIGHT",
+                "apples": [{"x": 5, "y": 5}],
+                "score": 3,
+                "alive": true,
+            }),
+        );
+        let snap = r.spectate_snapshot();
+        assert_eq!(snap["mode"], "race");
+        assert!(snap["boards"]["p1"]["body"].as_array().unwrap().len() >= 2);
+        assert_eq!(snap["boards"]["p1"]["displayName"], "Alice");
+    }
+
+    #[test]
+    fn spectate_snapshot_coop_builds_shared_board() {
+        let mut r = Room::new_with_coop_native_relay("COOP".into(), true);
+        r.join("admin".into(), Some("Host".into()), None).unwrap();
+        r.join("p1".into(), Some("Bob".into()), None).unwrap();
+        r.cmd_mode_change("admin", &json!({"mode": "coop"})).unwrap();
+        r.cmd_set_role("admin", &json!({"clientId": "p1", "role": "player"}))
+            .unwrap();
+        r.session_active = true;
+        r.coop_authority = Some(CoopAuthority::NativeRelay);
+        r.coop_slots = vec!["p1".into()];
+        r.coop_alive.insert("p1".into(), true);
+        r.coop_snakes.insert(
+            "p1".into(),
+            json!({
+                "clientId": "p1",
+                "body": [{"x": 3, "y": 4}],
+                "dir": "UP",
+                "colorId": 4,
+                "alive": true,
+            }),
+        );
+        r.coop_collectables = Some(json!({
+            "apples": [{"x": 8, "y": 8, "type": 3}],
+            "modeKey": "classic",
+        }));
+        r.settings = json!({ "apple": 3 });
+        let snap = r.spectate_snapshot();
+        assert_eq!(snap["mode"], "coop");
+        assert!(snap["board"].is_object());
+        assert_eq!(snap["board"]["snakes"].as_array().unwrap().len(), 1);
+        assert_eq!(snap["board"]["apples"].as_array().unwrap().len(), 1);
+        assert_eq!(snap["board"]["apples"][0]["type"], 3);
+        assert_eq!(snap["board"]["appleIndex"], 3);
     }
 }

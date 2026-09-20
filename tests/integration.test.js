@@ -230,6 +230,51 @@ describe("ws integration", { timeout: 60000 }, () => {
     a.ws.close();
   });
 
+  it("coop READY bumps color when another ready player holds it", async () => {
+    const a = await wsClient();
+    send(a.ws, "HELLO", { create: true, displayName: "A" });
+    const welcome = await waitMsg(a.inbox, "WELCOME");
+    const room = welcome.payload.roomCode;
+    const idA = welcome.payload.clientId;
+
+    const b = await wsClient();
+    send(b.ws, "HELLO", { create: false, roomCode: room, displayName: "B" });
+    const welcomeB = await waitMsg(b.inbox, "WELCOME");
+    const idB = welcomeB.payload.clientId;
+
+    send(a.ws, "MODE_CHANGE", { mode: "coop" });
+    await waitMsg(a.inbox, "MODE_CHANGE");
+    send(a.ws, "SET_ROLE", { clientId: idA, role: "player" });
+    send(a.ws, "SET_ROLE", { clientId: idB, role: "player" });
+    await waitRosterWhere(a.inbox, (r) =>
+      r.clients.filter((c) => c.role === "player").length === 2
+    );
+
+    // Both unready may pick Blue; A ready locks it; B ready wraps to next.
+    send(a.ws, "COLOR_CLAIM", { colorId: 0 });
+    send(b.ws, "COLOR_CLAIM", { colorId: 0 });
+    await waitRosterWhere(b.inbox, (r) => {
+      const bb = r.clients.find((c) => c.clientId === idB);
+      return bb && bb.colorId === 0;
+    });
+    send(a.ws, "READY", { ready: true });
+    await waitRosterWhere(a.inbox, (r) => {
+      const me = r.clients.find((c) => c.clientId === idA);
+      return me && me.ready === true && me.colorId === 0;
+    });
+    send(b.ws, "READY", { ready: true });
+    const roster = await waitRosterWhere(b.inbox, (r) => {
+      const me = r.clients.find((c) => c.clientId === idB);
+      return me && me.ready === true && me.colorId != null && me.colorId !== 0;
+    });
+    const aClient = roster.clients.find((c) => c.clientId === idA);
+    const bClient = roster.clients.find((c) => c.clientId === idB);
+    assert.equal(aClient.colorId, 0, "A keeps Blue");
+    assert.equal(bClient.colorId, 1, "B wraps to next free");
+    a.ws.close();
+    b.ws.close();
+  });
+
   it("SETTINGS_SYNC fans out to peers", async () => {
     const a = await wsClient();
     send(a.ws, "HELLO", { create: true, displayName: "A" });
@@ -861,7 +906,7 @@ describe("ws integration", { timeout: 60000 }, () => {
     assert.ok(Array.isArray(delta.payload.body));
     assert.equal(delta.payload.alive, true);
 
-    // Plan 1 deliberately rejects all post-ready runtime fruit mutations.
+    // Runtime mid-match fruit from a seated player is accepted and broadcast.
     const runtimePublisher =
       startSpec.payload.collectablesOwnerId === aId ? a : b;
     runtimePublisher.inbox.length = 0;
@@ -873,19 +918,17 @@ describe("ws integration", { timeout: 60000 }, () => {
       relayPayload(runtimePublisher.ws, generation, {
         initial: false,
         baseRevision: 1,
+        modeKey: "classic",
         collectables: [{ x: 9, y: 9, type: 0 }],
         apples: [{ x: 9, y: 9, type: 0 }],
       })
     );
-    const rejected = await waitMsg(runtimePublisher.inbox, "ERROR", 8000);
-    assert.match(
-      String(rejected.payload.code || rejected.payload.message || ""),
-      /runtime_board_updates_disabled|initial_board_required/
-    );
-    await new Promise((r) => setTimeout(r, 100));
-    assert.equal(
-      spec.inbox.filter((m) => m.type === "COLLECTABLES_DELTA").length,
-      0
+    const runtimeDelta = await waitMsg(spec.inbox, "COLLECTABLES_DELTA", 8000);
+    assert.equal(runtimeDelta.payload.initial, false);
+    assert.equal(runtimeDelta.payload.revision, 2);
+    assert.ok(
+      Array.isArray(runtimeDelta.payload.collectables) ||
+        Array.isArray(runtimeDelta.payload.apples)
     );
 
     // End match then late pose — server must not ERROR(not_coop_session)

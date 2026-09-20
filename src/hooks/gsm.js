@@ -185,8 +185,121 @@
   }
 
   /**
+   * Write size index onto the live engine settings object Play reads when baking.
+   * Menu size lives in `settings.Sa`; Play's Ma() does `Aa = Sa` then Sna() bakes
+   * from `Aa` (0→17×15, 1→10×9, 2→24×21). Writing only Aa is useless — Ma overwrites
+   * it from a stale Sa. Always set both.
+   */
+  function forceEngineSizeForPlay(sizeIndex) {
+    const idx = Number(sizeIndex);
+    if (!Number.isFinite(idx) || idx < 0) return false;
+    let wrote = false;
+    function writeOn(settings) {
+      if (!settings || typeof settings !== "object") return;
+      try {
+        settings.Sa = idx;
+        settings.Aa = idx;
+        wrote = true;
+      } catch (e) { /* ignore */ }
+    }
+    try {
+      const g = gameInstance();
+      if (g) writeOn(g.settings);
+    } catch (eG) { /* ignore */ }
+    try {
+      writeOn(root.__mpGame && root.__mpGame.settings);
+      writeOn(root.__remixGame && root.__remixGame.settings);
+    } catch (eR) { /* ignore */ }
+    try {
+      const hosts = [
+        root.megaWholeSnakeObject,
+        root.wholeSnakeObject,
+        root.__mpSettingsHost,
+      ];
+      for (let i = 0; i < hosts.length; i++) {
+        const h = hosts[i];
+        if (h) writeOn(h.settings || h);
+      }
+    } catch (eH) { /* ignore */ }
+    // Menu controller often holds the settings object Play's Ma() copies from
+    try {
+      const menu = root._puddingSnakeMenu;
+      if (menu && menu.settings) writeOn(menu.settings);
+    } catch (eM) { /* ignore */ }
+    try {
+      const saved =
+        root.pudding_settings && root.pudding_settings.SavedGameSettings;
+      if (saved && typeof saved === "object") saved.size = idx;
+    } catch (eS) { /* ignore */ }
+    return wrote;
+  }
+
+  /**
+   * Mirror menu→bake dual fields the same way Play's Ma() does:
+   * size Sa→Aa, count Ca→ka, speed Oa→yb, trophy/mode ob→ub.
+   */
+  function forceEngineMatchFieldsForPlay(settings) {
+    if (!settings || typeof settings !== "object") return false;
+    let wrote = false;
+    function writeOn(host) {
+      if (!host || typeof host !== "object") return;
+      try {
+        if (settings.size != null && Number.isFinite(Number(settings.size))) {
+          const idx = Number(settings.size) | 0;
+          host.Sa = idx;
+          host.Aa = idx;
+          wrote = true;
+        }
+        if (settings.count != null && Number.isFinite(Number(settings.count))) {
+          const idx = Number(settings.count) | 0;
+          host.Ca = idx;
+          host.ka = idx;
+          wrote = true;
+        }
+        if (settings.speed != null && Number.isFinite(Number(settings.speed))) {
+          const idx = Number(settings.speed) | 0;
+          host.Oa = idx;
+          host.yb = idx;
+          wrote = true;
+        }
+        if (settings.trophy != null && Number.isFinite(Number(settings.trophy))) {
+          const idx = Number(settings.trophy) | 0;
+          host.ob = idx;
+          host.ub = idx;
+          wrote = true;
+        }
+      } catch (e) { /* ignore */ }
+    }
+    const hosts = [];
+    try {
+      const g = gameInstance();
+      if (g && g.settings) hosts.push(g.settings);
+    } catch (eG) { /* ignore */ }
+    try {
+      if (root.__mpGame && root.__mpGame.settings) hosts.push(root.__mpGame.settings);
+      if (root.__remixGame && root.__remixGame.settings) {
+        hosts.push(root.__remixGame.settings);
+      }
+    } catch (eR) { /* ignore */ }
+    try {
+      [
+        root.megaWholeSnakeObject,
+        root.wholeSnakeObject,
+        root.__mpSettingsHost,
+        root._puddingSnakeMenu,
+      ].forEach(function (h) {
+        if (h && h.settings) hosts.push(h.settings);
+        else if (h && ("Sa" in h || "Aa" in h)) hosts.push(h);
+      });
+    } catch (eH) { /* ignore */ }
+    for (let i = 0; i < hosts.length; i++) writeOn(hosts[i]);
+    if (settings.size != null) forceEngineSizeForPlay(settings.size);
+    return wrote;
+  }
+
+  /**
    * Force match rules (trophy/count/speed/size) into the live menu for Play.
-   * Play bakes W/H from settings size index (Ua→Aa) — must be correct before
+   * Play bakes W/H from settings size index (Aa) — must be correct before
    * the first NSjDf click. Ignores __mpStartingMatch quiet-only path.
    */
   function forceMatchSettingsForPlay(settings) {
@@ -202,6 +315,10 @@
         if (Number.isNaN(idx)) continue;
         selectMenu(key, idx);
       }
+      if (settings.size != null) {
+        forceEngineSizeForPlay(settings.size);
+      }
+      forceEngineMatchFieldsForPlay(settings);
       // Persist so a later settings restore cannot re-bake Standard
       try {
         const saved =
@@ -322,12 +439,163 @@
     return ok || opened || settingsMatchLocal(settings);
   }
 
+  /**
+   * Stock face atlases are baked once via a7("#5282F2", Sc) at Play. Mid-run
+   * Ready bumps that only stamp snake.Sc leave the eye-ring / cheek sprites on
+   * the old tint — recolor those hosts whenever the live claimable color moves.
+   */
+  const FACE_SPRITE_BASE = "#5282F2";
+
+  function normalizeHex(hex) {
+    if (typeof hex !== "string" || !hex) return null;
+    let s = hex.trim();
+    if (s.charAt(0) !== "#") s = "#" + s;
+    if (s.length === 4) {
+      s =
+        "#" +
+        s.charAt(1) +
+        s.charAt(1) +
+        s.charAt(2) +
+        s.charAt(2) +
+        s.charAt(3) +
+        s.charAt(3);
+    }
+    return s.toUpperCase();
+  }
+
+  /**
+   * Face sprite sheets live on P5E (blink/eat/die/…). X5E stores that as
+   * `.Ga` and sets `window.__slotFaceRef`; alterSnake hooks wrap P5E itself
+   * via `__mpCoopRenderEnter`, so the "renderer" may already BE P5E.
+   */
+  function resolveFaceSheetRoot(renderer) {
+    if (root.__slotFaceRef && root.__slotFaceRef.oa) return root.__slotFaceRef;
+    const r = renderer || root.__mpCoopPlayerRenderer;
+    if (r && r.oa && r.Aa && r.wb) return r;
+    if (r && r.Ga && r.Ga.oa && r.Ga.Aa) return r.Ga;
+    return null;
+  }
+
+  function playerFaceGa(renderer) {
+    return resolveFaceSheetRoot(renderer);
+  }
+
+  function resolvePlayerRenderer() {
+    return root.__mpCoopPlayerRenderer || null;
+  }
+
+  function faceSheetHosts(faceRoot) {
+    if (!faceRoot) return [];
+    return [
+      faceRoot.oa,
+      faceRoot.Aa,
+      faceRoot.Ba,
+      faceRoot.Ga,
+      faceRoot.Ma,
+      faceRoot.Ja,
+      faceRoot.Sa,
+      faceRoot.Qa,
+      faceRoot.wa,
+      faceRoot.Oa,
+      faceRoot.Ka,
+    ].filter(Boolean);
+  }
+
+  function recolorFaceHosts(Ga, fromHex, toHex) {
+    const a7 = root.__slotA7;
+    if (typeof a7 !== "function" || !Ga) return false;
+    const from = normalizeHex(fromHex);
+    const to = normalizeHex(toHex);
+    if (!from || !to || from === to) return from === to;
+    const hosts = faceSheetHosts(Ga);
+    let any = false;
+    for (let i = 0; i < hosts.length; i++) {
+      try {
+        a7(hosts[i], from, to);
+        any = true;
+      } catch (eA7) {
+        /* sprite host may still be loading */
+      }
+    }
+    return any;
+  }
+
+  /**
+   * Retint PlayerRenderer face sprites to `toHex`. Tries the tracked tint, the
+   * previous Sc, and the stock base so default-blue (untinted atlas) Ready bumps
+   * still recolor the eye ring.
+   */
+  function tintLiveFaceSprites(toHex, fromHints, renderer) {
+    const to = normalizeHex(toHex);
+    if (!to) return false;
+    const Ga = playerFaceGa(renderer || resolvePlayerRenderer());
+    if (!Ga) return false;
+    const hints = [];
+    function pushHint(h) {
+      const n = normalizeHex(h);
+      if (!n || hints.indexOf(n) >= 0) return;
+      hints.push(n);
+    }
+    pushHint(root.__mpFaceTintSc);
+    if (fromHints) {
+      for (let i = 0; i < fromHints.length; i++) pushHint(fromHints[i]);
+    }
+    pushHint(FACE_SPRITE_BASE);
+    let any = false;
+    for (let i = 0; i < hints.length; i++) {
+      if (hints[i] === to) continue;
+      if (recolorFaceHosts(Ga, hints[i], to)) any = true;
+    }
+    root.__mpFaceTintSc = to;
+    return any;
+  }
+
   function applySnakeColor(colorId) {
     if (colorId == null || colorId === 46) return false;
     root.__mpApplyingColor = true;
     let ok = false;
     try {
       ok = selectMenu("color", Number(colorId));
+      // Mid-run / post-Ready bumps: menu select alone may not repaint the live
+      // snake — stamp Sc/Yc from the claimable palette onto the engine snake.
+      try {
+        const Colors = root.MultiplayerColors;
+        const c =
+          Colors && Colors.getColor ? Colors.getColor(Number(colorId)) : null;
+        const g = gameInstance && gameInstance();
+        const snake = g && g.oa;
+        if (snake && c) {
+          const prevSc = snake.Sc;
+          if (c.kind === "rainbow" && c.set && c.set.length) {
+            snake.Sc = c.set[0];
+            snake.Yc = c.set[1] || c.set[0];
+          } else if (c.primary) {
+            snake.Sc = c.primary;
+            snake.Yc = c.secondary || c.primary;
+          }
+          const cfg = g.snakeBodyConfig;
+          if (cfg) {
+            if (snake.Sc) cfg.color2 = cfg.primary = snake.Sc;
+            if (snake.Yc) cfg.color1 = cfg.secondary = snake.Yc;
+          }
+          // Keep settings.wa in sync so stock paths that read the color index
+          // (and future Play restarts) match the Ready-claimed id.
+          const settings = g.settings;
+          if (settings && colorId != null) {
+            const id = Number(colorId);
+            if (Number.isFinite(id)) {
+              if ("wa" in settings) settings.wa = id;
+              if ("Ja" in settings) settings.Ja = id;
+              if ("Jb" in settings) settings.Jb = id;
+              if ("kc" in settings) settings.kc = id;
+            }
+          }
+          tintLiveFaceSprites(snake.Sc, [prevSc, FACE_SPRITE_BASE]);
+          ok = true;
+        }
+      } catch (eStamp) {
+        /* ignore stamp failures — menu select may still have worked */
+      }
     } finally {
       setTimeout(function () {
         root.__mpApplyingColor = false;
@@ -448,6 +716,441 @@
     return true;
   }
 
+  /**
+   * Classic apple reset (`aT`): base (floor(3w/4), floor(h/2)).
+   * Mirrors server/src/coop.rs classic_initial_fruit + Tally (index 6 = 5a stock).
+   */
+  function classicInitialFruit(width, height, countIndex) {
+    const w = Number(width) | 0;
+    const h = Number(height) | 0;
+    const idx = Number(countIndex);
+    if (!(w > 0) || !(h > 0)) return [];
+    const baseX = Math.floor((3 * w) / 4);
+    const baseY = Math.floor(h / 2);
+    function at(dx, dy) {
+      return { x: baseX + dx, y: baseY + dy };
+    }
+    const ci = Number.isFinite(idx) && idx >= 0 ? idx | 0 : 0;
+    if (ci === 0 || ci === 4 || ci === 5) return [at(0, 0)];
+    if (ci === 1) return [at(0, 0), at(-2, -2), at(-2, 2)];
+    if (ci === 2 || ci === 3 || ci === 6) {
+      // 5a / Tally / 10a core — shift left like desktop Classic stock
+      const pts = [at(0, 0), at(-2, -2), at(-2, 2), at(2, -2), at(2, 2)];
+      const shift = w >= 20 ? 2 : 1;
+      for (let i = 0; i < pts.length; i++) pts[i].x -= shift;
+      return pts;
+    }
+    return [at(0, 0)];
+  }
+
+  function matchAppleType() {
+    let t = readSettingIndex("apple");
+    if (t == null && root.__mpCoopPlaySettings && root.__mpCoopPlaySettings.apple != null) {
+      t = root.__mpCoopPlaySettings.apple;
+    }
+    if (t == null && root.__mpMatchPlaySettings && root.__mpMatchPlaySettings.apple != null) {
+      t = root.__mpMatchPlaySettings.apple;
+    }
+    t = Number(t);
+    return Number.isFinite(t) && t >= 0 ? t | 0 : 0;
+  }
+
+  /**
+   * Ensure g.wa.ka exists with at least one Od-like template so clones work.
+   * Does not leave a (0,0) apple as the final board — plantClassicInitialFruit replaces.
+   */
+  function ensureFruitHostTemplate(g) {
+    g = g || gameInstance();
+    if (!g) return false;
+    try {
+      if (!g.wa) g.wa = {};
+      if (!Array.isArray(g.wa.ka)) g.wa.ka = [];
+      for (let i = 0; i < g.wa.ka.length; i++) {
+        const a = g.wa.ka[i];
+        if (a && a.pos && typeof a.pos.clone === "function") return true;
+      }
+      let pos = null;
+      if (root._ && typeof root._.Od === "function") {
+        try {
+          pos = new root._.Od(-1, -1);
+        } catch (eOd) {
+          pos = null;
+        }
+      }
+      if (!pos || typeof pos.clone !== "function") {
+        pos = {
+          x: -1,
+          y: -1,
+          clone: function () {
+            return { x: this.x, y: this.y, clone: this.clone };
+          },
+        };
+      }
+      g.wa.ka.push({ pos: pos, type: matchAppleType() });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
+   * Plant Classic aT fruit for the live Count index (all modes incl. Tally).
+   * Replaces dummy templates. Sets admin apple type + tally sequenceNumbers.
+   */
+  function plantClassicInitialFruit(gIn) {
+    if (root.__mpCoopServerAuth) return false;
+    const g = gIn || gameInstance();
+    if (!g) return false;
+    if (!ensureFruitHostTemplate(g)) return false;
+    const live = boardSizeFromGame(g) || {};
+    const w = Number(live.width) | 0;
+    const h = Number(live.height) | 0;
+    if (!(w > 0) || !(h > 0)) return false;
+    let countIdx = readSettingIndex("count");
+    if (countIdx == null && root.__mpCoopPlaySettings) {
+      countIdx = root.__mpCoopPlaySettings.count;
+    }
+    countIdx = Number(countIdx);
+    if (!Number.isFinite(countIdx) || countIdx < 0) countIdx = 0;
+    countIdx = countIdx | 0;
+    const appleType = matchAppleType();
+    let pts = classicInitialFruit(w, h, countIdx);
+    // 10a: fill to 10 free cells after 5a stock
+    const want =
+      countIdx === 3
+        ? 10
+        : countIdx === 6
+          ? 5
+          : countIdx === 1
+            ? 3
+            : countIdx === 2
+              ? 5
+              : 1;
+    const occ = coopOccupiedCells(g);
+    // Clear snake marks from occ for fruit plant — only walls matter for stock
+    // (snakes already seated; skip occupied)
+    const placed = [];
+    for (let i = 0; i < pts.length && placed.length < want; i++) {
+      const p = pts[i];
+      if (!p) continue;
+      const key = (p.x | 0) + "," + (p.y | 0);
+      if (p.x < 0 || p.y < 0 || p.x >= w || p.y >= h) continue;
+      if (occ[key]) continue;
+      placed.push({ x: p.x | 0, y: p.y | 0 });
+      occ[key] = 1;
+    }
+    while (placed.length < want) {
+      let found = null;
+      for (let y = 0; y < h && !found; y++) {
+        for (let x = 0; x < w; x++) {
+          if (!occ[x + "," + y]) {
+            found = { x: x, y: y };
+            break;
+          }
+        }
+      }
+      if (!found) break;
+      placed.push(found);
+      occ[found.x + "," + found.y] = 1;
+    }
+    if (!placed.length) return false;
+    let template = null;
+    for (let t = 0; t < g.wa.ka.length; t++) {
+      if (g.wa.ka[t] && g.wa.ka[t].pos && typeof g.wa.ka[t].pos.clone === "function") {
+        template = g.wa.ka[t];
+        break;
+      }
+    }
+    g.wa.ka.length = 0;
+    for (let i = 0; i < placed.length; i++) {
+      const fruit = {};
+      if (template) {
+        try {
+          Object.keys(template).forEach(function (k) {
+            if (
+              k === "pos" ||
+              k === "He" ||
+              k === "CAb" ||
+              k === "iL" ||
+              k === "nba" ||
+              k === "Oba" ||
+              k === "sequenceNumber"
+            ) {
+              return;
+            }
+            fruit[k] = template[k];
+          });
+        } catch (eC) { /* ignore */ }
+      }
+      fruit.pos = makeNativePoint(
+        placed[i].x,
+        placed[i].y,
+        template && template.pos
+      );
+      fruit.type = appleType;
+      if (fruit.nba == null) fruit.nba = new Set();
+      if (countIdx === 6) {
+        fruit.sequenceNumber = i + 1;
+        fruit.Lh = (i + 1) % 2 === 1;
+      }
+      g.wa.ka.push(fruit);
+    }
+    try {
+      if (countIdx === 6 && typeof root.retallyAllPlacedApples === "function") {
+        root.retallyAllPlacedApples();
+      }
+    } catch (eTall) { /* ignore */ }
+    return g.wa.ka.length > 0;
+  }
+
+  /**
+   * When Ma()/Sna() never ran (Play path skipped), stamp live board dims so
+   * boardSizeFromGame matches settings.size (Small→10×9).
+   */
+  function forceLiveBoardDims(sizeIndex) {
+    const dims = boardDimsForSizeIndex(sizeIndex);
+    if (!dims || !(dims.width > 0) || !(dims.height > 0)) return false;
+    forceEngineSizeForPlay(sizeIndex);
+    const g = gameInstance();
+    if (!g) return false;
+    let wrote = false;
+    function stampOrReplace(holder, key) {
+      if (!holder) return;
+      try {
+        const meta = holder[key];
+        if (meta && typeof meta === "object") {
+          try {
+            meta.width = dims.width;
+            meta.height = dims.height;
+            wrote = true;
+          } catch (eAssign) {
+            /* fall through to replace */
+          }
+        }
+        if (
+          !meta ||
+          Number(meta.width) !== dims.width ||
+          Number(meta.height) !== dims.height
+        ) {
+          if (root._ && typeof root._.Vd === "function") {
+            holder[key] = new root._.Vd(dims.width, dims.height);
+          } else {
+            holder[key] = { width: dims.width, height: dims.height };
+          }
+          wrote = true;
+        }
+      } catch (e) { /* ignore */ }
+    }
+    try {
+      if (g.oa) stampOrReplace(g.oa, "oa");
+      if (g.wa && g.wa.oa) stampOrReplace(g.wa.oa, "oa");
+      if (g.wa) stampOrReplace(g.wa, "oa");
+      if (g.wb && g.wb.ka) stampOrReplace(g.wb.ka, "oa");
+      if (g.ka) stampOrReplace(g.ka, "oa");
+      // Wall grid often drives boardSizeFromGame fallback — resize to match
+      if (g.Ca && Array.isArray(g.Ca.wa)) {
+        const next = [];
+        for (let y = 0; y < dims.height; y++) {
+          next[y] = [];
+          for (let x = 0; x < dims.width; x++) {
+            next[y][x] =
+              g.Ca.wa[y] && g.Ca.wa[y][x] != null ? g.Ca.wa[y][x] : 0;
+          }
+        }
+        g.Ca.wa = next;
+        wrote = true;
+      }
+    } catch (eG) { /* ignore */ }
+    const live = boardSizeFromGame(g);
+    if (
+      live &&
+      live.width === dims.width &&
+      live.height === dims.height
+    ) {
+      try {
+        root.__mpForceLiveBoardDims = dims.width + "x" + dims.height;
+      } catch (eFlag) { /* ignore */ }
+      // Ma/Sna skipped — plant Classic aT so owner scrape is not empty/(0,0)
+      try {
+        plantClassicInitialFruit(g);
+      } catch (eFruit) { /* ignore */ }
+      try {
+        root.__mpForceLiveBoardDims = dims.width + "x" + dims.height;
+        // Last-resort visual: shrink cell when still on Standard-ish tiles
+        const cellHost =
+          (g.wb && g.wb.ka) || g.ka || (g.oa && g.oa.wb && g.oa.wb.ka) || null;
+        if (cellHost && typeof cellHost === "object" && sizeIndex === 1) {
+          const cur = Number(cellHost.ka);
+          // Standard tiles are typically larger; Small Sna uses ~area/96
+          if (Number.isFinite(cur) && cur > 40) {
+            cellHost.ka = Math.max(24, Math.round(cur * (96 / 256)));
+            wrote = true;
+          }
+        }
+      } catch (eCell) { /* ignore */ }
+      return true;
+    }
+    return !!wrote;
+  }
+
+  /**
+   * Find the native controller that owns Ma()/Sna() and force a size bake.
+   * Play's button path sometimes skips Ma when the multiplayer chrome owns the
+   * click — calling Ma (then Sna if needed) after stamping Sa/Aa is the path.
+   */
+  function findPlayController() {
+    if (
+      root.__mpPlayController &&
+      typeof root.__mpPlayController.Ma === "function" &&
+      root.__mpPlayController.settings
+    ) {
+      return root.__mpPlayController;
+    }
+    const seen = typeof WeakSet !== "undefined" ? new WeakSet() : null;
+    const queue = [];
+    function enqueue(o) {
+      if (!o || typeof o !== "object") return;
+      try {
+        if (seen) {
+          if (seen.has(o)) return;
+          seen.add(o);
+        }
+      } catch (eSeen) {
+        return;
+      }
+      queue.push(o);
+    }
+    enqueue(root.__mpPlayController);
+    enqueue(root._puddingSnakeMenu);
+    enqueue(root.megaWholeSnakeObject);
+    enqueue(root.wholeSnakeObject);
+    enqueue(root.__mpGame);
+    enqueue(root.__remixGame);
+    try {
+      const keys = Object.keys(root);
+      for (let i = 0; i < keys.length && i < 120; i++) {
+        const k = keys[i];
+        if (!k || k.indexOf("__") === 0 && k.indexOf("__mp") !== 0 && k.indexOf("__remix") !== 0) {
+          /* still enqueue common hosts */
+        }
+        try {
+          const v = root[k];
+          if (v && typeof v === "object" && typeof v.Ma === "function") enqueue(v);
+        } catch (eK) { /* ignore */ }
+      }
+    } catch (eWin) { /* ignore */ }
+    try {
+      const g = gameInstance();
+      enqueue(g);
+      if (g) {
+        enqueue(g.wb);
+        enqueue(g.menu);
+      }
+    } catch (eG) { /* ignore */ }
+    try {
+      const menu = root._puddingSnakeMenu;
+      if (menu) {
+        enqueue(menu.wb);
+        enqueue(menu.oa);
+        enqueue(menu.controller);
+        enqueue(menu.game);
+      }
+    } catch (eMenu) { /* ignore */ }
+    let found = null;
+    let withSna = null;
+    for (let i = 0; i < queue.length && i < 128; i++) {
+      const o = queue[i];
+      try {
+        if (
+          o &&
+          typeof o.Ma === "function" &&
+          o.settings &&
+          typeof o.settings === "object"
+        ) {
+          if (!found) found = o;
+          if (typeof o.Sna === "function") {
+            withSna = o;
+            break;
+          }
+        }
+        if (o) {
+          enqueue(o.wb);
+          enqueue(o.menu);
+          enqueue(o.oa);
+          enqueue(o.Ha);
+          enqueue(o.controller);
+          enqueue(o.game);
+          enqueue(o.parent);
+        }
+      } catch (eWalk) { /* ignore */ }
+    }
+    const pick = withSna || found;
+    if (pick) {
+      try {
+        root.__mpPlayController = pick;
+      } catch (eCap) { /* ignore */ }
+    }
+    return pick;
+  }
+
+  function forceNativePlayBake(settings) {
+    if (settings) {
+      forceMatchSettingsForPlay(settings);
+      forceEngineMatchFieldsForPlay(settings);
+    }
+    const want =
+      settings && settings.size != null ? Number(settings.size) | 0 : null;
+    const found = findPlayController();
+    if (!found) return false;
+    try {
+      if (want != null) {
+        found.settings.Sa = want;
+        found.settings.Aa = want;
+        forceEngineSizeForPlay(want);
+      }
+      root.__mpForceSaBeforeAa = 1;
+      try {
+        root.__mpPlayController = found;
+      } catch (eCap) { /* ignore */ }
+      let ranSna = false;
+      try {
+        found.Ma();
+      } catch (eMa) {
+        console.warn("[Multiplayer] forceNativePlayBake Ma failed", eMa);
+      }
+      // Ma may no-op if chrome gate still closed — call Sna directly after Aa stamp
+      const liveOk =
+        want == null ||
+        (typeof liveBoardMatchesSettings === "function" &&
+          liveBoardMatchesSettings(
+            settings || { size: want }
+          ));
+      if (!liveOk && typeof found.Sna === "function") {
+        try {
+          found.settings.Aa = want != null ? want : found.settings.Sa;
+          found.Sna();
+          ranSna = true;
+          root.__mpForceSnaRan = 1;
+        } catch (eSna) {
+          console.warn("[Multiplayer] forceNativePlayBake Sna failed", eSna);
+        }
+      } else if (liveOk) {
+        root.__mpForceSnaRan = root.__mpForceSnaRan || 1;
+        ranSna = true;
+      }
+      return !!(
+        liveOk ||
+        ranSna ||
+        (want != null &&
+          found.settings &&
+          Number(found.settings.Aa) === want)
+      );
+    } catch (eAll) {
+      console.warn("[Multiplayer] forceNativePlayBake failed", eAll);
+      return false;
+    }
+  }
+
   /** Close menus; do NOT force-show death (inline styles trap the endscreen). */
   function prepareNativePlay() {
     closeSettingsPanel();
@@ -472,11 +1175,18 @@
     const onDone = typeof opts.onDone === "function" ? opts.onDone : null;
     const requirePlayClick = opts.requirePlayClick === true;
     const deferTimer = opts.deferTimer === true;
+    const keepSettingsOpen = opts.keepSettingsOpen === true;
     const gen = (root.__mpStartNativeRunGen = (root.__mpStartNativeRunGen | 0) + 1);
     root.__mpStartingMatch = true;
     root.__mpApplySettingsGen = (root.__mpApplySettingsGen || 0) + 1;
     if (requirePlayClick) root.__mpFocusRequirePlay = true;
-    prepareNativePlay();
+    if (keepSettingsOpen) {
+      clearDeathOverlayOverrides();
+      setLocalPaused(false);
+      syncCurrentModeNum(readSettingIndex("trophy"));
+    } else {
+      prepareNativePlay();
+    }
     if (typeof installFirstRunControlTipGuard === "function") {
       installFirstRunControlTipGuard();
     } else {
@@ -517,8 +1227,25 @@
         const needClick =
           !isNativeRunLive() || (requirePlayClick && playClicks < 1);
         if (needClick) {
-          closeSettingsPanel();
+          if (!keepSettingsOpen) closeSettingsPanel();
           clearDeathOverlayOverrides();
+          // Re-stamp Sa/Aa (etc.) immediately before Play — Ma() copies Sa→Aa
+          try {
+            const forceSettings =
+              root.__mpCoopPlaySettings || root.__mpMatchPlaySettings;
+            if (
+              forceSettings &&
+              typeof forceEngineMatchFieldsForPlay === "function"
+            ) {
+              forceEngineMatchFieldsForPlay(forceSettings);
+            } else if (
+              forceSettings &&
+              forceSettings.size != null &&
+              typeof forceEngineSizeForPlay === "function"
+            ) {
+              forceEngineSizeForPlay(forceSettings.size);
+            }
+          } catch (eSz) { /* ignore */ }
           if (triggerPlay()) playClicks++;
           // After several clicks, force-clear dead flag if Play didn't (some skins)
           if (attempts >= 8 && root.timeKeeper && root.timeKeeper._dead) {
@@ -535,10 +1262,13 @@
         }
       } catch (e) { /* ignore */ }
       // Same-turn seat as soon as Play creates oa — before rAF paints center.
+      // Native-relay uses the same hook (visual paint ± hard lock); not server-auth only.
       if (
-        root.__mpCoopServerAuth &&
         isNativeRunLive() &&
-        typeof root.__mpCoopSeatOnPlayLive === "function"
+        typeof root.__mpCoopSeatOnPlayLive === "function" &&
+        (root.__mpCoopServerAuth ||
+          root.__mpCoopInject ||
+          root.__mpCoopSession)
       ) {
         try {
           root.__mpCoopSeatOnPlayLive();
@@ -601,11 +1331,15 @@
     let alive = true;
     let timeMs = 0;
     if (g) {
-      score = firstNumber(g.Sh, g.Oh, g.score, g.appleCount);
+      score = firstNumber(g.Sh, g.Oh, g.score, g.appleCount) | 0;
       if (g.nj || g.dead || g.isDead) alive = false;
     }
     if (root.timeKeeper) {
-      if (typeof root.timeKeeper._lastScore === "number") score = root.timeKeeper._lastScore;
+      // Co-op blocks TK gotApple sampling, so _lastScore can stick at 0 while
+      // g.Sh advances — never let a stale TK sample wipe the live engine score.
+      if (typeof root.timeKeeper._lastScore === "number") {
+        score = Math.max(score, root.timeKeeper._lastScore | 0);
+      }
       if (typeof root.timeKeeper._lastTimeMs === "number") timeMs = root.timeKeeper._lastTimeMs;
       if (root.timeKeeper._dead) alive = false;
       if (typeof root.timeKeeper.lastAppleTime === "number") {
@@ -1162,7 +1896,8 @@
 
   /** Every fruit nba must be a real Set (or absent). Plain {} / arrays crash
    * freePos / eat as "a.has is not a function". Null is also unsafe on
-   * some stock paths — normalize to Set.
+   * some stock paths — normalize to Set. Also repair apple.pos.clone for
+   * L3E.render after co-op freePos returns plain {x,y}.
    */
   function ensureFruitShieldSets(g) {
     try {
@@ -1173,10 +1908,13 @@
         if (!a) continue;
         if (a.nba == null) {
           a.nba = new Set();
-          continue;
-        }
-        if (typeof a.nba.has !== "function") {
+        } else if (typeof a.nba.has !== "function") {
           a.nba = Array.isArray(a.nba) ? new Set(a.nba) : new Set();
+        }
+        if (a.pos != null && typeof a.pos.clone !== "function") {
+          const px = a.pos.x != null ? a.pos.x : 0;
+          const py = a.pos.y != null ? a.pos.y : 0;
+          a.pos = makeNativePoint(px, py, null);
         }
       }
     } catch (e) { /* ignore */ }
@@ -1633,6 +2371,44 @@
       const dir = normalizePoseDirection(candidates[i]);
       if (dir) return dir;
     }
+    return null;
+  }
+
+  /** Face angle field (P5E reads oa.Ca for head sprite rotation). */
+  function readNativeFaceDirection(snake) {
+    if (!snake) return null;
+    if (typeof snake.Ca === "string") {
+      const d = normalizePoseDirection(snake.Ca);
+      if (d) return d;
+    }
+    return readNativeDirection(snake);
+  }
+
+  /** Turn-lerp source (P5E reads oa.Ga, else oa.direction). */
+  function readNativeTransitionDirection(snake) {
+    if (!snake) return null;
+    if (typeof snake.Ga === "string") {
+      const d = normalizePoseDirection(snake.Ga);
+      if (d && d !== "NONE") return d;
+    }
+    return (
+      normalizePoseDirection(snake.direction || snake.dir) ||
+      readNativeFaceDirection(snake)
+    );
+  }
+
+  /** Infer facing from head→neck when scrape fields lag a tick. */
+  function inferDirectionFromBody(body) {
+    if (!body || body.length < 2) return null;
+    const h = body[0];
+    const n = body[1];
+    if (!h || !n) return null;
+    const dx = (h.x | 0) - (n.x | 0);
+    const dy = (h.y | 0) - (n.y | 0);
+    if (dx === 1 && dy === 0) return "RIGHT";
+    if (dx === -1 && dy === 0) return "LEFT";
+    if (dx === 0 && dy === 1) return "DOWN";
+    if (dx === 0 && dy === -1) return "UP";
     return null;
   }
 
@@ -3415,13 +4191,8 @@
   /**
    * Remix "Distinct Soko Goals" (`pudding_settings.SokoGoals`, on by default)
    * swaps the box sheet for one whose goal frames are red-on-white instead of
-   * theme-tinted green. Same 1024×128 eight-frame layout and the box frames are
-   * untouched, so only the goal draw needs the alternate URL.
+   * theme-tinted green. Prefer Remix's embedded data: images (no postimg).
    */
-  const SOKO_GOAL_DISTINCT_URL =
-    "https://i.postimg.cc/x11nt4Pb/box-distinct-soko-goals.png";
-  const SOKO_GOAL_DISTINCT_PX_URL =
-    "https://i.postimg.cc/NFnWqP35/px-box-red.png";
   const SOKO_GOAL_FALLBACK = "rgba(255,220,80,0.9)";
   const SOKO_GOAL_DISTINCT_FALLBACK = "rgba(244,67,54,0.95)";
 
@@ -3434,22 +4205,169 @@
     return true;
   }
 
+  /** Remix-bundled distinct goal sheet (data: URL) or null. */
+  function remixDistinctSokoGoalSrc(pixel) {
+    try {
+      const img = pixel ? root.distinct_soko_goal_px : root.distinct_soko_goal;
+      const src = img && (img.currentSrc || img.src);
+      if (
+        src &&
+        (src.indexOf("data:") === 0 ||
+          src.indexOf("blob:") === 0 ||
+          src.indexOf("https://www.google.com/") === 0)
+      ) {
+        return src;
+      }
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
   /**
    * Goal sheet for one board. Distinct on/off is the viewer's own cosmetic
    * preference (Remix never syncs it), while pixel/normal follows the graphics
    * setting of the board being drawn — matching `graphics_selected === 1`.
+   * Never loads i.postimg.cc — Remix embeds those sheets as data URLs.
    */
   function resolveSokoGoalUrl(board) {
     if (!sokoGoalsDistinct()) return SOKO_BOX_URL;
     let gfx =
       board && board.graphicsIndex != null ? board.graphicsIndex | 0 : -1;
     if (gfx < 0) gfx = Number(root.graphics_selected) | 0;
-    return gfx === 1 ? SOKO_GOAL_DISTINCT_PX_URL : SOKO_GOAL_DISTINCT_URL;
+    const remixSrc = remixDistinctSokoGoalSrc(gfx === 1);
+    if (remixSrc) return remixSrc;
+    // No Remix asset yet (unit tests / early boot) — native box sheet, not postimg
+    return SOKO_BOX_URL;
+  }
+
+  /** Exported aliases for tests — resolve through Remix when present. */
+  function sokoGoalDistinctUrl() {
+    return remixDistinctSokoGoalSrc(false) || SOKO_BOX_URL;
+  }
+  function sokoGoalDistinctPxUrl() {
+    return remixDistinctSokoGoalSrc(true) || SOKO_BOX_URL;
   }
 
   /** Poison-mode skull (same icon Skull Poison Fruit / Ultra place use). */
   const POISON_SKULL_URL =
     "https://www.google.com/logos/fnbx/snake_arcade/v12/trophy_10.png";
+
+  /**
+   * Rewrite saved Custom fruit/poison postimg URLs (legacy localStorage) to
+   * embedded data URLs / Google trophy. Bundle itself has no i.postimg.cc links.
+   */
+  function sanitizePostimgFruitUrls() {
+    function fallbackFor(key, url) {
+      const u = String(url || "");
+      const isPx = /pixel/i.test(key) || /_px|px_/i.test(u);
+      try {
+        if (isPx && root.px_ghost_skull && root.px_ghost_skull.src) {
+          return String(root.px_ghost_skull.src);
+        }
+        if (root.ghost_skull && root.ghost_skull.src) {
+          return String(root.ghost_skull.src);
+        }
+      } catch (eG) { /* ignore */ }
+      try {
+        if (typeof root.remixCustomFruitDefaultSprites === "function") {
+          const d = root.remixCustomFruitDefaultSprites();
+          if (d) {
+            if (isPx && d.Pixel) return String(d.Pixel);
+            if (d.Normal) return String(d.Normal);
+          }
+        }
+      } catch (eD) { /* ignore */ }
+      return POISON_SKULL_URL;
+    }
+    function rewrite(url, key) {
+      if (!url || typeof url !== "string") return url;
+      if (url.indexOf("postimg") < 0 && url.indexOf("i.postimg.cc") < 0) {
+        return url;
+      }
+      return fallbackFor(key || "", url);
+    }
+    function scrubSettings(s) {
+      if (!s || typeof s !== "object") return 0;
+      let n = 0;
+      const keys = [
+        "CustomPoisonNormal",
+        "CustomPoisonPixel",
+        "CustomPoisonReal",
+        "CustomFruitNormal",
+        "CustomFruitPixel",
+        "CustomFruitReal",
+      ];
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        if (typeof s[k] !== "string") continue;
+        const next = rewrite(s[k], k);
+        if (next !== s[k]) {
+          s[k] = next;
+          n++;
+        }
+      }
+      return n;
+    }
+    let changed = 0;
+    try {
+      changed += scrubSettings(root.pudding_settings);
+    } catch (eP) { /* ignore */ }
+    try {
+      if (typeof localStorage !== "undefined") {
+        const keys = ["RemixSettings", "pudding_settings", "PuddingSettings"];
+        for (let i = 0; i < keys.length; i++) {
+          const raw = localStorage.getItem(keys[i]);
+          if (!raw || raw.indexOf("postimg") < 0) continue;
+          try {
+            const obj = JSON.parse(raw);
+            if (scrubSettings(obj) > 0) {
+              localStorage.setItem(keys[i], JSON.stringify(obj));
+              changed++;
+            }
+          } catch (eJ) { /* ignore */ }
+        }
+      }
+    } catch (eLs) { /* ignore */ }
+    try {
+      if (typeof root.remixSyncCustomFruitEntryFromSettings === "function") {
+        root.remixSyncCustomFruitEntryFromSettings();
+      }
+      if (typeof root.remixPatchCustomFruitAtlas === "function") {
+        root.remixPatchCustomFruitAtlas();
+      }
+    } catch (eAt) { /* ignore */ }
+    // Block late Image loads that still point at postimg poison assets
+    try {
+      if (!root.__mpPostimgImgPatched && typeof Image !== "undefined") {
+        const desc = Object.getOwnPropertyDescriptor(Image.prototype, "src");
+        if (desc && desc.set && desc.get) {
+          root.__mpPostimgImgPatched = true;
+          Object.defineProperty(Image.prototype, "src", {
+            configurable: true,
+            enumerable: desc.enumerable,
+            get: function () {
+              return desc.get.call(this);
+            },
+            set: function (v) {
+              let next = v;
+              try {
+                if (
+                  typeof v === "string" &&
+                  v.indexOf("postimg") >= 0 &&
+                  (v.indexOf("poison") >= 0 ||
+                    v.indexOf("ghost") >= 0 ||
+                    v.indexOf("fruit") >= 0)
+                ) {
+                  next = rewrite(v, v);
+                }
+              } catch (eR) { /* ignore */ }
+              return desc.set.call(this, next);
+            },
+          });
+        }
+      }
+    } catch (eImg) { /* ignore */ }
+    return changed;
+  }
 
   /**
    * Poisoned-snake gradient, from the engine's f3E/g3E ([145,145,145] and
@@ -5230,10 +6148,11 @@
         ) {
           if (
             !root.__mpCoopServerAuth &&
-            (name === "death" || name === "gotAll")
+            name === "death"
           ) {
             tk.playing = false;
           }
+          // gotAll under co-op: leave playing alone — mod onAll suppresses false ALL
           return undefined;
         }
         return orig.apply(this, arguments);
@@ -5255,31 +6174,39 @@
   function alterSnakeCodeExposeGame(code) {
     if (typeof code !== "string") return code;
     let out = code;
-    const coopTick =
-      "try{window.__mpCoopOnTick&&window.__mpCoopOnTick(this);}catch(_mpCoop){}" +
-      "try{window.__mpRaceFocusOnTick&&window.__mpRaceFocusOnTick(this);}catch(_mpVf){}";
+    try {
+      if (typeof root !== "undefined") {
+        root.__mpAlterSnakeRan = true;
+        root.__mpAlterHadMaEntry =
+          /Ma\(\)\{if\(this\.menu\.isVisible\(\)\|\|this\.wb\.nj\)\{/.test(out);
+        root.__mpAlterHadAaEqSa = /a\.Aa=a\.Sa/.test(out);
+        root.__mpAlterHadAaSwitch = /switch\(this\.settings\.Aa\)\{/.test(out);
+      }
+    } catch (eMeta) { /* ignore */ }
+    // Expression-safe (commas + arrow IIFEs): BurgerMod leaves
+    // `window.__remixGame=this,window.burger_settings_snapshot&&...` — statement
+    // try/catch after `=this` yields `}catch(...){},window.burger...` (SyntaxError).
+    const boardCacheExpr =
+      "(()=>{try{window.__mpBoardCache={body:this.oa&&this.oa.ka,apples:this.wa&&this.wa.ka,dir:this.oa&&this.oa.direction};}catch(_mp){}})()";
+    const coopTickExpr =
+      "(()=>{try{window.__mpCoopOnTick&&window.__mpCoopOnTick(this);}catch(_mpCoop){}})()" +
+      ",(()=>{try{window.__mpRaceFocusOnTick&&window.__mpRaceFocusOnTick(this);}catch(_mpVf){}})()";
+    const exposeThisExpr =
+      "window.__remixGame=this,window.__mpGame=this," +
+      boardCacheExpr +
+      "," +
+      coopTickExpr;
     if (out.indexOf("window.__remixGame=this") !== -1) {
-      out = out.replace(
-        /window\.__remixGame=this/g,
-        "window.__remixGame=this;window.__mpGame=this;try{window.__mpBoardCache={body:this.oa&&this.oa.ka,apples:this.wa&&this.wa.ka,dir:this.oa&&this.oa.direction};}catch(_mp){}" +
-          coopTick
-      );
+      out = out.replace(/window\.__remixGame=this/g, exposeThisExpr);
     } else if (/\}tick\(\)\{/.test(out)) {
-      out = out.replace(
-        /\}tick\(\)\{/,
-        "}tick(){window.__mpGame=this;window.__remixGame=this;try{window.__mpBoardCache={body:this.oa&&this.oa.ka,apples:this.wa&&this.wa.ka,dir:this.oa&&this.oa.direction};}catch(_mp){}" +
-          coopTick
-      );
+      out = out.replace(/\}tick\(\)\{/, "}tick(){" + exposeThisExpr + ";");
     } else if (/tick\(\)\s*\{/.test(out)) {
-      out = out.replace(
-        /tick\(\)\s*\{/,
-        "tick(){window.__mpGame=this;window.__remixGame=this;" + coopTick
-      );
+      out = out.replace(/tick\(\)\s*\{/, "tick(){" + exposeThisExpr + ";");
     }
     if (out.indexOf("__mpCoopOnTick") === -1 && /tick\(\)\s*\{/.test(out)) {
       out = out.replace(
         /tick\(\)\s*\{/,
-        "tick(){try{window.__mpCoopOnTick&&window.__mpCoopOnTick(this);}catch(_mpCoop){}"
+        "tick(){(()=>{try{window.__mpCoopOnTick&&window.__mpCoopOnTick(this);}catch(_mpCoop){}})();"
       );
     }
 
@@ -5300,12 +6227,44 @@
     if (out.indexOf("__mpCoopFreePos") === -1) {
       out += "\n;window.__mpCoopFreePos=1;\n";
     }
+    // Play's Ma() does Aa=Sa then Sna() bakes dims. Force size before bake.
+    // Never inject before a labeled `a:switch` (steals label) or before `case`
+    // inside a switch (SyntaxError).
+    if (out.indexOf("__mpForceSaBeforeAa") === -1) {
+      let patched = false;
+      if (/Ma\(\)\{if\(this\.menu\.isVisible\(\)\|\|this\.wb\.nj\)\{/.test(out)) {
+        // Ma only bakes when the settings menu is visible — Start Co-op closes
+        // the panel first, so force the gate open when match settings are set.
+        out = out.replace(
+          /Ma\(\)\{if\(this\.menu\.isVisible\(\)\|\|this\.wb\.nj\)\{/,
+          "Ma(){try{window.__mpPlayController=this;}catch(_mpCap){}if(this.menu.isVisible()||this.wb.nj||(window.__mpCoopPlaySettings&&window.__mpCoopPlaySettings.size!=null)||(window.__mpMatchPlaySettings&&window.__mpMatchPlaySettings.size!=null)){(()=>{try{window.__mpForceSaBeforeAa=1;var _mps=window.__mpCoopPlaySettings||window.__mpMatchPlaySettings;if(_mps&&_mps.size!=null&&this.settings){this.settings.Sa=Number(_mps.size)|0;this.settings.Aa=this.settings.Sa;}}catch(_mpMa){}})();"
+        );
+        patched = true;
+      }
+      if (/\}Sna\(\)\{/.test(out) && out.indexOf("__mpForceSnaCapture") === -1) {
+        out = out.replace(
+          /\}Sna\(\)\{/,
+          "}Sna(){try{window.__mpPlayController=this;window.__mpForceSnaRan=1;window.__mpForceSnaCapture=1;}catch(_mpSnaCap){}"
+        );
+        patched = true;
+      }
+      if (/a\.Aa=a\.Sa/.test(out)) {
+        out = out.replace(
+          /a\.Aa=a\.Sa/g,
+          "(()=>{try{var _mps=window.__mpCoopPlaySettings||window.__mpMatchPlaySettings;if(_mps&&_mps.size!=null){a.Sa=Number(_mps.size)|0;}window.__mpForceSaBeforeAa=1;}catch(_mpMa){}})(),a.Aa=a.Sa"
+        );
+        patched = true;
+      }
+      try {
+        if (typeof root !== "undefined") root.__mpAlterSizePatched = patched;
+      } catch (eP) { /* ignore */ }
+    }
     return out;
   }
 
   /**
    * Place local snake at board center + oy after co-op Play.
-   * Offsets come from SESSION_START slots (count-dependent: 2→±1, 3→0/+3/−2, 4→±1/±4).
+   * Offsets come from SESSION_START slots (count-dependent: 2→±1, 3→0/+2/−2, 4→±1/+2/−2).
    * Does NOT force a facing direction — native Snake stays idle until the player
    * presses a key (forcing RIGHT made everyone crawl on Start match).
    *
@@ -5346,8 +6305,8 @@
   }
 
   /**
-   * Keep center+oy seats on the live board. Server oy (±4) is sized for classic
-   * 17×15 — on small boards that lands off-grid and paints onto the border
+   * Keep center+oy seats on the live board. Server oy (±2) is fine on classic
+   * 17×15 — on tiny boards larger offsets can land off-grid onto the border
    * chrome (looks like impossible walls before anyone moves).
    */
   function clampCoopSpawnOy(oy, height) {
@@ -5485,13 +6444,47 @@
       opts.boardWidth != null ? Number(opts.boardWidth) : null;
     const refH =
       opts.boardHeight != null ? Number(opts.boardHeight) : null;
-    // Prefer server absolute seat when the live board matches the seat's board
-    // (or the server omitted a reference size). Otherwise scale via oy.
-    const boardMatches =
-      (refW == null || refH == null || !Number.isFinite(refW) || !Number.isFinite(refH)) ||
-      ((refW | 0) === (w | 0) && (refH | 0) === (h | 0));
+    // Slot dims may disagree with a failed bake. Still seat on the LIVE board
+    // via oy/slot — never leave Classic-center with no offset.
+    const dimsMismatch =
+      refW != null &&
+      refH != null &&
+      Number.isFinite(refW) &&
+      Number.isFinite(refH) &&
+      ((refW | 0) !== (w | 0) || (refH | 0) !== (h | 0));
+    if (dimsMismatch) {
+      try {
+        console.warn(
+          "[Multiplayer] applyCoopSpawnOffset: slot board",
+          refW,
+          "x",
+          refH,
+          "vs live",
+          w,
+          "x",
+          h,
+          "— seating via oy on live grid"
+        );
+      } catch (eWarn) { /* ignore */ }
+    }
+    // Prefer server absolute seat only when dims match and coords land in-bounds.
     if (
-      boardMatches &&
+      !dimsMismatch &&
+      Number.isFinite(sx) &&
+      Number.isFinite(sy) &&
+      sx >= 0 &&
+      sy >= 0 &&
+      sx < w &&
+      sy < h &&
+      !(opts.yinYang || coopIsYinYang())
+    ) {
+      pose = {
+        x: Math.round(sx),
+        y: Math.round(sy),
+        dir: opts.dir || "RIGHT",
+      };
+    } else if (
+      !dimsMismatch &&
       Number.isFinite(sx) &&
       Number.isFinite(sy) &&
       !(opts.yinYang || coopIsYinYang())
@@ -5591,6 +6584,8 @@
 
   /** Hide native death/end overlay so the in-game canvas is visible. */
   function hideDeathScreen() {
+    // Match-end menus own the overlay — do not re-hide after ALL_DEAD/ALL_APPLES.
+    if (root.__mpCoopMatchEndMenus) return;
     const overlay = document.getElementsByClassName("wjOYOd")[0];
     if (!overlay) return;
     if (overlay.dataset.mpDeathPrevVis == null) {
@@ -5711,6 +6706,32 @@
     return { width: 17, height: 15 };
   }
 
+  /**
+   * True when the live GameInstance grid matches frozen match settings / slot dims.
+   * DOM menu match is not enough — Play can still bake Standard.
+   */
+  function liveBoardMatchesSettings(settings, g) {
+    if (!settings || typeof settings !== "object") return true;
+    let wantW = null;
+    let wantH = null;
+    if (settings.boardWidth != null && settings.boardHeight != null) {
+      wantW = Number(settings.boardWidth) | 0;
+      wantH = Number(settings.boardHeight) | 0;
+    } else if (settings.size != null && Number.isFinite(Number(settings.size))) {
+      const dims = boardDimsForSizeIndex(settings.size);
+      wantW = dims.width;
+      wantH = dims.height;
+    } else {
+      // No size in payload — still refuse if live board is missing (not "ok")
+      const liveOnly = boardSizeFromGame(g);
+      return !!liveOnly;
+    }
+    if (!(wantW > 0) || !(wantH > 0)) return true;
+    const live = boardSizeFromGame(g);
+    if (!live) return false;
+    return (live.width | 0) === (wantW | 0) && (live.height | 0) === (wantH | 0);
+  }
+
   function setLocalPaused(paused) {
     root.pauseGame = paused ? 1 : 0;
   }
@@ -5785,12 +6806,22 @@
     const snake = (g && g.oa) || {};
     const body = mapBody(bodySrc, snakeDimFlags(snake));
     const scoreInfo = readScoreAndAlive();
-    const nativeDir = readNativeDirection(snake);
+    const bodyDir = inferDirectionFromBody(body);
+    const moveDir =
+      normalizePoseDirection(snake.direction || snake.dir) ||
+      bodyDir ||
+      readNativeDirection(snake) ||
+      normalizePoseDirection(root.head_dir);
+    const faceDir =
+      readNativeFaceDirection(snake) || bodyDir || moveDir;
+    const transDir =
+      readNativeTransitionDirection(snake) || faceDir || moveDir;
     const out = {
       body: body,
-      dir: nativeDir || normalizePoseDirection(root.head_dir),
-      headDir: nativeDir || normalizePoseDirection(root.head_dir),
-      movementDir: nativeDir || normalizePoseDirection(root.head_dir),
+      dir: moveDir,
+      headDir: faceDir,
+      movementDir: moveDir,
+      transitionDir: transDir,
       modeKey: effectiveModeKey(),
       alive: scoreInfo.alive !== false,
       score: scoreInfo.score != null ? scoreInfo.score | 0 : 0,
@@ -5825,10 +6856,17 @@
           out.body2 = body2;
           const companion = findCompanionSnake(g, snake);
           const dir2 = companion
-            ? readNativeDirection(companion)
+            ? readNativeDirection(companion) || reflectDirection(out.headDir)
             : reflectDirection(out.headDir);
-          out.headDir2 = dir2;
+          const face2 = companion
+            ? readNativeFaceDirection(companion) || dir2
+            : dir2;
+          const trans2 = companion
+            ? readNativeTransitionDirection(companion) || face2
+            : face2;
+          out.headDir2 = face2;
           out.movementDir2 = dir2;
+          out.transitionDir2 = trans2;
           const flags2 = segmentFlags(body2);
           if (flags2) out.segmentFlags2 = flags2;
           if (companion) {
@@ -5870,33 +6908,33 @@
     let color2 = null;
     let Sc = null;
     let Yc = null;
+    // Prefer claimed colorId over live snake paint — Ready bumps roster
+    // before the engine snake is recolored, and peers must see the claim.
+    if (colorId != null && Colors && Colors.getColor) {
+      const c = Colors.getColor(colorId);
+      if (c) {
+        if (c.kind === "rainbow" && c.set && c.set.length) {
+          Sc = c.set[0];
+          Yc = c.set[1] || c.set[0];
+        } else if (c.primary) {
+          Sc = c.primary;
+          Yc = c.secondary || c.primary;
+        }
+        color2 = Sc;
+        color1 = Yc;
+      }
+    }
     try {
       const cfg = g && (g.snakeBodyConfig || snake);
-      if (snake) {
-        if (typeof snake.Sc === "string") Sc = snake.Sc;
-        if (typeof snake.Yc === "string") Yc = snake.Yc;
-      }
+      if (!Sc && snake && typeof snake.Sc === "string") Sc = snake.Sc;
+      if (!Yc && snake && typeof snake.Yc === "string") Yc = snake.Yc;
       if (cfg) {
-        color1 = cfg.color1 || cfg.secondary || Yc || null;
-        color2 = cfg.color2 || cfg.primary || Sc || null;
+        if (!color1) color1 = cfg.color1 || cfg.secondary || Yc || null;
+        if (!color2) color2 = cfg.color2 || cfg.primary || Sc || null;
         if (!Sc && typeof cfg.Sc === "string") Sc = cfg.Sc;
         if (!Yc && typeof cfg.Yc === "string") Yc = cfg.Yc;
       }
     } catch (e) { /* ignore */ }
-    if ((!Sc || !Yc) && colorId != null && Colors && Colors.getColor) {
-      const c = Colors.getColor(colorId);
-      if (c) {
-        if (c.kind === "rainbow" && c.set && c.set.length) {
-          if (!Sc) Sc = c.set[0];
-          if (!Yc) Yc = c.set[1] || c.set[0];
-        } else if (c.primary) {
-          if (!Sc) Sc = c.primary;
-          if (!Yc) Yc = c.secondary || c.primary;
-        }
-        if (!color2) color2 = Sc;
-        if (!color1) color1 = Yc;
-      }
-    }
     out.colorId = colorId != null ? colorId : null;
     out.color1 = color1;
     out.color2 = color2;
@@ -6124,6 +7162,8 @@
       apples: board.apples || [],
       width: board.width,
       height: board.height,
+      themeColors: board.themeColors || getBoardThemeColors(),
+      appleIndex: board.appleIndex,
     };
     // Heavy board entities only when requested (trophy modes) — default fruit-only
     if (opts.includeEntities) {
@@ -6308,17 +7348,59 @@
         reserved[free.x + "," + free.y] = true;
         placed.push(a);
       } else {
-        // Board full — drop the apple; ALL_APPLES win (not a blocked spawn)
-        if (root.__mpCoopServerAuth) {
-          // Server owns refill / all-apples — keep trying other cells only
-          continue;
+        // Cannot place this apple — drop it. ALL_APPLES only when the board is
+        // truly packed (no free cell) and no fruit remain after the pass.
+        if (!root.__mpCoopServerAuth) {
+          /* leave unplaced; caller may check empty+packed */
         }
+      }
+    }
+    if (
+      !root.__mpCoopServerAuth &&
+      !placed.length &&
+      apples &&
+      apples.length
+    ) {
+      // Every apple failed to place — packed board → win; otherwise just empty.
+      let anyFree = false;
+      try {
+        const meta =
+          (game && game.wa && game.wa.oa && game.wa.oa.oa) ||
+          (game && game.oa && game.oa.oa) ||
+          {};
+        const w = firstNumber(meta.width, meta.W, 17) || 17;
+        const h = firstNumber(meta.height, meta.H, 15) || 15;
+        const occ = Object.assign(
+          {},
+          typeof root.__mpCoopReadSpawnOccupancy === "function"
+            ? root.__mpCoopReadSpawnOccupancy(game, true) || {}
+            : {}
+        );
+        outerPack: for (let yy = 0; yy < h; yy++) {
+          for (let xx = 0; xx < w; xx++) {
+            if (occ[xx + "," + yy]) continue;
+            if (
+              typeof root.__mpCoopIsSolidWall === "function" &&
+              root.__mpCoopIsSolidWall(game, xx, yy)
+            ) {
+              continue;
+            }
+            anyFree = true;
+            break outerPack;
+          }
+        }
+      } catch (ePack) {
+        anyFree = true;
+      }
+      if (!anyFree) {
         root.__mpCoopBoardFull = true;
         if (typeof root.__mpCoopOnBoardFull === "function") {
           try {
             root.__mpCoopOnBoardFull();
           } catch (eFull) { /* ignore */ }
         }
+      } else {
+        root.__mpCoopBoardFull = false;
       }
     }
     return placed;
@@ -6347,6 +7429,64 @@
     return minima[idx] != null ? minima[idx] : 1;
   }
 
+  /** Occupancy set for force-bake fruit seed when native freePos is missing. */
+  function coopOccupiedCells(g) {
+    const occ = Object.create(null);
+    function mark(x, y) {
+      if (x == null || y == null) return;
+      occ[(Number(x) | 0) + "," + (Number(y) | 0)] = 1;
+    }
+    try {
+      const snakes = [];
+      if (g && g.oa) snakes.push(g.oa);
+      if (g && Array.isArray(g.__mpPeerSnakes)) {
+        for (let i = 0; i < g.__mpPeerSnakes.length; i++) {
+          if (g.__mpPeerSnakes[i]) snakes.push(g.__mpPeerSnakes[i]);
+        }
+      }
+      for (let s = 0; s < snakes.length; s++) {
+        const body = snakes[s] && snakes[s].ka;
+        if (!Array.isArray(body)) continue;
+        for (let i = 0; i < body.length; i++) {
+          const p = body[i];
+          if (!p) continue;
+          mark(p.x != null ? p.x : p.Xa, p.y != null ? p.y : p.Ya);
+        }
+      }
+      if (g && g.wa && Array.isArray(g.wa.ka)) {
+        for (let i = 0; i < g.wa.ka.length; i++) {
+          const a = g.wa.ka[i];
+          const p = a && a.pos;
+          if (p) mark(p.x, p.y);
+        }
+      }
+      if (g && g.Ca && Array.isArray(g.Ca.wa)) {
+        for (let y = 0; y < g.Ca.wa.length; y++) {
+          const row = g.Ca.wa[y];
+          if (!row) continue;
+          for (let x = 0; x < row.length; x++) {
+            if (row[x]) mark(x, y);
+          }
+        }
+      }
+    } catch (eOcc) { /* ignore */ }
+    return occ;
+  }
+
+  /** Grid scan free cell — used when Ma()/Sna() never ran so g.Rb is missing. */
+  function coopFallbackFreePos(g) {
+    const live = boardSizeFromGame(g) || {};
+    const w = Math.max(1, Number(live.width) || 10);
+    const h = Math.max(1, Number(live.height) || 9);
+    const occ = coopOccupiedCells(g);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (!occ[x + "," + y]) return { x: x, y: y };
+      }
+    }
+    return null;
+  }
+
   /**
    * Top up native fruit so the live Count setting is respected after co-op
    * seat / sync. Never shrinks (special modes may hold fewer briefly).
@@ -6354,16 +7494,17 @@
   function ensureCoopFruitCount(gIn) {
     if (root.__mpCoopServerAuth) return false;
     const g = gIn || gameInstance();
-    if (!g || !g.wa || !Array.isArray(g.wa.ka)) return false;
+    if (!g) return false;
+    if (!ensureFruitHostTemplate(g)) return false;
+    if (!g.wa || !Array.isArray(g.wa.ka)) return false;
     const want = expectedAppleCountFromSettings();
     if (!(want > 0)) return false;
     if (g.wa.ka.length >= want) return true;
     let planted = 0;
-    const freePos =
+    const nativeFree =
       (typeof g.Rb === "function" && g.Rb.bind(g)) ||
       (typeof g.Tb === "function" && g.Tb.bind(g)) ||
       null;
-    if (!freePos) return false;
     let template = null;
     for (let t = 0; t < g.wa.ka.length; t++) {
       if (g.wa.ka[t]) {
@@ -6374,10 +7515,15 @@
     while (g.wa.ka.length < want && planted < 64) {
       planted++;
       let pos = null;
-      try {
-        pos = freePos(null, 0);
-      } catch (eFp) {
-        break;
+      if (nativeFree) {
+        try {
+          pos = nativeFree(null, 0);
+        } catch (eFp) {
+          pos = null;
+        }
+      }
+      if (!pos || pos.x == null || pos.y == null) {
+        pos = coopFallbackFreePos(g);
       }
       if (!pos || pos.x == null || pos.y == null) break;
       const fruit = {};
@@ -6403,7 +7549,7 @@
         pos.y,
         template && template.pos
       );
-      if (fruit.type == null) fruit.type = 0;
+      if (fruit.type == null) fruit.type = matchAppleType();
       if (fruit.nba == null) fruit.nba = new Set();
       g.wa.ka.push(fruit);
     }
@@ -6431,7 +7577,16 @@
     // Between winged seeds, never yank live fruit back to a lagged peer pose
     const trustLiveMotion = motionMode && !payload.fruitMotionSeed;
     try {
-      if (!trustLiveMotion && !payload.serverAuth && !root.__mpCoopServerAuth) {
+      // Initial relay into a missing/empty post-force-bake host — seed Od first
+      if (payload.initial && g && apples.length > 0) {
+        ensureFruitHostTemplate(g);
+      }
+      if (
+        !trustLiveMotion &&
+        !payload.exactBoard &&
+        !payload.serverAuth &&
+        !root.__mpCoopServerAuth
+      ) {
         apples = nudgeCoopApplesOffSnakes(apples, g);
       }
       if (g && g.wa && Array.isArray(g.wa.ka)) {
@@ -6457,13 +7612,30 @@
             break;
           }
         }
+        // Initial relay into an empty pre-Play host has no Od template — seed one
+        // after Play/force-bake so pending COLLECTABLES can land.
+        if (
+          payload.initial &&
+          apples.length > 0 &&
+          !templatePos &&
+          g.wa.ka.length === 0
+        ) {
+          if (!ensureFruitHostTemplate(g)) return false;
+          templateApple = g.wa.ka[0];
+          templatePos =
+            templateApple && templateApple.pos && templateApple.pos.clone
+              ? templateApple.pos
+              : null;
+          if (!templatePos) return false;
+        }
         while (g.wa.ka.length > apples.length) {
           // Never drop below Count-setting floor when a peer sends a short list
-          // (client-auth only). Server-auth STATE is exact — always match length.
+          // (client-auth only). Exact initial relay boards and server-auth are exact.
           if (
             root.__mpCoopSession &&
             !root.__mpCoopServerAuth &&
             !payload.serverAuth &&
+            !payload.initial &&
             g.wa.ka.length <= expectedAppleCountFromSettings()
           ) {
             break;
@@ -6565,9 +7737,14 @@
         }
         ensureFruitShieldSets(g);
         applyBoardEntities(payload);
-        // Client-auth top-up only — server-auth fruit list is exact from COOP_STATE.
-        // ensureCoopFruitCount used native freePos and parked extras in corners.
-        if (root.__mpCoopSession && !root.__mpCoopServerAuth && !payload.serverAuth) {
+        // Client-auth top-up only — never invent freePos fruit for the shared
+        // initial relay board (Plan 3.5) or server-auth STATE.
+        if (
+          root.__mpCoopSession &&
+          !root.__mpCoopServerAuth &&
+          !payload.serverAuth &&
+          !payload.initial
+        ) {
           try {
             ensureCoopFruitCount(g);
           } catch (eCnt) { /* ignore */ }
@@ -6808,7 +7985,22 @@
   function quitNativeRunForMenus(opts) {
     opts = opts || {};
     clearDeathOverlayOverrides();
-    forceLocalDeath();
+    // Reveal chrome first — forceLocalDeath / engine quit must not leave the
+    // overlay stuck at opacity 0 if a later step throws.
+    const overlay = document.getElementsByClassName("wjOYOd")[0];
+    if (overlay) {
+      overlay.style.setProperty("visibility", "visible", "important");
+      overlay.style.setProperty("opacity", "1", "important");
+      overlay.style.pointerEvents = "";
+      const menu = overlay.children && overlay.children[0];
+      if (menu) {
+        menu.style.setProperty("visibility", "visible", "important");
+        menu.style.pointerEvents = "";
+      }
+    }
+    try {
+      forceLocalDeath();
+    } catch (eForce) { /* ignore */ }
     root.pauseGame = 1;
     try {
       const g = gameInstance();
@@ -6823,15 +8015,14 @@
       }
     } catch (eState) { /* ignore */ }
 
-    const overlay = document.getElementsByClassName("wjOYOd")[0];
     if (overlay) {
-      overlay.style.visibility = "visible";
-      overlay.style.opacity = "1";
+      overlay.style.setProperty("visibility", "visible", "important");
+      overlay.style.setProperty("opacity", "1", "important");
       overlay.style.pointerEvents = "";
       const menu = overlay.children && overlay.children[0];
       // PauseMod hides the menu child while paused — force it open for settings
       if (menu) {
-        menu.style.visibility = "visible";
+        menu.style.setProperty("visibility", "visible", "important");
         menu.style.pointerEvents = "";
       }
     }
@@ -6844,9 +8035,13 @@
 
     function dispatchEsc() {
       if (root.__mpStartingMatch || root.__mpCoopSession) return;
+      // Prefer the window this GSM instance was bound to — a free `document`
+      // lookup follows global.document and can leak Escape into a later test
+      // (or a later page) when a pulse timer fires after reload.
+      const doc = (root && root.document) || document;
       try {
         root.__mpEscHandling = true;
-        document.dispatchEvent(
+        doc.dispatchEvent(
           new KeyboardEvent("keydown", {
             key: "Escape",
             code: "Escape",
@@ -7010,8 +8205,23 @@
    * Empties walls Map (keeps wa corner sentinels), fruit list, and mode entities.
    * Also kills leftover eat/grow animation so the next match does not loop the
    * previous session's last apple bite.
+   *
+   * @param {*} gIn optional game host
+   * @param {{suppressHideDeath?: boolean}=} opts Match-end teardown must not
+   *   re-hide `.wjOYOd` after ALL_DEAD / ALL_APPLES menu handoff.
    */
-  function resetCoopBoardForNewSession(gIn) {
+  function resetCoopBoardForNewSession(gIn, opts) {
+    if (
+      gIn &&
+      typeof gIn === "object" &&
+      gIn.suppressHideDeath != null &&
+      gIn.Ca == null &&
+      gIn.oa == null
+    ) {
+      opts = gIn;
+      gIn = null;
+    }
+    opts = opts || {};
     const g = gIn || gameInstance();
     if (!g) return false;
     let ok = false;
@@ -7021,14 +8231,34 @@
       if (g.isDead != null) g.isDead = false;
     } catch (eDead) { /* ignore */ }
     try {
+      if (typeof g.Sh === "number") g.Sh = 0;
+      if (typeof g.Oh === "number") g.Oh = 0;
+      if (typeof g.score === "number") g.score = 0;
+      if (typeof g.appleCount === "number") g.appleCount = 0;
+    } catch (eScore) { /* ignore */ }
+    try {
+      stopCoopRunTimer();
+    } catch (eStop) { /* ignore */ }
+    try {
       if (root.timeKeeper) {
         root.timeKeeper._dead = false;
         root.timeKeeper._lastScore = 0;
+        root.timeKeeper._lastTimeMs = 0;
         if (typeof root.timeKeeper.lastAppleTime === "number") {
           root.timeKeeper.lastAppleTime = 0;
         }
+        try {
+          delete root.timeKeeper.__mpCoopStartedAtMs;
+        } catch (eDel) {
+          root.timeKeeper.__mpCoopStartedAtMs = null;
+        }
       }
     } catch (eTk) { /* ignore */ }
+    try {
+      if (!opts.suppressHideDeath && typeof hideDeathScreen === "function") {
+        hideDeathScreen();
+      }
+    } catch (eHide) { /* ignore */ }
     try {
       if (g.Ca) {
         ensureNativeWallMap(g.Ca);
@@ -7153,13 +8383,26 @@
     snapshotSyncSettings: snapshotSyncSettings,
     settingsMatchLocal: settingsMatchLocal,
     forceMatchSettingsForPlay: forceMatchSettingsForPlay,
+    forceEngineSizeForPlay: forceEngineSizeForPlay,
+    forceEngineMatchFieldsForPlay: forceEngineMatchFieldsForPlay,
     boardSizeFromGame: boardSizeFromGame,
     boardDimsForSizeIndex: boardDimsForSizeIndex,
+    liveBoardMatchesSettings: liveBoardMatchesSettings,
+    sanitizePostimgFruitUrls: sanitizePostimgFruitUrls,
     applySettings: applySettings,
     applySnakeColor: applySnakeColor,
+    tintLiveFaceSprites: tintLiveFaceSprites,
+    FACE_SPRITE_BASE: FACE_SPRITE_BASE,
     triggerPlay: triggerPlay,
     isDeathOverlayVisible: isDeathOverlayVisible,
     isNativeRunLive: isNativeRunLive,
+    forceNativePlayBake: forceNativePlayBake,
+    findPlayController: findPlayController,
+    classicInitialFruit: classicInitialFruit,
+    plantClassicInitialFruit: plantClassicInitialFruit,
+    matchAppleType: matchAppleType,
+    ensureFruitHostTemplate: ensureFruitHostTemplate,
+    forceLiveBoardDims: forceLiveBoardDims,
     prepareNativePlay: prepareNativePlay,
     startNativeRun: startNativeRun,
     clearDeathOverlayOverrides: clearDeathOverlayOverrides,
@@ -7267,8 +8510,12 @@
     SOKO_BOX_FRAMES: SOKO_BOX_FRAMES,
     SOKO_BOX_FRAME: SOKO_BOX_FRAME,
     SOKO_GOAL_FRAME: SOKO_GOAL_FRAME,
-    SOKO_GOAL_DISTINCT_URL: SOKO_GOAL_DISTINCT_URL,
-    SOKO_GOAL_DISTINCT_PX_URL: SOKO_GOAL_DISTINCT_PX_URL,
+    get SOKO_GOAL_DISTINCT_URL() {
+      return sokoGoalDistinctUrl();
+    },
+    get SOKO_GOAL_DISTINCT_PX_URL() {
+      return sokoGoalDistinctPxUrl();
+    },
     resolveSokoGoalUrl: resolveSokoGoalUrl,
     resetSpriteImageCache: resetSpriteImageCache,
     POISON_SKULL_URL: POISON_SKULL_URL,
