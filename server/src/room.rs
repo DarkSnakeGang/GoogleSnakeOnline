@@ -2686,6 +2686,12 @@ impl Room {
         if !hit {
             return;
         }
+        // Impossible: timed goals cannot complete in 0ms. Clock-reset / mid-run
+        // restart pulses often arrive as score>=threshold with timeMs=0 and would
+        // overwrite a real PB to 0.00s (time_ms < best always holds for 0).
+        if time_ms == 0 {
+            return;
+        }
         entry.goal_completed = true;
         match entry.best_goal_time_ms {
             None => entry.best_goal_time_ms = Some(time_ms),
@@ -2739,6 +2745,9 @@ impl Room {
                 let Some(t) = sc.best_goal_time_ms else {
                     continue;
                 };
+                if t == 0 {
+                    continue;
+                }
                 if !sc.goal_completed {
                     continue;
                 }
@@ -3568,6 +3577,38 @@ mod tests {
             .unwrap();
         assert!(r.race_scores["a"].goal_completed);
         assert_eq!(r.race_leader_id().as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn timed_goal_ignores_zero_time_ms_and_does_not_overwrite_pb() {
+        let mut r = room();
+        r.join("a".into(), None, None).unwrap();
+        r.cmd_set_role("a", &json!({"clientId": "a", "role": "player"}))
+            .unwrap();
+        r.cmd_ready("a", &json!({"ready": true})).unwrap();
+        r.cmd_set_race_goal("a", &json!({"goal": "best25"}))
+            .unwrap();
+        r.cmd_session_start("a", &json!({})).unwrap();
+
+        // Real Best-25 completion
+        r.cmd_score_pulse("a", &json!({"score": 25, "timeMs": 5200, "alive": true}))
+            .unwrap();
+        assert!(r.race_scores["a"].goal_completed);
+        assert_eq!(r.race_scores["a"].best_goal_time_ms, Some(5200));
+
+        // Mid-run restart / clock arm often re-pulses threshold score with 0ms —
+        // must not replace the PB with an impossible 0.00s.
+        r.cmd_score_pulse("a", &json!({"score": 25, "timeMs": 0, "alive": true}))
+            .unwrap();
+        assert_eq!(r.race_scores["a"].best_goal_time_ms, Some(5200));
+        assert!(r.race_scores["a"].goal_completed);
+
+        // A fresh run that only ever had zero-time pulses must not invent a PB
+        r.race_scores.clear();
+        r.cmd_score_pulse("a", &json!({"score": 25, "timeMs": 0, "alive": true}))
+            .unwrap();
+        assert!(!r.race_scores["a"].goal_completed);
+        assert_eq!(r.race_scores["a"].best_goal_time_ms, None);
     }
 
     #[test]

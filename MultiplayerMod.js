@@ -1,10 +1,10 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-21T01:18:44.815Z */
+/* Built: 2026-09-21T22:27:29.511Z */
 
 window.__MP_MOD_VERSION="13";
 
-window.__MP_MOD_BUILT="2026-09-21T01:18:44.815Z";
+window.__MP_MOD_BUILT="2026-09-21T22:27:29.511Z";
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -36037,7 +36037,7 @@ window.RemixMod.runCodeAfter = function () {
         const sc = map[id];
         if (!sc || !sc.goalCompleted) return;
         const t = sc.bestGoalTimeMs;
-        if (t == null || !Number.isFinite(Number(t))) return;
+        if (t == null || !Number.isFinite(Number(t)) || !(Number(t) > 0)) return;
         if (bestT == null || Number(t) < bestT) {
           bestT = Number(t);
           bestId = id;
@@ -36078,15 +36078,17 @@ window.RemixMod.runCodeAfter = function () {
     if (!sc) return "—";
     const g = RaceState.normalizeGoal(goal);
     if (RaceState.isTimedGoal(g)) {
-      if (sc.bestGoalTimeMs == null) {
-        if (sc.goalCompleted) return "done";
-        // Goal not reached — show the score that counts instead, plus how fast
-        const s = scoreOf(sc);
-        if (!s) return "not yet";
-        const t = bestScoreTimeOf(sc);
-        return s + " apples" + (t != null ? " (" + formatMs(t) + ")" : "");
+      const goalMs = Number(sc.bestGoalTimeMs);
+      // 0ms is impossible for Best 25/50/100 — treat as unset
+      if (Number.isFinite(goalMs) && goalMs > 0) {
+        return formatMs(goalMs);
       }
-      return formatMs(sc.bestGoalTimeMs);
+      if (sc.goalCompleted && sc.bestGoalTimeMs == null) return "done";
+      // Goal not reached (or stale 0.00s PB) — show the score that counts
+      const s = scoreOf(sc);
+      if (!s) return "not yet";
+      const t = bestScoreTimeOf(sc);
+      return s + " apples" + (t != null ? " (" + formatMs(t) + ")" : "");
     }
     if (sc.bestScore != null) return String(sc.bestScore);
     if (sc.score != null) return String(sc.score);
@@ -36107,8 +36109,14 @@ window.RemixMod.runCodeAfter = function () {
       const sa = map[a] || {};
       const sb = map[b] || {};
       if (timed) {
-        const ca = !!sa.goalCompleted && sa.bestGoalTimeMs != null;
-        const cb = !!sb.goalCompleted && sb.bestGoalTimeMs != null;
+        const ca =
+          !!sa.goalCompleted &&
+          sa.bestGoalTimeMs != null &&
+          Number(sa.bestGoalTimeMs) > 0;
+        const cb =
+          !!sb.goalCompleted &&
+          sb.bestGoalTimeMs != null &&
+          Number(sb.bestGoalTimeMs) > 0;
         if (ca !== cb) return ca ? -1 : 1;
         if (ca && cb) {
           return Number(sa.bestGoalTimeMs) - Number(sb.bestGoalTimeMs);
@@ -37465,6 +37473,14 @@ window.RemixMod.runCodeAfter = function () {
       ].forEach(function (k) {
         if (payload[k] != null) keep[k] = payload[k];
       });
+      // Pose scrape must not clear sticky death or invent peer death.
+      if (prev._deadSticky) {
+        keep.alive = false;
+        keep._deadSticky = true;
+      } else if (payload.alive === false) {
+        keep.alive = prev.alive !== false;
+        delete keep._deadSticky;
+      }
       this.remotes[payload.clientId] = keep;
       this.syncBridge();
       maybeApplyPeerSlot(payload);
@@ -37509,11 +37525,14 @@ window.RemixMod.runCodeAfter = function () {
       next.modeKey = coopModeKey() || "";
     }
     if (payload._lerpStepMs != null) next._lerpStepMs = payload._lerpStepMs;
-    // Sticky corpse only after authoritative COOP_PLAYER_DEAD — transient
-    // scrape alive:false must not permanently kill a peer on the HUD.
+    // Death is client-authoritative via COOP_PLAYER_DEAD (_deadSticky) only.
+    // Transient SNAKE_DELTA alive:false must not kill a peer who is still playing.
     if (prev && prev._deadSticky) {
       next.alive = false;
       next._deadSticky = true;
+    } else if (payload.alive === false) {
+      next.alive = prev && prev.alive === false ? false : true;
+      delete next._deadSticky;
     }
     // Never drop a corpse body when a dead/empty scrape arrives: a co-op corpse
     // stays exactly where it died and keeps colliding.
@@ -38142,8 +38161,26 @@ window.RemixMod.runCodeAfter = function () {
   }
 
   /**
-   * Valid fruit spawn cells: in-bounds, not wall, not any co-op body.
-   * Tally (count 6): also exclude manhattan ≤3 of every live head.
+   * Modes whose freePos/object plants must keep Manhattan ≤3 of every head
+   * (same radius as wallSpawnRejected / native k7≤3).
+   */
+  function objectModeNeedsHeadRadius(key) {
+    const k = key != null ? key : coopModeKey();
+    return (
+      modeKeyHas(k, "wall") ||
+      modeKeyHas(k, "poison") ||
+      modeKeyHas(k, "minesweeper") ||
+      modeKeyHas(k, "gate") ||
+      modeKeyHas(k, "bridge") ||
+      modeKeyHas(k, "key") ||
+      modeKeyHas(k, "sokoban") ||
+      modeKeyHas(k, "shield")
+    );
+  }
+
+  /**
+   * Valid fruit/object spawn cells: in-bounds, not wall, not any co-op body.
+   * Head radius (manhattan ≤3): Tally (count 6), opts.headRadius, or object modes.
    * Also skip cells already holding fruit (multi-spawn Bomb/Dice/Tally).
    * Build the full pool first — callers roll once (no reject-retry).
    */
@@ -38154,7 +38191,11 @@ window.RemixMod.runCodeAfter = function () {
     const size = boardSizeFromGame(g);
     const tally =
       opts.tally != null ? !!opts.tally : readCountIndex() === 6;
-    const heads = tally ? collectCoopHeads(g) : null;
+    const useHeadRadius =
+      opts.headRadius != null
+        ? !!opts.headRadius
+        : tally || objectModeNeedsHeadRadius();
+    const heads = useHeadRadius ? collectCoopHeads(g) : null;
     // Reserve live fruit so batch spawns (Bomb 24) never stack
     const fruitOcc = Object.create(null);
     try {
@@ -41003,161 +41044,156 @@ window.RemixMod.runCodeAfter = function () {
   /**
    * Wrap game freePos helpers so fruit never lands on co-op snakes / walls,
    * and Wall-mode picks (arg === 5) obey shared-board wall spawn rules.
-   * Fruit path: build valid pool → single roll (no reject-retry loops).
+   * Fruit pick path (Rb/Tb/Sb → board.Ga): pool + single roll.
+   * Occupancy path (Vb → board.Ca): native Set + peer body serials for P3E
+   * shield placement — must NOT return a fruit pool point.
+   * Also rebinds board.Ga / board.Ca — native constructs them as Rb/Vb.bind at
+   * board create time, so fear_spawn_pick would otherwise bypass our wrap.
    */
   function wrapFreePos(game) {
-    if (!game || game.__mpCoopFreePosWrapped) return;
-    game.__mpCoopFreePosWrapped = true;
-    ["Tb", "Rb", "Sb", "Vb"].forEach(function (name) {
-      const orig = game[name];
-      if (typeof orig !== "function") return;
-      game[name] = function () {
-        // freePos checks Ca.Aa.has(serial) — repair hosts before native runs
-        function repairHosts(g) {
-          try {
-            if (
-              root.MultiplayerGsm &&
-              typeof root.MultiplayerGsm.ensureCoopTickHosts === "function"
-            ) {
-              root.MultiplayerGsm.ensureCoopTickHosts(g);
-              return;
-            }
-            if (
-              g &&
-              g.Ca &&
-              root.MultiplayerGsm &&
-              typeof root.MultiplayerGsm.ensureNativeWallMap === "function"
-            ) {
-              root.MultiplayerGsm.ensureNativeWallMap(g.Ca);
-            }
-            if (
-              root.MultiplayerGsm &&
-              typeof root.MultiplayerGsm.ensureFruitShieldSets === "function"
-            ) {
-              root.MultiplayerGsm.ensureFruitShieldSets(g);
-            }
-          } catch (ePre) { /* ignore */ }
-        }
-        function sanitizePos(g, p) {
-          if (!p || p.x == null || p.y == null) return null;
-          const x = Math.round(Number(p.x));
-          const y = Math.round(Number(p.y));
-          if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-          const size = boardSizeFromGame(g);
-          if (x < 0 || y < 0 || x >= size.width || y >= size.height) {
-            return null;
-          }
-          // Guarantee the row exists before native writes wa[y][x]
-          try {
-            if (
-              g &&
-              g.Ca &&
-              root.MultiplayerGsm &&
-              typeof root.MultiplayerGsm.ensureWallGridDense === "function"
-            ) {
-              root.MultiplayerGsm.ensureWallGridDense(
-                g.Ca,
-                size.width,
-                size.height
-              );
-            } else if (g && g.Ca && Array.isArray(g.Ca.wa) && !g.Ca.wa[y]) {
-              const row = [];
-              for (let i = 0; i < size.width; i++) row.push(0);
-              g.Ca.wa[y] = row;
-            }
-          } catch (eRow) { /* ignore */ }
-          // Native assigns freePos onto apple.pos and L3E.render calls .clone().
-          // Pool rolls are plain {x,y} — upgrade to Od / makeNativePoint.
-          if (typeof p.clone === "function") {
-            p.x = x;
-            p.y = y;
-            return p;
-          }
-          try {
-            if (root._ && typeof root._.Od === "function") {
-              return new root._.Od(x, y);
-            }
-          } catch (eOd) { /* ignore */ }
+    if (!game) return;
+    if (!game.__mpCoopFreePosWrapped) {
+      game.__mpCoopFreePosWrapped = true;
+
+      function repairHosts(g) {
+        try {
           if (
             root.MultiplayerGsm &&
-            typeof root.MultiplayerGsm.makeNativePoint === "function"
+            typeof root.MultiplayerGsm.ensureCoopTickHosts === "function"
           ) {
-            return root.MultiplayerGsm.makeNativePoint(x, y, null);
+            root.MultiplayerGsm.ensureCoopTickHosts(g);
+            return;
           }
-          const seg = { x: x, y: y };
-          seg.clone = function () {
-            const c = { x: this.x, y: this.y };
-            c.clone = this.clone;
-            return c;
-          };
-          return seg;
-        }
-        function signalBoardFull() {
-          root.__mpCoopBoardFull = true;
-          if (typeof root.__mpCoopOnBoardFull === "function") {
-            try {
-              root.__mpCoopOnBoardFull();
-            } catch (eFull) { /* ignore */ }
+          if (
+            g &&
+            g.Ca &&
+            root.MultiplayerGsm &&
+            typeof root.MultiplayerGsm.ensureNativeWallMap === "function"
+          ) {
+            root.MultiplayerGsm.ensureNativeWallMap(g.Ca);
           }
-        }
-        /** True only when every cell is snake/wall — not tally head-radius empty. */
-        function boardTrulyPacked(g) {
-          try {
-            const occ = readSpawnOccupancy(g, true);
-            return !findFreeSpawnCell(g, occ);
-          } catch (ePack) {
-            return false;
+          if (
+            root.MultiplayerGsm &&
+            typeof root.MultiplayerGsm.ensureFruitShieldSets === "function"
+          ) {
+            root.MultiplayerGsm.ensureFruitShieldSets(g);
           }
-        }
-        repairHosts(this);
-        const wallPick = arguments.length >= 2 && Number(arguments[1]) === 5;
-        const g = game || this;
+        } catch (ePre) { /* ignore */ }
+      }
 
-        // Fruit spawn: valid pool + single roll (no 64× reject loop)
-        if (!wallPick) {
-          const pool = buildFruitSpawnPool(g);
-          if (!pool.length) {
-            // Empty tally/filtered pool must not ALL_APPLES — only a packed board.
-            if (boardTrulyPacked(g)) {
-              signalBoardFull();
-            } else {
-              root.__mpCoopBoardFull = false;
-            }
-            return null;
-          }
-          const picked = sanitizePos(g, pickFruitSpawnFromPool(pool));
-          if (!picked) {
-            if (boardTrulyPacked(g)) {
-              signalBoardFull();
-            } else {
-              root.__mpCoopBoardFull = false;
-            }
-            return null;
-          }
-          root.__mpCoopBoardFull = false;
-          return picked;
-        }
-
-        // Wall-mode freePos(null, 5): keep native attempt + reject rules
-        let attempts = 0;
-        let pos;
-        function isHostCorruptError(err) {
-          const msg = String((err && err.message) || err || "");
-          return /has is not a function|\.has|reading ['"]size['"]|Cannot read properties of (null|undefined)/.test(
-            msg
-          );
-        }
-        function callOrig() {
-          repairHosts(this);
-          return sanitizePos(this, orig.apply(this, arguments));
+      function sanitizePos(g, p) {
+        if (!p || p.x == null || p.y == null) return null;
+        const x = Math.round(Number(p.x));
+        const y = Math.round(Number(p.y));
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        const size = boardSizeFromGame(g);
+        if (x < 0 || y < 0 || x >= size.width || y >= size.height) {
+          return null;
         }
         try {
-          pos = callOrig.apply(this, arguments);
+          if (
+            g &&
+            g.Ca &&
+            root.MultiplayerGsm &&
+            typeof root.MultiplayerGsm.ensureWallGridDense === "function"
+          ) {
+            root.MultiplayerGsm.ensureWallGridDense(
+              g.Ca,
+              size.width,
+              size.height
+            );
+          } else if (g && g.Ca && Array.isArray(g.Ca.wa) && !g.Ca.wa[y]) {
+            const row = [];
+            for (let i = 0; i < size.width; i++) row.push(0);
+            g.Ca.wa[y] = row;
+          }
+        } catch (eRow) { /* ignore */ }
+        if (typeof p.clone === "function") {
+          p.x = x;
+          p.y = y;
+          return p;
+        }
+        try {
+          if (root._ && typeof root._.Od === "function") {
+            return new root._.Od(x, y);
+          }
+        } catch (eOd) { /* ignore */ }
+        if (
+          root.MultiplayerGsm &&
+          typeof root.MultiplayerGsm.makeNativePoint === "function"
+        ) {
+          return root.MultiplayerGsm.makeNativePoint(x, y, null);
+        }
+        const seg = { x: x, y: y };
+        seg.clone = function () {
+          const c = { x: this.x, y: this.y };
+          c.clone = this.clone;
+          return c;
+        };
+        return seg;
+      }
+
+      function signalBoardFull() {
+        root.__mpCoopBoardFull = true;
+        if (typeof root.__mpCoopOnBoardFull === "function") {
+          try {
+            root.__mpCoopOnBoardFull();
+          } catch (eFull) { /* ignore */ }
+        }
+      }
+
+      function boardTrulyPacked(g) {
+        try {
+          const occ = readSpawnOccupancy(g, true);
+          return !findFreeSpawnCell(g, occ);
+        } catch (ePack) {
+          return false;
+        }
+      }
+
+      function isHostCorruptError(err) {
+        const msg = String((err && err.message) || err || "");
+        return /has is not a function|\.has|reading ['"]size['"]|Cannot read properties of (null|undefined)/.test(
+          msg
+        );
+      }
+
+      /** Native cell serial (x<<16)|y — same as Y6 / P3E occupancy keys. */
+      function cellSerial(x, y) {
+        return ((x | 0) << 16) | (y | 0);
+      }
+
+      /** Union remotes + companion into an occupancy Set for P3E / Vb(pos,2). */
+      function augmentOccupancySet(g, set) {
+        if (!set || typeof set.add !== "function") return set;
+        try {
+          const occ = readSpawnOccupancy(g, true);
+          Object.keys(occ).forEach(function (k) {
+            const parts = k.split(",");
+            if (parts.length < 2) return;
+            const x = Number(parts[0]);
+            const y = Number(parts[1]);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+            set.add(cellSerial(x, y));
+          });
+        } catch (eOcc) { /* ignore */ }
+        return set;
+      }
+
+      function runWallPick(origFn, ctx, args, g) {
+        let attempts = 0;
+        let pos;
+        function callOrig() {
+          repairHosts(ctx);
+          return sanitizePos(ctx, origFn.apply(ctx, args));
+        }
+        try {
+          pos = callOrig();
         } catch (eOrig) {
           if (isHostCorruptError(eOrig)) {
-            repairHosts(this);
+            repairHosts(ctx);
             try {
-              pos = callOrig.apply(this, arguments);
+              pos = callOrig();
             } catch (eRetry1) {
               if (!isHostCorruptError(eRetry1)) throw eRetry1;
               pos = null;
@@ -41170,20 +41206,183 @@ window.RemixMod.runCodeAfter = function () {
           if (!wallSpawnRejected(g, pos.x, pos.y)) break;
           attempts++;
           try {
-            pos = callOrig.apply(this, arguments);
+            pos = callOrig();
           } catch (eRetry) {
-            repairHosts(this);
+            repairHosts(ctx);
             if (!isHostCorruptError(eRetry)) break;
             pos = null;
             break;
           }
         }
-        if (pos && wallSpawnRejected(g, pos.x, pos.y)) {
-          return null;
-        }
+        if (pos && wallSpawnRejected(g, pos.x, pos.y)) return null;
         return pos;
+      }
+
+      // Fruit pick methods → pool + roll (rebound as board.Ga)
+      ["Tb", "Rb", "Sb"].forEach(function (name) {
+        const orig = game[name];
+        if (typeof orig !== "function") return;
+        if (orig.__mpCoopFreePos) return;
+        const wrapped = function () {
+          repairHosts(this);
+          const wallPick = arguments.length >= 2 && Number(arguments[1]) === 5;
+          const g = game || this;
+          if (wallPick) {
+            return runWallPick(orig, this, arguments, g);
+          }
+          const pool = buildFruitSpawnPool(g);
+          if (!pool.length) {
+            if (boardTrulyPacked(g)) signalBoardFull();
+            else root.__mpCoopBoardFull = false;
+            return null;
+          }
+          const picked = sanitizePos(g, pickFruitSpawnFromPool(pool));
+          if (!picked) {
+            if (boardTrulyPacked(g)) signalBoardFull();
+            else root.__mpCoopBoardFull = false;
+            return null;
+          }
+          root.__mpCoopBoardFull = false;
+          return picked;
+        };
+        wrapped.__mpCoopFreePos = true;
+        game[name] = wrapped;
+      });
+
+      // Vb → board.Ca: occupancy Set (P3E shields) or wallPick (arg===5)
+      if (typeof game.Vb === "function" && !game.Vb.__mpCoopFreePos) {
+        const origVb = game.Vb;
+        const wrappedVb = function () {
+          repairHosts(this);
+          const wallPick = arguments.length >= 2 && Number(arguments[1]) === 5;
+          const g = game || this;
+
+          if (wallPick) {
+            return runWallPick(origVb, this, arguments, g);
+          }
+
+          // Occupancy builder (P3E / shield): native Set + peer body serials
+          let result;
+          try {
+            result = origVb.apply(this, arguments);
+          } catch (eVb) {
+            if (isHostCorruptError(eVb)) {
+              repairHosts(this);
+              try {
+                result = origVb.apply(this, arguments);
+              } catch (eRetry) {
+                if (!isHostCorruptError(eRetry)) throw eRetry;
+                result = new Set();
+              }
+            } else {
+              throw eVb;
+            }
+          }
+          if (
+            result &&
+            typeof result.has === "function" &&
+            typeof result.add === "function"
+          ) {
+            return augmentOccupancySet(g, result);
+          }
+          // Defensive: some paths may return a point
+          if (result && result.x != null && result.y != null) {
+            return sanitizePos(g, result);
+          }
+          return result;
+        };
+        wrappedVb.__mpCoopFreePos = true;
+        game.Vb = wrappedVb;
+      }
+    }
+    rebindBoardFreePos(game);
+  }
+
+  /** Point board.Ga / board.Ca at wrapped game freePos (Rb/Vb). */
+  function rebindBoardFreePos(game) {
+    if (!game) return;
+    const board = game.ka;
+    if (!board || typeof board !== "object") return;
+    try {
+      const gaSrc =
+        typeof game.Rb === "function"
+          ? game.Rb
+          : typeof game.Tb === "function"
+            ? game.Tb
+            : typeof game.Sb === "function"
+              ? game.Sb
+              : null;
+      const caSrc =
+        typeof game.Vb === "function"
+          ? game.Vb
+          : typeof game.Sb === "function"
+            ? game.Sb
+            : gaSrc;
+      if (gaSrc) {
+        board.Ga = function () {
+          return gaSrc.apply(game, arguments);
+        };
+        board.Ga.__mpCoopFreePos = true;
+      }
+      if (caSrc) {
+        board.Ca = function () {
+          return caSrc.apply(game, arguments);
+        };
+        board.Ca.__mpCoopFreePos = true;
+      }
+    } catch (eRe) { /* ignore */ }
+  }
+
+  /**
+   * fear_spawn_pick(freePos, board, …) drives poison/mines/keys/bridges.
+   * Reject peer/wall/radius-illegal results and re-roll from the co-op pool.
+   */
+  function installFearSpawnPickHook() {
+    if (typeof root.fear_spawn_pick !== "function" || root.fear_spawn_pick.__mpCoop) {
+      return;
+    }
+    const orig = root.fear_spawn_pick;
+    root.fear_spawn_pick = function (freePosFn, board, pair, kind) {
+      let p = orig.apply(this, arguments);
+      if (!root.__mpCoopSession || !root.__mpCoopInject) return p;
+      const g = root.__mpGame || root.__remixGame;
+      function illegal(pos) {
+        if (!pos || pos.x == null || pos.y == null) return true;
+        const occ = readSpawnOccupancy(g, true);
+        if (spawnCellBlocked(g, pos.x, pos.y, occ)) return true;
+        if (!objectModeNeedsHeadRadius()) return false;
+        const heads = collectCoopHeads(g);
+        for (let h = 0; h < heads.length; h++) {
+          if (manhattan(pos.x, pos.y, heads[h].x, heads[h].y) <= 3) {
+            return true;
+          }
+        }
+        return false;
+      }
+      if (!illegal(p)) return p;
+      const pool = buildFruitSpawnPool(g, { headRadius: objectModeNeedsHeadRadius() });
+      const picked = pickFruitSpawnFromPool(pool);
+      if (!picked) return null;
+      try {
+        if (root._ && typeof root._.Od === "function") {
+          return new root._.Od(picked.x, picked.y);
+        }
+      } catch (eOd) { /* ignore */ }
+      if (
+        root.MultiplayerGsm &&
+        typeof root.MultiplayerGsm.makeNativePoint === "function"
+      ) {
+        return root.MultiplayerGsm.makeNativePoint(picked.x, picked.y, null);
+      }
+      const seg = { x: picked.x, y: picked.y };
+      seg.clone = function () {
+        const c = { x: this.x, y: this.y };
+        c.clone = this.clone;
+        return c;
       };
-    });
+      return seg;
+    };
+    root.fear_spawn_pick.__mpCoop = true;
   }
 
   /** Taxicab distance. */
@@ -41369,6 +41568,251 @@ window.RemixMod.runCodeAfter = function () {
     return age >= 0 && age <= max;
   }
 
+  /** Magnet (mode or Slot 18) — not winged-only. */
+  function isCoopMagnetMode() {
+    if (modeKeyHas(coopModeKey(), "magnet")) return true;
+    try {
+      const slot = root.__slotActive != null ? Number(root.__slotActive) | 0 : -1;
+      if (slot === 18) return true;
+    } catch (e) { /* ignore */ }
+    return false;
+  }
+
+  /** Winged or Magnet fruit-motion modes. */
+  function isCoopFruitMotionBoard() {
+    if (modeKeyHas(coopModeKey(), "winged")) return true;
+    if (isCoopMagnetMode()) return true;
+    try {
+      const slot = root.__slotActive != null ? Number(root.__slotActive) | 0 : -1;
+      if (slot === 6 || slot === 18) return true;
+    } catch (e) { /* ignore */ }
+    try {
+      const Gsm = root.MultiplayerGsm;
+      if (Gsm && typeof Gsm.isCoopFruitMotionMode === "function") {
+        return !!Gsm.isCoopFruitMotionMode();
+      }
+    } catch (e2) { /* ignore */ }
+    return false;
+  }
+
+  /**
+   * Occupancy for fruit bounce: remotes + companion + local snakes.
+   * Companion (Ra) is not in readSpawnOccupancy — add it here.
+   */
+  function readFruitMotionOccupancy(game) {
+    const occ = readSpawnOccupancy(game, true);
+    try {
+      const body2 = game && game.Ra && game.Ra.ka;
+      (body2 || []).forEach(function (p) {
+        if (p && p.x != null && p.y != null) {
+          occ[(p.x | 0) + "," + (p.y | 0)] = true;
+        }
+      });
+    } catch (e) { /* ignore */ }
+    return occ;
+  }
+
+  /** Native V3E: park He axis into CAb (magnet slide stop). */
+  function parkFruitHeAxis(fruit, stopX, stopY) {
+    if (!fruit || !fruit.He) return;
+    if (!fruit.CAb) fruit.CAb = { x: 0, y: 0 };
+    if (stopX && fruit.He.x !== 0) {
+      fruit.CAb.x = fruit.He.x;
+      fruit.He.x = 0;
+    }
+    if (stopY && fruit.He.y !== 0) {
+      fruit.CAb.y = fruit.He.y;
+      fruit.He.y = 0;
+    }
+  }
+
+  /**
+   * k4E-style side hits: body cell `ax,ay` vs fruit.pos → left/right/top/bottom.
+   */
+  function markFruitBodyHit(ax, ay, fruit, hits) {
+    if (!fruit || !fruit.pos || !hits) return;
+    const px = Number(fruit.pos.x);
+    const py = Number(fruit.pos.y);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+    const g = Math.abs(ax - px) <= 1;
+    const h = Math.abs(ay - py) <= 1;
+    let left = g && ax < px;
+    let right = g && ax > px;
+    let top = h && ay < py;
+    let bottom = h && ay > py;
+    const onY = ay === Math.floor(py) || ay === Math.ceil(py);
+    const onX = ax === Math.floor(px) || ax === Math.ceil(px);
+    if (onY) {
+      if (left) hits.left = true;
+      else if (right) hits.right = true;
+    }
+    if (onX) {
+      if (top) hits.top = true;
+      else if (bottom) hits.bottom = true;
+    }
+    const integer = px % 1 === 0 && py % 1 === 0;
+    if (integer) {
+      if (left && top) hits.topLeft = true;
+      else if (right && top) hits.topRight = true;
+      else if (right && bottom) hits.bottomRight = true;
+      else if (left && bottom) hits.bottomLeft = true;
+    }
+  }
+
+  /**
+   * Bounce winged/magnet fruit off co-op bodies (peer/companion/local) like W3E.
+   * `occ` is a cell map ("x,y" → true); tests may pass peer-only occupancy.
+   * Returns true if He / iL changed.
+   */
+  function bounceFruitOffCoopBodies(game, fruit, occ) {
+    if (!fruit || !fruit.pos || !fruit.He) return false;
+    if (!fruit.iL) fruit.iL = { x: 1, y: 1 };
+    const map = occ || readFruitMotionOccupancy(game);
+    const hits = {};
+    const keys = Object.keys(map || {});
+    for (let i = 0; i < keys.length; i++) {
+      const parts = keys[i].split(",");
+      const ax = Number(parts[0]);
+      const ay = Number(parts[1]);
+      if (!Number.isFinite(ax) || !Number.isFinite(ay)) continue;
+      markFruitBodyHit(ax, ay, fruit, hits);
+    }
+    if (!hits.left && !hits.right && !hits.top && !hits.bottom &&
+        !hits.topLeft && !hits.topRight && !hits.bottomLeft && !hits.bottomRight) {
+      return false;
+    }
+
+    const magnet = isCoopMagnetMode();
+    let changed = false;
+
+    // Two passes match W3E: first flips He; second zeros iL if still blocked.
+    for (let pass = 0; pass < 2; pass++) {
+      const first = pass === 0;
+      const goingLeft = fruit.He.x < 0;
+      const goingRight = fruit.He.x > 0;
+      const goingUp = fruit.He.y < 0;
+      const goingDown = fruit.He.y > 0;
+      if ((goingLeft && hits.left) || (goingRight && hits.right)) {
+        if (magnet) {
+          parkFruitHeAxis(fruit, true, false);
+        } else if (first) {
+          fruit.He.x *= -1;
+        } else {
+          fruit.iL.x = 0;
+        }
+        changed = true;
+      }
+      if ((goingUp && hits.top) || (goingDown && hits.bottom)) {
+        if (magnet) {
+          parkFruitHeAxis(fruit, false, true);
+        } else if (first) {
+          fruit.He.y *= -1;
+        } else {
+          fruit.iL.y = 0;
+        }
+        changed = true;
+      }
+      // Corner-only (no cardinal) — both axes
+      const cornerOnly =
+        !hits.left && !hits.right && !hits.top && !hits.bottom &&
+        ((goingLeft && goingUp && hits.topLeft) ||
+          (goingRight && goingUp && hits.topRight) ||
+          (goingRight && goingDown && hits.bottomRight) ||
+          (goingLeft && goingDown && hits.bottomLeft));
+      if (cornerOnly) {
+        if (magnet) {
+          if (Math.random() < 0.5) parkFruitHeAxis(fruit, true, false);
+          else parkFruitHeAxis(fruit, false, true);
+        } else if (first) {
+          fruit.He.x *= -1;
+          fruit.He.y *= -1;
+        } else {
+          fruit.iL.x = 0;
+          fruit.iL.y = 0;
+        }
+        changed = true;
+      }
+    }
+
+    if (changed && fruit.CAb && !magnet) {
+      fruit.CAb.x = fruit.He.x;
+      fruit.CAb.y = fruit.He.y;
+    }
+    return changed;
+  }
+
+  /**
+   * Magnet: retarget each fruit He toward the nearest live co-op head
+   * (local + companion + remotes), same ±0.5 / park style as native a4E path.
+   */
+  function retargetMagnetFruitTowardNearestHead(game) {
+    if (!isCoopMagnetMode()) return 0;
+    const fruits = game && game.wa && game.wa.ka;
+    if (!Array.isArray(fruits) || !fruits.length) return 0;
+    const heads = collectCoopHeads(game);
+    if (!heads.length) return 0;
+    let n = 0;
+    for (let i = 0; i < fruits.length; i++) {
+      const fruit = fruits[i];
+      if (!fruit || !fruit.pos || fruit.wm) continue;
+      if (!fruit.He) fruit.He = { x: 0, y: 0 };
+      const px = Number(fruit.pos.x);
+      const py = Number(fruit.pos.y);
+      if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+      let best = null;
+      let bestD = Infinity;
+      for (let h = 0; h < heads.length; h++) {
+        const head = heads[h];
+        const hx = Number(head.x != null ? head.x : head.pos && head.pos.x);
+        const hy = Number(head.y != null ? head.y : head.pos && head.pos.y);
+        if (!Number.isFinite(hx) || !Number.isFinite(hy)) continue;
+        const d = Math.abs(px - hx) + Math.abs(py - hy);
+        if (d < bestD) {
+          bestD = d;
+          best = { x: hx, y: hy };
+        }
+      }
+      if (!best) continue;
+      if (px === best.x) parkFruitHeAxis(fruit, true, false);
+      else fruit.He.x = px < best.x ? 0.5 : -0.5;
+      if (py === best.y) parkFruitHeAxis(fruit, false, true);
+      else fruit.He.y = py < best.y ? 0.5 : -0.5;
+      n++;
+    }
+    return n;
+  }
+
+  /** After native tick: magnet nearest-head + peer-body bounce for motion modes. */
+  function applyCoopFruitMotionAfterTick(game) {
+    if (!game || !isCoopFruitMotionBoard()) return;
+    if (isCoopMagnetMode()) {
+      retargetMagnetFruitTowardNearestHead(game);
+    }
+    const fruits = game.wa && game.wa.ka;
+    if (!Array.isArray(fruits) || !fruits.length) return;
+    const occ = readFruitMotionOccupancy(game);
+    for (let i = 0; i < fruits.length; i++) {
+      const fruit = fruits[i];
+      if (!fruit || fruit.wm) continue;
+      if (!fruit.He && !(fruit.iL && (fruit.iL.x || fruit.iL.y))) continue;
+      bounceFruitOffCoopBodies(game, fruit, occ);
+    }
+  }
+
+  function scheduleCoopFruitMotionAfterTick(game) {
+    if (!game || !isCoopFruitMotionBoard()) return;
+    // OnTick runs at the start of native tick(); defer until after W3E / magnet.
+    const run = function () {
+      try {
+        applyCoopFruitMotionAfterTick(game);
+      } catch (e) {
+        console.warn("coopFruitMotion", e);
+      }
+    };
+    if (typeof queueMicrotask === "function") queueMicrotask(run);
+    else Promise.resolve().then(run);
+  }
+
   /**
    * Tick: apply peer poses, then body-collide vs remotes (not peaceful / YY).
    * Fruit is applied only on COLLECTABLES_DELTA (not every tick).
@@ -41413,6 +41857,7 @@ window.RemixMod.runCodeAfter = function () {
           }
         }
         wrapFreePos(game);
+        installFearSpawnPickHook();
         installRemixSpawnOccupancyHooks();
         wrapGameReset(game);
         invalidateLightMask();
@@ -41426,6 +41871,8 @@ window.RemixMod.runCodeAfter = function () {
         // Native-relay: local head / next step vs peer bodies (incl. corpses).
         // No-ops under peaceful / yin_yang / server-auth / already dead.
         killLocalOnRemote(game);
+
+        scheduleCoopFruitMotionAfterTick(game);
 
         if (typeof root.__mpCoopAfterTick === "function") {
           try {
@@ -41449,6 +41896,8 @@ window.RemixMod.runCodeAfter = function () {
   root.__mpCoopFindFreeSpawn = findFreeSpawnCell;
   root.__mpCoopBuildFruitSpawnPool = buildFruitSpawnPool;
   root.__mpCoopPickFruitSpawn = pickFruitSpawnFromPool;
+  root.__mpCoopObjectModeNeedsHeadRadius = objectModeNeedsHeadRadius;
+  root.__mpCoopRebindBoardFreePos = rebindBoardFreePos;
   root.__mpCoopInstallSpawnOcc = installRemixSpawnOccupancyHooks;
   root.__mpCoopDrawRemotes = drawCoopRemotes;
   root.__mpCoopResetNativePeerPaint = resetNativePeerPaint;
@@ -41459,6 +41908,9 @@ window.RemixMod.runCodeAfter = function () {
   root.__mpCoopRecolorPalette = coopRecolorPalette;
   root.__mpCoopBuildPeerSnake = buildPeerSnake;
   root.__mpCoopWallSpawnRejected = wallSpawnRejected;
+  root.__mpCoopBounceFruitOffBodies = bounceFruitOffCoopBodies;
+  root.__mpCoopRetargetMagnetHe = retargetMagnetFruitTowardNearestHead;
+  root.__mpCoopApplyFruitMotionTick = applyCoopFruitMotionAfterTick;
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       CoopNative: CoopNative,
@@ -41468,6 +41920,7 @@ window.RemixMod.runCodeAfter = function () {
       findFreeSpawnCell: findFreeSpawnCell,
       buildFruitSpawnPool: buildFruitSpawnPool,
       pickFruitSpawnFromPool: pickFruitSpawnFromPool,
+      objectModeNeedsHeadRadius: objectModeNeedsHeadRadius,
       readSpawnOccupancy: readSpawnOccupancy,
       wallOccupancyKeys: wallOccupancyKeys,
       coopTicksRunning: coopTicksRunning,
@@ -41476,6 +41929,11 @@ window.RemixMod.runCodeAfter = function () {
       resetNativePeerPaint: resetNativePeerPaint,
       buildPeerSnake: buildPeerSnake,
       remoteColorInfo: remoteColorInfo,
+      bounceFruitOffCoopBodies: bounceFruitOffCoopBodies,
+      retargetMagnetFruitTowardNearestHead: retargetMagnetFruitTowardNearestHead,
+      applyCoopFruitMotionAfterTick: applyCoopFruitMotionAfterTick,
+      collectCoopHeads: collectCoopHeads,
+      isCoopMagnetMode: isCoopMagnetMode,
     };
   }
 })(typeof window !== "undefined" ? window : globalThis);
@@ -42837,9 +43295,11 @@ window.RemixMod.runCodeAfter = function () {
   /**
    * Plant Classic aT fruit for the live Count index (all modes incl. Tally).
    * Replaces dummy templates. Sets admin apple type + tally sequenceNumbers.
+   * Key / Sokoban must not start with fruit — use plantInitialKeySokoban.
    */
   function plantClassicInitialFruit(gIn) {
     if (root.__mpCoopServerAuth) return false;
+    if (isKeyOrSokobanMode()) return false;
     const g = gIn || gameInstance();
     if (!g) return false;
     if (!ensureFruitHostTemplate(g)) return false;
@@ -42941,7 +43401,352 @@ window.RemixMod.runCodeAfter = function () {
         root.retallyAllPlacedApples();
       }
     } catch (eTall) { /* ignore */ }
+    try {
+      assignCoopFruitShields(g);
+    } catch (eSh) { /* ignore */ }
     return g.wa.ka.length > 0;
+  }
+
+  /** Shield mode (trophy bit 15 / Slot roll 15). */
+  function isShieldMode() {
+    try {
+      const key = effectiveModeKey ? effectiveModeKey() : scrapeModeKey();
+      if (boardHasMode({ modeKey: key }, "shield")) return true;
+    } catch (e) { /* ignore */ }
+    try {
+      if (
+        typeof root.isSlotMachineActive === "function" &&
+        root.isSlotMachineActive() &&
+        (root.__slotActive | 0) === 15
+      ) {
+        return true;
+      }
+    } catch (eSlot) { /* ignore */ }
+    return false;
+  }
+
+  /**
+   * Fallback P3E-like nba when __slotP3E is missing: exclude edge + body-
+   * adjacent dirs (incl. peers via wrapped Vb occupancy), then roll 1–3.
+   */
+  function fallbackShieldNba(g, pos) {
+    const dirs = ["LEFT", "RIGHT", "UP", "DOWN"];
+    const delta = {
+      LEFT: { x: -1, y: 0 },
+      RIGHT: { x: 1, y: 0 },
+      UP: { x: 0, y: -1 },
+      DOWN: { x: 0, y: 1 },
+    };
+    const excluded = [];
+    const live = boardSizeFromGame(g) || {};
+    const w = Number(live.width) | 0;
+    const h = Number(live.height) | 0;
+    const px = Number(pos && pos.x);
+    const py = Number(pos && pos.y);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return new Set();
+    if (px === 0) excluded.push("LEFT");
+    if (w > 0 && px === w - 1) excluded.push("RIGHT");
+    if (py === 0) excluded.push("UP");
+    if (h > 0 && py === h - 1) excluded.push("DOWN");
+    let occ = null;
+    try {
+      if (typeof g.Vb === "function") {
+        occ = g.Vb(pos, 2);
+      } else if (g.ka && typeof g.ka.Ca === "function") {
+        occ = g.ka.Ca(pos, 2);
+      }
+    } catch (eVb) { /* ignore */ }
+    if (!occ || typeof occ.has !== "function") {
+      occ = new Set();
+      try {
+        const cells = coopOccupiedCells(g);
+        Object.keys(cells).forEach(function (k) {
+          const parts = k.split(",");
+          if (parts.length < 2) return;
+          occ.add((Number(parts[0]) << 16) | Number(parts[1]));
+        });
+      } catch (eOcc) { /* ignore */ }
+    }
+    dirs.forEach(function (d) {
+      const off = delta[d];
+      const sx = (px + off.x) | 0;
+      const sy = (py + off.y) | 0;
+      if (occ.has((sx << 16) | sy) && excluded.indexOf(d) < 0) {
+        excluded.push(d);
+      }
+    });
+    function pickOpen(used) {
+      const open = [];
+      for (let i = 0; i < dirs.length; i++) {
+        if (used.indexOf(dirs[i]) < 0) open.push(dirs[i]);
+      }
+      if (open.length <= 1) return null;
+      return open[Math.floor(Math.random() * open.length)];
+    }
+    const used = excluded.slice();
+    const out = new Set();
+    const first = pickOpen(used);
+    if (!first) return out;
+    out.add(first);
+    used.push(first);
+    if (Math.random() < 0.75) {
+      const second = pickOpen(used);
+      if (second) {
+        out.add(second);
+        used.push(second);
+        if (Math.random() < 0.33) {
+          const third = pickOpen(used);
+          if (third) out.add(third);
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Assign shield nba on every fruit (admin seed / empty nba). Uses native
+   * __slotP3E when present so peer-aware Vb occupancy applies.
+   */
+  function assignCoopFruitShields(gIn) {
+    if (root.__mpCoopServerAuth) return false;
+    if (!isShieldMode()) return false;
+    const g = gIn || gameInstance();
+    if (!g || !g.wa || !Array.isArray(g.wa.ka) || !g.wa.ka.length) {
+      return false;
+    }
+    ensureFruitShieldSets(g);
+    const p3e = typeof root.__slotP3E === "function" ? root.__slotP3E : null;
+    let assigned = 0;
+    for (let i = 0; i < g.wa.ka.length; i++) {
+      const fruit = g.wa.ka[i];
+      if (!fruit || !fruit.pos) continue;
+      if (
+        fruit.nba &&
+        typeof fruit.nba.has === "function" &&
+        fruit.nba.size > 0
+      ) {
+        assigned++;
+        continue;
+      }
+      let nba = null;
+      if (p3e) {
+        try {
+          nba = p3e(g.wa, fruit.pos);
+        } catch (eP) {
+          nba = null;
+        }
+      }
+      if (!nba || typeof nba.has !== "function") {
+        nba = fallbackShieldNba(g, fruit.pos);
+      }
+      fruit.nba = nba;
+      if (fruit.nba && fruit.nba.size > 0) assigned++;
+    }
+    return assigned > 0;
+  }
+
+  /** Key / Sokoban swap fruit for mode objects — never seed classic apples. */
+  function isKeyOrSokobanMode() {
+    try {
+      const key = effectiveModeKey ? effectiveModeKey() : scrapeModeKey();
+      return (
+        boardHasMode({ modeKey: key }, "key") ||
+        boardHasMode({ modeKey: key }, "sokoban")
+      );
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function classicFruitWantCount(countIdx) {
+    const ci = Number(countIdx) | 0;
+    if (ci === 3) return 10;
+    if (ci === 6) return 5;
+    if (ci === 1) return 3;
+    if (ci === 2) return 5;
+    return 1;
+  }
+
+  function clearFruitHost(g) {
+    try {
+      if (g && g.wa && Array.isArray(g.wa.ka)) g.wa.ka.length = 0;
+    } catch (e) { /* ignore */ }
+  }
+
+  function countHostItems(host) {
+    if (!host) return 0;
+    if (Array.isArray(host)) return host.length;
+    if (host.size != null) return host.size | 0;
+    return 0;
+  }
+
+  /**
+   * Pick N free cells with co-op head-radius rules (same as fruit object pool).
+   */
+  function pickKeySokoCells(g, n) {
+    const out = [];
+    const want = Math.max(0, n | 0);
+    if (!want) return out;
+    let pool = null;
+    try {
+      if (typeof root.__mpCoopBuildFruitSpawnPool === "function") {
+        pool = root.__mpCoopBuildFruitSpawnPool(g, { headRadius: true });
+      }
+    } catch (eP) { /* ignore */ }
+    if (pool && pool.length) {
+      const used = Object.create(null);
+      for (let i = 0; i < want && pool.length; i++) {
+        let picked = null;
+        try {
+          if (typeof root.__mpCoopPickFruitSpawn === "function") {
+            picked = root.__mpCoopPickFruitSpawn(pool);
+          }
+        } catch (ePick) { /* ignore */ }
+        if (!picked && pool.length) {
+          picked = pool[Math.floor(Math.random() * pool.length)];
+        }
+        if (!picked) break;
+        const key = (picked.x | 0) + "," + (picked.y | 0);
+        // Remove chosen cell from pool for next pick
+        pool = pool.filter(function (c) {
+          return (c.x | 0) + "," + (c.y | 0) !== key;
+        });
+        if (used[key]) continue;
+        used[key] = 1;
+        out.push({ x: picked.x | 0, y: picked.y | 0 });
+      }
+      return out;
+    }
+    const live = boardSizeFromGame(g) || {};
+    const w = Number(live.width) | 0;
+    const h = Number(live.height) | 0;
+    const occ = coopOccupiedCells(g);
+    for (let y = 0; y < h && out.length < want; y++) {
+      for (let x = 0; x < w && out.length < want; x++) {
+        if (occ[x + "," + y]) continue;
+        out.push({ x: x, y: y });
+        occ[x + "," + y] = 1;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Owner seed for Key / Sokoban: no fruit; plant keys(+keyblocks) or boxes+goals.
+   * Prefer native reset stock when already present.
+   */
+  function plantInitialKeySokoban(gIn) {
+    if (root.__mpCoopServerAuth) return false;
+    const g = gIn || gameInstance();
+    if (!g || !isKeyOrSokobanMode()) return false;
+    const modeKey = effectiveModeKey ? effectiveModeKey() : scrapeModeKey();
+    const isKey = boardHasMode({ modeKey: modeKey }, "key");
+    const isSoko = boardHasMode({ modeKey: modeKey }, "sokoban");
+
+    let countIdx = readSettingIndex("count");
+    if (countIdx == null && root.__mpCoopPlaySettings) {
+      countIdx = root.__mpCoopPlaySettings.count;
+    }
+    countIdx = Number(countIdx);
+    if (!Number.isFinite(countIdx) || countIdx < 0) countIdx = 0;
+    const fruitWant = classicFruitWantCount(countIdx);
+    // Native converts fruit pairs → one object per pair; always at least one.
+    const objectWant = Math.max(1, Math.floor(fruitWant / 2) || 1);
+
+    if (isKey) {
+      if (!g.Ba) g.Ba = { keys: [] };
+      if (!Array.isArray(g.Ba.keys)) g.Ba.keys = [];
+      if (countHostItems(g.Ba.keys) > 0) {
+        clearFruitHost(g);
+        return true;
+      }
+      // Each key needs pos + keyblock → 2 cells
+      const cells = pickKeySokoCells(g, objectWant * 2);
+      if (cells.length < 2) return false;
+      g.Ba.keys.length = 0;
+      const pairs = Math.floor(cells.length / 2);
+      for (let i = 0; i < pairs; i++) {
+        const block = cells[i * 2];
+        const keyPos = cells[i * 2 + 1];
+        const type = Math.max(0, Math.min(23, i | 0));
+        const keyObj = {
+          pos: makeNativePoint(keyPos.x, keyPos.y, null),
+          r7a: makeNativePoint(block.x, block.y, null),
+          type: type,
+          yNa: type,
+          xL: 0,
+          wm: false,
+          Lh: true,
+        };
+        keyObj.r7a.type = type;
+        g.Ba.keys.push(keyObj);
+      }
+      clearFruitHost(g);
+      return g.Ba.keys.length > 0;
+    }
+
+    if (isSoko) {
+      if (!g.Aa) g.Aa = {};
+      if (!g.Aa.oa) g.Aa.oa = [];
+      if (!g.Aa.d_ && !g.Aa.da) g.Aa.d_ = [];
+      const boxHost = g.Aa.oa;
+      const goalHost = g.Aa.d_ || g.Aa.da;
+      if (countHostItems(boxHost) > 0 && countHostItems(goalHost) > 0) {
+        clearFruitHost(g);
+        return true;
+      }
+      const cells = pickKeySokoCells(g, objectWant * 2);
+      if (cells.length < 2) return false;
+      function writeHost(host, list, asBox) {
+        if (Array.isArray(host)) {
+          host.length = 0;
+          for (let i = 0; i < list.length; i++) {
+            const p = list[i];
+            if (asBox) {
+              host.push({
+                pos: makeNativePoint(p.x, p.y, null),
+                prev: null,
+                wm: true,
+                Lh: true,
+              });
+            } else {
+              host.push(makeNativePoint(p.x, p.y, null));
+            }
+          }
+          return;
+        }
+        if (host && typeof host.clear === "function") {
+          host.clear();
+          for (let i = 0; i < list.length; i++) {
+            const p = list[i];
+            const obj = asBox
+              ? {
+                  pos: makeNativePoint(p.x, p.y, null),
+                  prev: null,
+                  wm: true,
+                  Lh: true,
+                }
+              : makeNativePoint(p.x, p.y, null);
+            if (typeof host.add === "function") host.add(obj);
+            else if (typeof host.set === "function") {
+              host.set((p.x | 0) + "," + (p.y | 0), obj);
+            }
+          }
+        }
+      }
+      const boxes = [];
+      const goals = [];
+      const pairs = Math.floor(cells.length / 2);
+      for (let i = 0; i < pairs; i++) {
+        boxes.push(cells[i * 2]);
+        goals.push(cells[i * 2 + 1]);
+      }
+      writeHost(boxHost, boxes, true);
+      writeHost(goalHost, goals, false);
+      clearFruitHost(g);
+      return countHostItems(boxHost) > 0 && countHostItems(goalHost) > 0;
+    }
+    return false;
   }
 
   /**
@@ -43011,9 +43816,11 @@ window.RemixMod.runCodeAfter = function () {
       try {
         root.__mpForceLiveBoardDims = dims.width + "x" + dims.height;
       } catch (eFlag) { /* ignore */ }
-      // Ma/Sna skipped — plant Classic aT so owner scrape is not empty/(0,0)
+      // Ma/Sna skipped — plant Classic aT so owner scrape is not empty/(0,0).
+      // Key / Sokoban get mode objects instead of fruit.
       try {
-        plantClassicInitialFruit(g);
+        if (isKeyOrSokobanMode()) plantInitialKeySokoban(g);
+        else plantClassicInitialFruit(g);
       } catch (eFruit) { /* ignore */ }
       try {
         root.__mpForceLiveBoardDims = dims.width + "x" + dims.height;
@@ -45526,15 +46333,18 @@ window.RemixMod.runCodeAfter = function () {
   }
 
   /**
-   * Winged (and Slot winged roll): fruit drifts on He each tick. Co-op must seed
-   * spawn pos + direction once, then trust each client's native motion — late
-   * pos sync rubber-bands fruit backwards.
+   * Winged / Magnet (and Slot rolls 6 / 18): fruit drifts on He each tick.
+   * Co-op must seed spawn pos + direction once, then trust each client's native
+   * motion — late pos sync rubber-bands fruit backwards.
    */
   function isCoopFruitMotionMode() {
-    if (boardHasMode({ modeKey: scrapeModeKey() }, "winged")) return true;
+    const mk = scrapeModeKey();
+    if (boardHasMode({ modeKey: mk }, "winged")) return true;
+    if (boardHasMode({ modeKey: mk }, "magnet")) return true;
     try {
       const slot = root.__slotActive != null ? Number(root.__slotActive) | 0 : -1;
       if (slot === 6) return true; // Winged roll
+      if (slot === 18) return true; // Magnet roll
     } catch (e) { /* ignore */ }
     return false;
   }
@@ -50519,6 +51329,10 @@ window.RemixMod.runCodeAfter = function () {
     findPlayController: findPlayController,
     classicInitialFruit: classicInitialFruit,
     plantClassicInitialFruit: plantClassicInitialFruit,
+    plantInitialKeySokoban: plantInitialKeySokoban,
+    isKeyOrSokobanMode: isKeyOrSokobanMode,
+    isShieldMode: isShieldMode,
+    assignCoopFruitShields: assignCoopFruitShields,
     matchAppleType: matchAppleType,
     ensureFruitHostTemplate: ensureFruitHostTemplate,
     forceLiveBoardDims: forceLiveBoardDims,
@@ -54351,10 +55165,11 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         ) {
           fruitPayload.apples = fruitPayload.collectables;
         }
-        // Exact shared board — no freePos top-up / no local nudge (initial or runtime)
-        fruitPayload.initial = true;
+        // Exact shared board — no freePos top-up / no local nudge.
+        // Do not force initial on every runtime delta (breaks seed/trust motion).
         fruitPayload.exactBoard = true;
         if (p.initial === true) {
+          fruitPayload.initial = true;
           self._applyInitialCollectablesWithRetry(fruitPayload);
         } else {
           try {
@@ -57627,12 +58442,10 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       return;
     }
 
-    // Do not apply self into remotes — paint skips myId; saves O(n) followBody/GC
-    this.client.snakeDelta(delta);
-    if (typeof this.refreshCoopScores === "function") this.refreshCoopScores();
+    // Death on the wire is client-authoritative via COOP_PLAYER_DEAD only.
+    // Never send alive:false from a false scrape — peers would show a dead
+    // native-peer while this player is still alive.
     if (delta.alive === false && !this._coopDeadSent) {
-      // Sticky scrape death must reflect a real native die — peer paint /
-      // seating glitches can briefly report alive:false without nj.
       const g =
         Gsm.gameInstance && typeof Gsm.gameInstance === "function"
           ? Gsm.gameInstance()
@@ -57645,6 +58458,31 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           (g.oa && (g.oa.nj === true || g.oa.dead === true)))
       );
       if (!nativeDead) {
+        if (typeof this._logCoopDeath === "function") {
+          this._logCoopDeath("scrape_alive_false_ignored");
+        }
+        delta.alive = true;
+      }
+    }
+
+    // Do not apply self into remotes — paint skips myId; saves O(n) followBody/GC
+    this.client.snakeDelta(delta);
+    if (typeof this.refreshCoopScores === "function") this.refreshCoopScores();
+    if (delta.alive === false && !this._coopDeadSent) {
+      // Confirmed native death — announce so peers sticky-kill this seat.
+      const g =
+        Gsm.gameInstance && typeof Gsm.gameInstance === "function"
+          ? Gsm.gameInstance()
+          : null;
+      const nativeDead = !!(
+        g &&
+        (g.nj === true ||
+          g.dead === true ||
+          g.isDead === true ||
+          (g.oa && (g.oa.nj === true || g.oa.dead === true)))
+      );
+      if (!nativeDead) {
+        // Should not reach here after the pre-send guard; belt-and-suspenders.
         this._logCoopDeath("scrape_alive_false_ignored");
         return;
       }
@@ -57836,24 +58674,33 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       !this._coopSpawnApplied ||
       !Gsm.scrapeCollectables
     ) return false;
+    const keySoko =
+      typeof Gsm.isKeyOrSokobanMode === "function" && Gsm.isKeyOrSokobanMode();
     // Prefer native Sna stock; if empty (force-bake), plant Classic aT for Count.
+    // Key / Sokoban: plant keys/boxes/goals — never classic fruit.
     try {
       const g = Gsm.gameInstance && Gsm.gameInstance();
-      const ka = g && g.wa && g.wa.ka;
-      const needPlant =
-        !Array.isArray(ka) ||
-        ka.length < 1 ||
-        (ka.length === 1 &&
-          ka[0] &&
-          ka[0].pos &&
-          (Number(ka[0].pos.x) < 0 || Number(ka[0].pos.y) < 0));
-      if (needPlant && Gsm.plantClassicInitialFruit) {
-        Gsm.plantClassicInitialFruit();
-      } else if (Array.isArray(ka) && Gsm.matchAppleType) {
-        const t = Gsm.matchAppleType();
-        for (let i = 0; i < ka.length; i++) {
-          if (ka[i]) ka[i].type = t;
+      if (keySoko) {
+        if (Gsm.plantInitialKeySokoban) Gsm.plantInitialKeySokoban(g);
+      } else {
+        const ka = g && g.wa && g.wa.ka;
+        const needPlant =
+          !Array.isArray(ka) ||
+          ka.length < 1 ||
+          (ka.length === 1 &&
+            ka[0] &&
+            ka[0].pos &&
+            (Number(ka[0].pos.x) < 0 || Number(ka[0].pos.y) < 0));
+        if (needPlant && Gsm.plantClassicInitialFruit) {
+          Gsm.plantClassicInitialFruit();
+        } else if (Array.isArray(ka) && Gsm.matchAppleType) {
+          const t = Gsm.matchAppleType();
+          for (let i = 0; i < ka.length; i++) {
+            if (ka[i]) ka[i].type = t;
+          }
         }
+        // Shield: ensure nba before scrape so peers get admin shields
+        if (Gsm.assignCoopFruitShields) Gsm.assignCoopFruitShields(g);
       }
     } catch (eSeed) { /* ignore */ }
     const cols = Gsm.scrapeCollectables({ includeEntities: true });
@@ -57862,7 +58709,12 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       cols.collectables = Array.isArray(cols.apples) ? cols.apples.slice() : [];
     }
     const appleCount = Array.isArray(cols.apples) ? cols.apples.length : 0;
-    if (appleCount < 1) {
+    const keyCount = Array.isArray(cols.keys) ? cols.keys.length : 0;
+    const boxCount = Array.isArray(cols.boxes) ? cols.boxes.length : 0;
+    const goalCount = Array.isArray(cols.goals) ? cols.goals.length : 0;
+    const entityReady =
+      keySoko && (keyCount > 0 || (boxCount > 0 && goalCount > 0));
+    if (appleCount < 1 && !entityReady) {
       // Keep _coopBoardInitRequested so idle sync retries after bake lands
       return false;
     }
@@ -57873,6 +58725,9 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       : cols.modeKey || "";
     cols.initial = true;
     cols.baseRevision = 0;
+    if (Gsm.isCoopFruitMotionMode && Gsm.isCoopFruitMotionMode()) {
+      cols.fruitMotionSeed = true;
+    }
     this.client.collectablesDelta(cols);
     this._coopBoardInitRequested = false;
     return true;
@@ -58083,6 +58938,10 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       cols.baseRevision = baseRev;
       cols.revision = nextRev;
       cols.rev = nextRev;
+      if (Gsm.isCoopFruitMotionMode && Gsm.isCoopFruitMotionMode()) {
+        if (force) cols.fruitMotionSeed = true;
+        else cols.fruitMotionTrust = true;
+      }
       if (this.coopNative) this.coopNative.applyCollectables(cols);
       this.client.collectablesDelta(cols);
       return true;
@@ -58814,18 +59673,50 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     // Only Best 25 / 50 / 100 — not Score, not Best All (All already resets)
     if (thr == null || !Number.isFinite(Number(thr))) return false;
     if (Number(score) < Number(thr)) return false;
+    // Need a real clock — zero-time hits are clock-reset ghosts, not completions
+    if (!(Number(timeMs) > 0)) return false;
     this._raceGoalResetArmed = true;
     this._raceRunStartedAtMs = null;
     if (typeof this._maybePromotePb === "function") {
       this._maybePromotePb(timeMs, score);
     }
-    return this.restartRaceAfterDeath();
+    return this.restartRaceAfterDeath({ forceNewRun: true });
   };
 
-  MultiplayerApp.prototype.restartRaceAfterDeath = function () {
+  /**
+   * End the current native race run so startNativeRun will click Play again.
+   * Mid-run goal reset leaves the engine "live"; without this, Play never fires.
+   */
+  MultiplayerApp.prototype._forceEndRaceRunForRestart = function () {
+    try {
+      const tk =
+        typeof window !== "undefined" ? window.timeKeeper : root.timeKeeper;
+      if (tk) {
+        tk._dead = true;
+        tk.playing = false;
+      }
+    } catch (eTk) { /* ignore */ }
+    try {
+      const g = Gsm.gameInstance && Gsm.gameInstance();
+      if (g) {
+        if ("nj" in g) g.nj = true;
+        if ("dead" in g) g.dead = true;
+      }
+    } catch (eG) { /* ignore */ }
+  };
+
+  MultiplayerApp.prototype.restartRaceAfterDeath = function (opts) {
+    opts = opts || {};
     if (!this.canAutoRestartRace()) return false;
     if (this._raceRestartPending) return false;
     this._raceRestartPending = true;
+    // Mid-run Reset-on-goal: force not-live so startNativeRun clicks Play
+    if (
+      opts.forceNewRun ||
+      (Gsm.isNativeRunLive && Gsm.isNativeRunLive())
+    ) {
+      this._forceEndRaceRunForRestart();
+    }
     // Hide endscreen immediately so death never "sticks" visually
     if (Gsm.dismissDeathOverlayForRun) Gsm.dismissDeathOverlayForRun();
     else if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
@@ -58834,6 +59725,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     setTimeout(function () {
       self._raceRestartPending = false;
       if (!self.canAutoRestartRace()) return;
+      // Re-assert not-live in case a tick cleared flags
+      if (opts.forceNewRun) self._forceEndRaceRunForRestart();
       if (Gsm.startNativeRun) {
         Gsm.startNativeRun({
           maxAttempts: 40,

@@ -1,9 +1,11 @@
 //! Local control GUI for the multiplayer room server.
 //! Serves a True Dark themed dashboard on :7778 that starts/stops/rebuilds
-//! the game server on :7777 and streams its logs.
+//! the game server on :7777 and streams its logs. Optionally hosts an HTTP
+//! reverse-proxy of googlesnakemods.com on :7779 (off by default) with UPnP.
 
-use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::body::Body;
+use axum::extract::{Path, Query, Request, State};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -11,6 +13,7 @@ use axum::Json;
 use axum::Router;
 use clap::Parser;
 use futures_util::stream::Stream;
+use multiplayer_server::upnp::UpnpMapping;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,12 +27,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
 use tower_http::cors::CorsLayer;
 
 const LOG_CAP: usize = 2000;
 const DEFAULT_GUI: &str = "0.0.0.0:7778";
 const DEFAULT_SERVER: &str = "0.0.0.0:7777";
+const DEFAULT_SITE: &str = "0.0.0.0:7779";
+const GSM_ORIGIN: &str = "https://googlesnakemods.com";
+const MOD_SCRIPT_TAG: &str = r#"<script src="/MultiplayerMod.js"></script>"#;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -44,6 +50,10 @@ struct Args {
     /// Game server bind passed to multiplayer-server
     #[arg(long, env = "MULTIPLAYER_BIND", default_value = DEFAULT_SERVER)]
     server_bind: SocketAddr,
+
+    /// Optional GSM HTTP host bind (off until Start site; default :7779)
+    #[arg(long, env = "MULTIPLAYER_SITE_BIND", default_value = DEFAULT_SITE)]
+    site_bind: SocketAddr,
 
     /// Path to server/Cargo.toml (auto-detected from CWD when empty)
     #[arg(long, env = "MULTIPLAYER_MANIFEST", default_value = "")]
@@ -65,6 +75,16 @@ enum Phase {
     Error,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum SitePhase {
+    Idle,
+    Starting,
+    Running,
+    Stopping,
+    Error,
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct Status {
     phase: Phase,
@@ -73,6 +93,11 @@ struct Status {
     server_bind: String,
     message: String,
     rebuilding: bool,
+    site_phase: SitePhase,
+    site_running: bool,
+    site_bind: String,
+    site_message: String,
+    site_public_url: Option<String>,
 }
 
 struct Shared {
@@ -84,6 +109,13 @@ struct Shared {
     log_tx: broadcast::Sender<String>,
     busy: AtomicBool,
     server_bind: SocketAddr,
+    site_bind: SocketAddr,
+    site_phase: Mutex<SitePhase>,
+    site_message: Mutex<String>,
+    site_public_url: Mutex<Option<String>>,
+    site_busy: AtomicBool,
+    site_shutdown: Mutex<Option<oneshot::Sender<()>>>,
+    http_client: reqwest::Client,
     manifest: PathBuf,
     repo_root: PathBuf,
     server_bin: PathBuf,
@@ -95,6 +127,7 @@ struct Shared {
 impl Shared {
     fn status(&self) -> Status {
         let phase = *self.phase.lock();
+        let site_phase = *self.site_phase.lock();
         Status {
             phase,
             running: matches!(phase, Phase::Running | Phase::Starting),
@@ -102,12 +135,22 @@ impl Shared {
             server_bind: self.server_bind.to_string(),
             message: self.message.lock().clone(),
             rebuilding: phase == Phase::Rebuilding,
+            site_phase,
+            site_running: matches!(site_phase, SitePhase::Running | SitePhase::Starting),
+            site_bind: self.site_bind.to_string(),
+            site_message: self.site_message.lock().clone(),
+            site_public_url: self.site_public_url.lock().clone(),
         }
     }
 
     fn set_phase(&self, phase: Phase, message: String) {
         *self.phase.lock() = phase;
         *self.message.lock() = message;
+    }
+
+    fn set_site_phase(&self, phase: SitePhase, message: String) {
+        *self.site_phase.lock() = phase;
+        *self.site_message.lock() = message;
     }
 
     fn push_log(&self, line: String) {
@@ -209,6 +252,11 @@ async fn main() {
     let args = Args::parse();
     let (manifest, repo_root, server_bin) = resolve_paths(&args.manifest);
     let (log_tx, _) = broadcast::channel(512);
+    let http_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .user_agent("GoogleSnakeLAN-console-site/1.0")
+        .build()
+        .expect("reqwest Client");
     let shared = Arc::new(Shared {
         phase: Mutex::new(Phase::Idle),
         message: Mutex::new("Ready".into()),
@@ -218,6 +266,13 @@ async fn main() {
         log_tx,
         busy: AtomicBool::new(false),
         server_bind: args.server_bind,
+        site_bind: args.site_bind,
+        site_phase: Mutex::new(SitePhase::Idle),
+        site_message: Mutex::new("Site host off (default)".into()),
+        site_public_url: Mutex::new(None),
+        site_busy: AtomicBool::new(false),
+        site_shutdown: Mutex::new(None),
+        http_client,
         manifest,
         repo_root,
         server_bin,
@@ -226,8 +281,8 @@ async fn main() {
     });
 
     shared.push_log(format!(
-        "[console] GUI http://{}  ·  game server {}",
-        args.gui_bind, args.server_bind
+        "[console] GUI http://{}  ·  game server {}  ·  site host {} (off until Start site)",
+        args.gui_bind, args.server_bind, args.site_bind
     ));
     shared.push_log(format!(
         "[console] manifest {}  ·  bin {}",
@@ -236,6 +291,7 @@ async fn main() {
     ));
 
     // Auto-start if a release binary already exists; otherwise idle until Restart.
+    // Site host stays off until the user presses Start site.
     if shared.server_bin.is_file() {
         let s = shared.clone();
         tokio::spawn(async move {
@@ -253,12 +309,14 @@ async fn main() {
         .route("/api/start", post(api_start))
         .route("/api/stop", post(api_stop))
         .route("/api/restart", post(api_restart))
+        .route("/api/site/start", post(api_site_start))
+        .route("/api/site/stop", post(api_site_stop))
         .route("/api/logs", get(api_logs))
         .route("/api/rooms", get(api_rooms_proxy))
         .route("/api/spectate", get(api_spectate_proxy))
         .route("/api/fruit/{idx}", get(api_fruit_sprite))
         .layer(CorsLayer::permissive())
-        .with_state(shared);
+        .with_state(shared.clone());
 
     let listener = tokio::net::TcpListener::bind(args.gui_bind)
         .await
@@ -268,10 +326,17 @@ async fn main() {
         });
     let local = listener.local_addr().unwrap();
     eprintln!(
-        "Multiplayer console (True Dark)  http://{local}\nGame server target  {}\n",
-        args.server_bind
+        "Multiplayer console (True Dark)  http://{local}\nGame server target  {}\nSite host (off)     {}\n",
+        args.server_bind, args.site_bind
     );
-    axum::serve(listener, app).await.unwrap();
+    let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
+        let _ = tokio::signal::ctrl_c().await;
+    });
+    if let Err(e) = serve.await {
+        eprintln!("console serve error: {e}");
+    }
+    // Best-effort: tear down site host + UPnP on console exit.
+    let _ = stop_site_inner(shared).await;
 }
 
 async fn api_status(State(s): State<Arc<Shared>>) -> Json<Status> {
@@ -318,6 +383,20 @@ async fn api_stop(State(s): State<Arc<Shared>>) -> (axum::http::StatusCode, Json
 
 async fn api_restart(State(s): State<Arc<Shared>>) -> (axum::http::StatusCode, Json<Status>) {
     match restart_server(s).await {
+        Ok(st) => (axum::http::StatusCode::OK, Json(st)),
+        Err((code, st)) => (code, Json(st)),
+    }
+}
+
+async fn api_site_start(State(s): State<Arc<Shared>>) -> (axum::http::StatusCode, Json<Status>) {
+    match start_site(s).await {
+        Ok(st) => (axum::http::StatusCode::OK, Json(st)),
+        Err((code, st)) => (code, Json(st)),
+    }
+}
+
+async fn api_site_stop(State(s): State<Arc<Shared>>) -> (axum::http::StatusCode, Json<Status>) {
+    match stop_site(s).await {
         Ok(st) => (axum::http::StatusCode::OK, Json(st)),
         Err((code, st)) => (code, Json(st)),
     }
@@ -538,17 +617,14 @@ async fn start_server_inner(
     }
     s.set_phase(Phase::Starting, "Starting server…".to_string());
     s.push_log(format!(
-        "[console] spawning {} --bind {}",
+        "[console] spawning {} --bind {} --upnp",
         s.server_bin.display(),
         s.server_bind
     ));
-    s.push_log(
-        "[console] UPnP: off by default (pass --upnp on the game process to map); Stop still best-effort deletes any forward"
-            .into(),
-    );
     let mut cmd = Command::new(&s.server_bin);
     cmd.arg("--bind")
         .arg(s.server_bind.to_string())
+        .arg("--upnp")
         .args(&s.extra_args)
         .current_dir(&s.repo_root)
         .stdout(Stdio::piped())
@@ -642,6 +718,293 @@ async fn stop_server_inner(
     *s.pid.lock() = None;
     s.set_phase(Phase::Idle, "Stopped".to_string());
     Ok(s.status())
+}
+
+async fn start_site(s: Arc<Shared>) -> Result<Status, (axum::http::StatusCode, Status)> {
+    if !s
+        .site_busy
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        return Err((
+            axum::http::StatusCode::CONFLICT,
+            Status {
+                site_message: "Busy".into(),
+                ..s.status()
+            },
+        ));
+    }
+    let result = start_site_inner(s.clone()).await;
+    s.site_busy.store(false, Ordering::SeqCst);
+    result
+}
+
+async fn start_site_inner(s: Arc<Shared>) -> Result<Status, (axum::http::StatusCode, Status)> {
+    if matches!(
+        *s.site_phase.lock(),
+        SitePhase::Running | SitePhase::Starting
+    ) || s.site_shutdown.lock().is_some()
+    {
+        return Ok(s.status());
+    }
+
+    s.set_site_phase(SitePhase::Starting, "Starting site host…".into());
+    s.push_log(format!(
+        "[console] site host binding http://{}",
+        s.site_bind
+    ));
+
+    let listener = match tokio::net::TcpListener::bind(s.site_bind).await {
+        Ok(l) => l,
+        Err(e) => {
+            s.set_site_phase(SitePhase::Error, format!("Site bind failed: {e}"));
+            s.push_log(format!("[console] site bind error: {e}"));
+            return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, s.status()));
+        }
+    };
+    let local = listener.local_addr().unwrap_or(s.site_bind);
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    *s.site_shutdown.lock() = Some(shutdown_tx);
+
+    let site_app = Router::new()
+        .route("/MultiplayerMod.js", get(serve_multiplayer_mod))
+        .fallback(proxy_gsm)
+        .layer(CorsLayer::permissive())
+        .with_state(s.clone());
+
+    let serve_s = s.clone();
+    tokio::spawn(async move {
+        let serve = axum::serve(listener, site_app).with_graceful_shutdown(async move {
+            let _ = shutdown_rx.await;
+        });
+        if let Err(e) = serve.await {
+            serve_s.push_log(format!("[console] site serve error: {e}"));
+            serve_s.set_site_phase(SitePhase::Error, format!("Site serve error: {e}"));
+        }
+    });
+
+    let port = s.site_bind.port();
+    s.push_log(format!(
+        "[console] site UPnP: mapping TCP {port}…"
+    ));
+    match UpnpMapping::open(port).await {
+        Ok((mapping, external_ip)) => {
+            let url = format!("http://{external_ip}:{port}");
+            *s.site_public_url.lock() = Some(url.clone());
+            // Keep the IGD forward until Stop: forget RAII guard so Drop does not
+            // unmap; stop uses delete_tcp_mapping. Avoids storing !Send gateway in Shared.
+            std::mem::forget(mapping);
+            s.push_log(format!(
+                "[console] site UPnP: mapped — friends open {url}"
+            ));
+            s.set_site_phase(
+                SitePhase::Running,
+                format!("Hosting on http://{local} · public {url}"),
+            );
+        }
+        Err(e) => {
+            *s.site_public_url.lock() = None;
+            s.push_log(format!(
+                "[console] site UPnP: skipped ({e}) — LAN still http://{local}"
+            ));
+            s.set_site_phase(
+                SitePhase::Running,
+                format!("Hosting on http://{local} (UPnP unavailable)"),
+            );
+        }
+    }
+    s.push_log(format!("[console] site host up on http://{local}"));
+    Ok(s.status())
+}
+
+async fn stop_site(s: Arc<Shared>) -> Result<Status, (axum::http::StatusCode, Status)> {
+    if !s
+        .site_busy
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        return Err((
+            axum::http::StatusCode::CONFLICT,
+            Status {
+                site_message: "Busy".into(),
+                ..s.status()
+            },
+        ));
+    }
+    let result = stop_site_inner(s.clone()).await;
+    s.site_busy.store(false, Ordering::SeqCst);
+    result
+}
+
+async fn stop_site_inner(s: Arc<Shared>) -> Result<Status, (axum::http::StatusCode, Status)> {
+    s.set_site_phase(SitePhase::Stopping, "Stopping site host…".into());
+    s.push_log("[console] site host stopping…".into());
+
+    let shutdown_tx = s.site_shutdown.lock().take();
+    if let Some(tx) = shutdown_tx {
+        let _ = tx.send(());
+        // Brief pause so the listener can release the port before a quick restart.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+
+    let port = s.site_bind.port();
+    s.push_log(format!(
+        "[console] site UPnP: deleting TCP {port} mapping (best-effort)…"
+    ));
+    match multiplayer_server::upnp::delete_tcp_mapping(port).await {
+        Ok(()) => s.push_log(format!("[console] site UPnP: TCP {port} unmapped")),
+        Err(e) => s.push_log(format!(
+            "[console] site UPnP: unmap skipped ({e}) — router may already be clear"
+        )),
+    }
+    *s.site_public_url.lock() = None;
+    s.set_site_phase(SitePhase::Idle, "Site host off".into());
+    Ok(s.status())
+}
+
+async fn serve_multiplayer_mod(State(s): State<Arc<Shared>>) -> Response {
+    let path = s.repo_root.join("MultiplayerMod.js");
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [(
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            )],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => {
+            s.push_log(format!(
+                "[console] site missing MultiplayerMod.js at {}: {e}",
+                path.display()
+            ));
+            (
+                StatusCode::NOT_FOUND,
+                format!("MultiplayerMod.js not found at {}", path.display()),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn proxy_gsm(State(s): State<Arc<Shared>>, req: Request) -> Response {
+    if req.method() != Method::GET && req.method() != Method::HEAD {
+        return (StatusCode::METHOD_NOT_ALLOWED, "GET/HEAD only").into_response();
+    }
+
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
+    let url = format!("{GSM_ORIGIN}{path_and_query}");
+
+    let mut upstream = s.http_client.request(req.method().clone(), &url);
+    // Forward a few safe request headers.
+    if let Some(accept) = req.headers().get(header::ACCEPT) {
+        upstream = upstream.header(header::ACCEPT, accept);
+    }
+    if let Some(lang) = req.headers().get(header::ACCEPT_LANGUAGE) {
+        upstream = upstream.header(header::ACCEPT_LANGUAGE, lang);
+    }
+
+    let resp = match upstream.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Upstream fetch failed: {e}"),
+            )
+                .into_response();
+        }
+    };
+
+    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let headers = resp.headers().clone();
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let is_html = content_type.to_ascii_lowercase().contains("text/html");
+
+    if is_html {
+        let mut body = match resp.text().await {
+            Ok(t) => t,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    format!("Upstream body error: {e}"),
+                )
+                    .into_response();
+            }
+        };
+        body = body.replace("https://googlesnakemods.com", "");
+        body = body.replace("http://googlesnakemods.com", "");
+        if !body.contains("/MultiplayerMod.js") {
+            if let Some(idx) = body.to_ascii_lowercase().rfind("</body>") {
+                body.insert_str(idx, MOD_SCRIPT_TAG);
+            } else {
+                body.push_str(MOD_SCRIPT_TAG);
+            }
+        }
+        let mut out = Response::builder().status(status);
+        if let Some(h) = out.headers_mut() {
+            copy_passthrough_headers(&headers, h, true);
+            h.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            );
+        }
+        return out
+            .body(Body::from(body))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    }
+
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Upstream body error: {e}"),
+            )
+                .into_response();
+        }
+    };
+    let mut out = Response::builder().status(status);
+    if let Some(h) = out.headers_mut() {
+        copy_passthrough_headers(&headers, h, false);
+    }
+    out.body(Body::from(bytes))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+fn copy_passthrough_headers(from: &HeaderMap, to: &mut HeaderMap, html_rebuild: bool) {
+    const SKIP: &[&str] = &[
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "content-length",
+        "content-encoding",
+        "content-security-policy",
+        "content-security-policy-report-only",
+        "strict-transport-security",
+        "x-frame-options",
+    ];
+    for (name, value) in from.iter() {
+        let lower = name.as_str();
+        if SKIP.iter().any(|s| *s == lower) {
+            continue;
+        }
+        if html_rebuild && lower == "content-type" {
+            continue;
+        }
+        if let Ok(n) = HeaderName::from_bytes(name.as_str().as_bytes()) {
+            to.insert(n, value.clone());
+        }
+    }
 }
 
 async fn restart_server(
@@ -1007,14 +1370,17 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     <section class="panel">
       <h2>Controls</h2>
       <div class="actions">
-        <button class="primary" id="btnStart" type="button">Start</button>
-        <button class="danger" id="btnStop" type="button">Stop</button>
+        <button class="primary" id="btnPower" type="button">Start</button>
+        <button class="primary" id="btnSite" type="button">Start site</button>
         <button class="restart" id="btnRestart" type="button">Restart</button>
       </div>
       <div class="meta">
         <div class="cell"><div class="label">Message</div><div class="value" id="msg">—</div></div>
         <div class="cell"><div class="label">PID</div><div class="value" id="pid">—</div></div>
         <div class="cell"><div class="label">Game bind</div><div class="value" id="bind">—</div></div>
+        <div class="cell"><div class="label">Site</div><div class="value" id="siteMsg">—</div></div>
+        <div class="cell"><div class="label">Site bind</div><div class="value" id="siteBind">—</div></div>
+        <div class="cell"><div class="label">Site public</div><div class="value" id="sitePublic">—</div></div>
       </div>
     </section>
 
@@ -1056,7 +1422,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
       <div id="log" aria-live="polite"></div>
     </section>
 
-    <footer>Host controls stay on this page (:7778) · friends join ws://&lt;lan-ip&gt;:7777/ws on LAN (UPnP off by default)</footer>
+    <footer>Host controls on :7778 · site host off until Start site (:7779 + UPnP) · friends open http://&lt;ip&gt;:7779 · game ws://&lt;ip&gt;:7777</footer>
   </div>
 <script>
 (function () {
@@ -1066,8 +1432,11 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   const msg = document.getElementById("msg");
   const pid = document.getElementById("pid");
   const bind = document.getElementById("bind");
-  const btnStart = document.getElementById("btnStart");
-  const btnStop = document.getElementById("btnStop");
+  const siteMsg = document.getElementById("siteMsg");
+  const siteBind = document.getElementById("siteBind");
+  const sitePublic = document.getElementById("sitePublic");
+  const btnPower = document.getElementById("btnPower");
+  const btnSite = document.getElementById("btnSite");
   const btnRestart = document.getElementById("btnRestart");
   const roomPick = document.getElementById("roomPick");
   const viewSeg = document.getElementById("viewSeg");
@@ -1112,14 +1481,24 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     msg.textContent = st.message || "—";
     pid.textContent = st.pid != null ? String(st.pid) : "—";
     bind.textContent = st.server_bind || "—";
+    siteMsg.textContent = st.site_message || "—";
+    siteBind.textContent = st.site_bind || "—";
+    sitePublic.textContent = st.site_public_url || "—";
     dot.className = "dot";
     if (st.phase === "running") dot.classList.add("on");
     else if (st.phase === "error") dot.classList.add("err");
     else if (st.phase === "rebuilding" || st.phase === "starting" || st.phase === "stopping")
       dot.classList.add("busy");
     const busy = st.phase === "rebuilding" || st.phase === "starting" || st.phase === "stopping";
-    btnStart.disabled = busy || st.running;
-    btnStop.disabled = busy || !st.running;
+    const siteBusy = st.site_phase === "starting" || st.site_phase === "stopping";
+    const gameOn = !!st.running;
+    btnPower.textContent = gameOn ? "Stop" : "Start";
+    btnPower.className = gameOn ? "danger" : "primary";
+    btnPower.disabled = busy;
+    const siteOn = !!st.site_running;
+    btnSite.textContent = siteOn ? "Stop site" : "Start site";
+    btnSite.className = siteOn ? "danger" : "primary";
+    btnSite.disabled = siteBusy;
     btnRestart.disabled = busy;
   }
 
@@ -1148,8 +1527,12 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     }
   }
 
-  btnStart.addEventListener("click", function () { post("/api/start"); });
-  btnStop.addEventListener("click", function () { post("/api/stop"); });
+  btnPower.addEventListener("click", function () {
+    post(btnPower.textContent === "Stop" ? "/api/stop" : "/api/start");
+  });
+  btnSite.addEventListener("click", function () {
+    post(btnSite.textContent === "Stop site" ? "/api/site/stop" : "/api/site/start");
+  });
   btnRestart.addEventListener("click", function () { post("/api/restart"); });
   document.getElementById("btnClear").addEventListener("click", function () {
     logEl.innerHTML = "";
@@ -1724,7 +2107,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     } catch (_) {}
   }
   refresh();
-  setInterval(refresh, 2000);
+  setInterval(refresh, 500);
   pollSpectate();
   setInterval(pollSpectate, 16);
   window.addEventListener("resize", function () { renderSpectate(lastSnap); });

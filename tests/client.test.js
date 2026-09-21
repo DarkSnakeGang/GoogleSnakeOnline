@@ -1183,14 +1183,81 @@ describe("coop native inject bridge", () => {
       ],
       alive: true,
     });
+    // Authoritative death sticky (COOP_PLAYER_DEAD), then empty scrape
+    cn.remotes.p2.alive = false;
+    cn.remotes.p2._deadSticky = true;
     cn.applySnakeDelta({
       clientId: "p2",
       body: [],
       alive: false,
     });
     assert.equal(cn.remotes.p2.alive, false);
+    assert.equal(cn.remotes.p2._deadSticky, true);
     assert.equal(cn.remotes.p2.body.length, 2);
     assert.equal(cn.remotes.p2.body[0].x, 3);
+  });
+
+  it("ignores SNAKE_DELTA alive:false without COOP_PLAYER_DEAD sticky", () => {
+    global.window = global;
+    const modPath = require.resolve(path.join(root, "src/coop/native.js"));
+    delete require.cache[modPath];
+    delete global.__mpCoopRenderInstalled;
+    delete global.__mpCoopOnTickInstalled;
+    const { CoopNative } = require(path.join(root, "src/coop/native.js"));
+    const cn = new CoopNative();
+    cn.applySnakeDelta({
+      clientId: "p2",
+      body: [
+        { x: 5, y: 5 },
+        { x: 4, y: 5 },
+      ],
+      alive: true,
+    });
+    cn.applySnakeDelta({
+      clientId: "p2",
+      body: [
+        { x: 6, y: 5 },
+        { x: 5, y: 5 },
+      ],
+      alive: false,
+    });
+    assert.equal(
+      cn.remotes.p2.alive,
+      true,
+      "false scrape death must not kill peer without COOP_PLAYER_DEAD"
+    );
+    assert.equal(cn.remotes.p2._deadSticky, undefined);
+    assert.equal(cn.remotes.p2.body[0].x, 6);
+  });
+
+  it("sticky COOP_PLAYER_DEAD keeps peer dead across later live scrapes", () => {
+    global.window = global;
+    const modPath = require.resolve(path.join(root, "src/coop/native.js"));
+    delete require.cache[modPath];
+    delete global.__mpCoopRenderInstalled;
+    delete global.__mpCoopOnTickInstalled;
+    const { CoopNative } = require(path.join(root, "src/coop/native.js"));
+    const cn = new CoopNative();
+    cn.applySnakeDelta({
+      clientId: "p2",
+      body: [
+        { x: 1, y: 1 },
+        { x: 0, y: 1 },
+      ],
+      alive: true,
+    });
+    cn.remotes.p2.alive = false;
+    cn.remotes.p2._deadSticky = true;
+    cn.applySnakeDelta({
+      clientId: "p2",
+      body: [
+        { x: 2, y: 1 },
+        { x: 1, y: 1 },
+      ],
+      alive: true,
+    });
+    assert.equal(cn.remotes.p2.alive, false);
+    assert.equal(cn.remotes.p2._deadSticky, true);
   });
 
   it("keeps seeded colors when a later delta omits them", () => {
@@ -1459,6 +1526,69 @@ describe("versus instant death reset", () => {
     app.client.roster.raceGoal = "best50";
     assert.equal(app.maybeResetRaceOnGoal(50, 2000), true);
     assert.equal(restarts, 2);
+  });
+
+  it("maybeResetRaceOnGoal rejects zero-time hits and forces mid-run restart", () => {
+    const MultiplayerApp = loadApp();
+    const app = new MultiplayerApp();
+    let restarts = 0;
+    let forced = 0;
+    let restartOpts = null;
+    app.client = {
+      connected: true,
+      me: function () {
+        return { role: "player" };
+      },
+      roster: {
+        mode: "race",
+        sessionActive: true,
+        allowNewRuns: true,
+        raceGoal: "best25",
+      },
+    };
+    app.race.raceGoal = "best25";
+    app.race.expired = false;
+    app.raceResetOnGoalEnabled = function () {
+      return true;
+    };
+    app._forceEndRaceRunForRestart = function () {
+      forced++;
+    };
+    app.restartRaceAfterDeath = function (opts) {
+      restartOpts = opts || {};
+      restarts++;
+      if (opts && opts.forceNewRun) app._forceEndRaceRunForRestart();
+      return true;
+    };
+    app._maybePromotePb = function () {};
+    assert.equal(
+      app.maybeResetRaceOnGoal(25, 0),
+      false,
+      "0ms goal hit must not arm reset or PB"
+    );
+    assert.equal(restarts, 0);
+    assert.equal(app.maybeResetRaceOnGoal(25, 4800), true);
+    assert.equal(restarts, 1);
+    assert.equal(restartOpts.forceNewRun, true);
+    assert.equal(forced, 1, "mid-run goal reset must force-end live engine");
+  });
+
+  it("formatGoalBest never shows 0.00s for timed goals", () => {
+    assert.equal(
+      RaceState.formatGoalBest(
+        { goalCompleted: true, bestGoalTimeMs: 0, bestScore: 25 },
+        "best25"
+      ),
+      "25 apples",
+      "stale 0ms PB must not display as 0.00s"
+    );
+    assert.equal(
+      RaceState.formatGoalBest(
+        { goalCompleted: true, bestGoalTimeMs: 5200, bestScore: 25 },
+        "best25"
+      ),
+      "5.20s"
+    );
   });
 
   it("ATTEMPT_EXPIRED returns admin player to menus (not spectator)", async () => {
@@ -2303,6 +2433,82 @@ describe("coop player seat", () => {
     if (app.coopSession) app.coopSession.enterSeating();
     app.publishCoopState();
     assert.equal(sent.length, 0);
+  });
+
+  it("publishCoopState forces alive true when scrape false without native death", () => {
+    const MultiplayerApp = loadApp();
+    const Gsm = global.MultiplayerGsm || require(path.join(root, "src/hooks/gsm.js"));
+    const g = {
+      oa: {
+        ka: [
+          { x: 5, y: 5, clone: function () { return { x: this.x, y: this.y }; } },
+          { x: 4, y: 5, clone: function () { return { x: this.x, y: this.y }; } },
+        ],
+      },
+      nj: false,
+      Fb: 135,
+    };
+    global.__remixGame = g;
+    global.__mpGame = g;
+    if (Gsm.gameInstance) {
+      /* keep */
+    }
+    const prevGi = Gsm.gameInstance;
+    Gsm.gameInstance = function () {
+      return g;
+    };
+    const prevScrape = Gsm.scrapeCoopSnakeDelta || Gsm.scrapeSnakeDelta;
+    Gsm.scrapeCoopSnakeDelta = function () {
+      return {
+        body: [
+          { x: 5, y: 5 },
+          { x: 4, y: 5 },
+        ],
+        alive: false,
+        dir: "RIGHT",
+        Sc: "#111",
+        Yc: "#222",
+      };
+    };
+    const app = new MultiplayerApp();
+    const sent = [];
+    app.client = {
+      connected: true,
+      clientId: "me",
+      me: function () {
+        return { role: "player", colorId: 0 };
+      },
+      roster: { mode: "coop", sessionActive: true, clients: [] },
+      snakeDelta: function (d) {
+        sent.push(d);
+      },
+      coopPlayerDead: function (p) {
+        sent.push({ dead: p });
+      },
+    };
+    app._coopAuthority = "native-relay-v1";
+    app._coopSessionActive = true;
+    app._coopSeatedPublish = true;
+    app._coopColorsSent = true;
+    app.coop.boardReady = true;
+    if (app.coopSession) {
+      app.coopSession.enterSeating();
+      app.coopSession.markSeated && app.coopSession.markSeated();
+    }
+    app.publishCoopState({ seated: true });
+    Gsm.gameInstance = prevGi;
+    if (prevScrape) Gsm.scrapeCoopSnakeDelta = prevScrape;
+    const pose = sent.find(function (d) {
+      return d && d.body && !d.dead;
+    });
+    assert.ok(pose, "should still send pose");
+    assert.equal(pose.alive, true, "false scrape must not wire alive:false");
+    assert.ok(
+      !sent.some(function (d) {
+        return d && d.dead;
+      }),
+      "must not announce COOP_PLAYER_DEAD"
+    );
   });
 
   it("Start Co-op again clears walls and death latches", () => {

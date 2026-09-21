@@ -720,10 +720,11 @@
         ) {
           fruitPayload.apples = fruitPayload.collectables;
         }
-        // Exact shared board — no freePos top-up / no local nudge (initial or runtime)
-        fruitPayload.initial = true;
+        // Exact shared board — no freePos top-up / no local nudge.
+        // Do not force initial on every runtime delta (breaks seed/trust motion).
         fruitPayload.exactBoard = true;
         if (p.initial === true) {
+          fruitPayload.initial = true;
           self._applyInitialCollectablesWithRetry(fruitPayload);
         } else {
           try {
@@ -3996,12 +3997,10 @@
       return;
     }
 
-    // Do not apply self into remotes — paint skips myId; saves O(n) followBody/GC
-    this.client.snakeDelta(delta);
-    if (typeof this.refreshCoopScores === "function") this.refreshCoopScores();
+    // Death on the wire is client-authoritative via COOP_PLAYER_DEAD only.
+    // Never send alive:false from a false scrape — peers would show a dead
+    // native-peer while this player is still alive.
     if (delta.alive === false && !this._coopDeadSent) {
-      // Sticky scrape death must reflect a real native die — peer paint /
-      // seating glitches can briefly report alive:false without nj.
       const g =
         Gsm.gameInstance && typeof Gsm.gameInstance === "function"
           ? Gsm.gameInstance()
@@ -4014,6 +4013,31 @@
           (g.oa && (g.oa.nj === true || g.oa.dead === true)))
       );
       if (!nativeDead) {
+        if (typeof this._logCoopDeath === "function") {
+          this._logCoopDeath("scrape_alive_false_ignored");
+        }
+        delta.alive = true;
+      }
+    }
+
+    // Do not apply self into remotes — paint skips myId; saves O(n) followBody/GC
+    this.client.snakeDelta(delta);
+    if (typeof this.refreshCoopScores === "function") this.refreshCoopScores();
+    if (delta.alive === false && !this._coopDeadSent) {
+      // Confirmed native death — announce so peers sticky-kill this seat.
+      const g =
+        Gsm.gameInstance && typeof Gsm.gameInstance === "function"
+          ? Gsm.gameInstance()
+          : null;
+      const nativeDead = !!(
+        g &&
+        (g.nj === true ||
+          g.dead === true ||
+          g.isDead === true ||
+          (g.oa && (g.oa.nj === true || g.oa.dead === true)))
+      );
+      if (!nativeDead) {
+        // Should not reach here after the pre-send guard; belt-and-suspenders.
         this._logCoopDeath("scrape_alive_false_ignored");
         return;
       }
@@ -4205,24 +4229,33 @@
       !this._coopSpawnApplied ||
       !Gsm.scrapeCollectables
     ) return false;
+    const keySoko =
+      typeof Gsm.isKeyOrSokobanMode === "function" && Gsm.isKeyOrSokobanMode();
     // Prefer native Sna stock; if empty (force-bake), plant Classic aT for Count.
+    // Key / Sokoban: plant keys/boxes/goals — never classic fruit.
     try {
       const g = Gsm.gameInstance && Gsm.gameInstance();
-      const ka = g && g.wa && g.wa.ka;
-      const needPlant =
-        !Array.isArray(ka) ||
-        ka.length < 1 ||
-        (ka.length === 1 &&
-          ka[0] &&
-          ka[0].pos &&
-          (Number(ka[0].pos.x) < 0 || Number(ka[0].pos.y) < 0));
-      if (needPlant && Gsm.plantClassicInitialFruit) {
-        Gsm.plantClassicInitialFruit();
-      } else if (Array.isArray(ka) && Gsm.matchAppleType) {
-        const t = Gsm.matchAppleType();
-        for (let i = 0; i < ka.length; i++) {
-          if (ka[i]) ka[i].type = t;
+      if (keySoko) {
+        if (Gsm.plantInitialKeySokoban) Gsm.plantInitialKeySokoban(g);
+      } else {
+        const ka = g && g.wa && g.wa.ka;
+        const needPlant =
+          !Array.isArray(ka) ||
+          ka.length < 1 ||
+          (ka.length === 1 &&
+            ka[0] &&
+            ka[0].pos &&
+            (Number(ka[0].pos.x) < 0 || Number(ka[0].pos.y) < 0));
+        if (needPlant && Gsm.plantClassicInitialFruit) {
+          Gsm.plantClassicInitialFruit();
+        } else if (Array.isArray(ka) && Gsm.matchAppleType) {
+          const t = Gsm.matchAppleType();
+          for (let i = 0; i < ka.length; i++) {
+            if (ka[i]) ka[i].type = t;
+          }
         }
+        // Shield: ensure nba before scrape so peers get admin shields
+        if (Gsm.assignCoopFruitShields) Gsm.assignCoopFruitShields(g);
       }
     } catch (eSeed) { /* ignore */ }
     const cols = Gsm.scrapeCollectables({ includeEntities: true });
@@ -4231,7 +4264,12 @@
       cols.collectables = Array.isArray(cols.apples) ? cols.apples.slice() : [];
     }
     const appleCount = Array.isArray(cols.apples) ? cols.apples.length : 0;
-    if (appleCount < 1) {
+    const keyCount = Array.isArray(cols.keys) ? cols.keys.length : 0;
+    const boxCount = Array.isArray(cols.boxes) ? cols.boxes.length : 0;
+    const goalCount = Array.isArray(cols.goals) ? cols.goals.length : 0;
+    const entityReady =
+      keySoko && (keyCount > 0 || (boxCount > 0 && goalCount > 0));
+    if (appleCount < 1 && !entityReady) {
       // Keep _coopBoardInitRequested so idle sync retries after bake lands
       return false;
     }
@@ -4242,6 +4280,9 @@
       : cols.modeKey || "";
     cols.initial = true;
     cols.baseRevision = 0;
+    if (Gsm.isCoopFruitMotionMode && Gsm.isCoopFruitMotionMode()) {
+      cols.fruitMotionSeed = true;
+    }
     this.client.collectablesDelta(cols);
     this._coopBoardInitRequested = false;
     return true;
@@ -4452,6 +4493,10 @@
       cols.baseRevision = baseRev;
       cols.revision = nextRev;
       cols.rev = nextRev;
+      if (Gsm.isCoopFruitMotionMode && Gsm.isCoopFruitMotionMode()) {
+        if (force) cols.fruitMotionSeed = true;
+        else cols.fruitMotionTrust = true;
+      }
       if (this.coopNative) this.coopNative.applyCollectables(cols);
       this.client.collectablesDelta(cols);
       return true;
@@ -5183,18 +5228,50 @@
     // Only Best 25 / 50 / 100 — not Score, not Best All (All already resets)
     if (thr == null || !Number.isFinite(Number(thr))) return false;
     if (Number(score) < Number(thr)) return false;
+    // Need a real clock — zero-time hits are clock-reset ghosts, not completions
+    if (!(Number(timeMs) > 0)) return false;
     this._raceGoalResetArmed = true;
     this._raceRunStartedAtMs = null;
     if (typeof this._maybePromotePb === "function") {
       this._maybePromotePb(timeMs, score);
     }
-    return this.restartRaceAfterDeath();
+    return this.restartRaceAfterDeath({ forceNewRun: true });
   };
 
-  MultiplayerApp.prototype.restartRaceAfterDeath = function () {
+  /**
+   * End the current native race run so startNativeRun will click Play again.
+   * Mid-run goal reset leaves the engine "live"; without this, Play never fires.
+   */
+  MultiplayerApp.prototype._forceEndRaceRunForRestart = function () {
+    try {
+      const tk =
+        typeof window !== "undefined" ? window.timeKeeper : root.timeKeeper;
+      if (tk) {
+        tk._dead = true;
+        tk.playing = false;
+      }
+    } catch (eTk) { /* ignore */ }
+    try {
+      const g = Gsm.gameInstance && Gsm.gameInstance();
+      if (g) {
+        if ("nj" in g) g.nj = true;
+        if ("dead" in g) g.dead = true;
+      }
+    } catch (eG) { /* ignore */ }
+  };
+
+  MultiplayerApp.prototype.restartRaceAfterDeath = function (opts) {
+    opts = opts || {};
     if (!this.canAutoRestartRace()) return false;
     if (this._raceRestartPending) return false;
     this._raceRestartPending = true;
+    // Mid-run Reset-on-goal: force not-live so startNativeRun clicks Play
+    if (
+      opts.forceNewRun ||
+      (Gsm.isNativeRunLive && Gsm.isNativeRunLive())
+    ) {
+      this._forceEndRaceRunForRestart();
+    }
     // Hide endscreen immediately so death never "sticks" visually
     if (Gsm.dismissDeathOverlayForRun) Gsm.dismissDeathOverlayForRun();
     else if (Gsm.hideDeathScreen) Gsm.hideDeathScreen();
@@ -5203,6 +5280,8 @@
     setTimeout(function () {
       self._raceRestartPending = false;
       if (!self.canAutoRestartRace()) return;
+      // Re-assert not-live in case a tick cleared flags
+      if (opts.forceNewRun) self._forceEndRaceRunForRestart();
       if (Gsm.startNativeRun) {
         Gsm.startNativeRun({
           maxAttempts: 40,

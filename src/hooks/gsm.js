@@ -796,9 +796,11 @@
   /**
    * Plant Classic aT fruit for the live Count index (all modes incl. Tally).
    * Replaces dummy templates. Sets admin apple type + tally sequenceNumbers.
+   * Key / Sokoban must not start with fruit — use plantInitialKeySokoban.
    */
   function plantClassicInitialFruit(gIn) {
     if (root.__mpCoopServerAuth) return false;
+    if (isKeyOrSokobanMode()) return false;
     const g = gIn || gameInstance();
     if (!g) return false;
     if (!ensureFruitHostTemplate(g)) return false;
@@ -900,7 +902,352 @@
         root.retallyAllPlacedApples();
       }
     } catch (eTall) { /* ignore */ }
+    try {
+      assignCoopFruitShields(g);
+    } catch (eSh) { /* ignore */ }
     return g.wa.ka.length > 0;
+  }
+
+  /** Shield mode (trophy bit 15 / Slot roll 15). */
+  function isShieldMode() {
+    try {
+      const key = effectiveModeKey ? effectiveModeKey() : scrapeModeKey();
+      if (boardHasMode({ modeKey: key }, "shield")) return true;
+    } catch (e) { /* ignore */ }
+    try {
+      if (
+        typeof root.isSlotMachineActive === "function" &&
+        root.isSlotMachineActive() &&
+        (root.__slotActive | 0) === 15
+      ) {
+        return true;
+      }
+    } catch (eSlot) { /* ignore */ }
+    return false;
+  }
+
+  /**
+   * Fallback P3E-like nba when __slotP3E is missing: exclude edge + body-
+   * adjacent dirs (incl. peers via wrapped Vb occupancy), then roll 1–3.
+   */
+  function fallbackShieldNba(g, pos) {
+    const dirs = ["LEFT", "RIGHT", "UP", "DOWN"];
+    const delta = {
+      LEFT: { x: -1, y: 0 },
+      RIGHT: { x: 1, y: 0 },
+      UP: { x: 0, y: -1 },
+      DOWN: { x: 0, y: 1 },
+    };
+    const excluded = [];
+    const live = boardSizeFromGame(g) || {};
+    const w = Number(live.width) | 0;
+    const h = Number(live.height) | 0;
+    const px = Number(pos && pos.x);
+    const py = Number(pos && pos.y);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return new Set();
+    if (px === 0) excluded.push("LEFT");
+    if (w > 0 && px === w - 1) excluded.push("RIGHT");
+    if (py === 0) excluded.push("UP");
+    if (h > 0 && py === h - 1) excluded.push("DOWN");
+    let occ = null;
+    try {
+      if (typeof g.Vb === "function") {
+        occ = g.Vb(pos, 2);
+      } else if (g.ka && typeof g.ka.Ca === "function") {
+        occ = g.ka.Ca(pos, 2);
+      }
+    } catch (eVb) { /* ignore */ }
+    if (!occ || typeof occ.has !== "function") {
+      occ = new Set();
+      try {
+        const cells = coopOccupiedCells(g);
+        Object.keys(cells).forEach(function (k) {
+          const parts = k.split(",");
+          if (parts.length < 2) return;
+          occ.add((Number(parts[0]) << 16) | Number(parts[1]));
+        });
+      } catch (eOcc) { /* ignore */ }
+    }
+    dirs.forEach(function (d) {
+      const off = delta[d];
+      const sx = (px + off.x) | 0;
+      const sy = (py + off.y) | 0;
+      if (occ.has((sx << 16) | sy) && excluded.indexOf(d) < 0) {
+        excluded.push(d);
+      }
+    });
+    function pickOpen(used) {
+      const open = [];
+      for (let i = 0; i < dirs.length; i++) {
+        if (used.indexOf(dirs[i]) < 0) open.push(dirs[i]);
+      }
+      if (open.length <= 1) return null;
+      return open[Math.floor(Math.random() * open.length)];
+    }
+    const used = excluded.slice();
+    const out = new Set();
+    const first = pickOpen(used);
+    if (!first) return out;
+    out.add(first);
+    used.push(first);
+    if (Math.random() < 0.75) {
+      const second = pickOpen(used);
+      if (second) {
+        out.add(second);
+        used.push(second);
+        if (Math.random() < 0.33) {
+          const third = pickOpen(used);
+          if (third) out.add(third);
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Assign shield nba on every fruit (admin seed / empty nba). Uses native
+   * __slotP3E when present so peer-aware Vb occupancy applies.
+   */
+  function assignCoopFruitShields(gIn) {
+    if (root.__mpCoopServerAuth) return false;
+    if (!isShieldMode()) return false;
+    const g = gIn || gameInstance();
+    if (!g || !g.wa || !Array.isArray(g.wa.ka) || !g.wa.ka.length) {
+      return false;
+    }
+    ensureFruitShieldSets(g);
+    const p3e = typeof root.__slotP3E === "function" ? root.__slotP3E : null;
+    let assigned = 0;
+    for (let i = 0; i < g.wa.ka.length; i++) {
+      const fruit = g.wa.ka[i];
+      if (!fruit || !fruit.pos) continue;
+      if (
+        fruit.nba &&
+        typeof fruit.nba.has === "function" &&
+        fruit.nba.size > 0
+      ) {
+        assigned++;
+        continue;
+      }
+      let nba = null;
+      if (p3e) {
+        try {
+          nba = p3e(g.wa, fruit.pos);
+        } catch (eP) {
+          nba = null;
+        }
+      }
+      if (!nba || typeof nba.has !== "function") {
+        nba = fallbackShieldNba(g, fruit.pos);
+      }
+      fruit.nba = nba;
+      if (fruit.nba && fruit.nba.size > 0) assigned++;
+    }
+    return assigned > 0;
+  }
+
+  /** Key / Sokoban swap fruit for mode objects — never seed classic apples. */
+  function isKeyOrSokobanMode() {
+    try {
+      const key = effectiveModeKey ? effectiveModeKey() : scrapeModeKey();
+      return (
+        boardHasMode({ modeKey: key }, "key") ||
+        boardHasMode({ modeKey: key }, "sokoban")
+      );
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function classicFruitWantCount(countIdx) {
+    const ci = Number(countIdx) | 0;
+    if (ci === 3) return 10;
+    if (ci === 6) return 5;
+    if (ci === 1) return 3;
+    if (ci === 2) return 5;
+    return 1;
+  }
+
+  function clearFruitHost(g) {
+    try {
+      if (g && g.wa && Array.isArray(g.wa.ka)) g.wa.ka.length = 0;
+    } catch (e) { /* ignore */ }
+  }
+
+  function countHostItems(host) {
+    if (!host) return 0;
+    if (Array.isArray(host)) return host.length;
+    if (host.size != null) return host.size | 0;
+    return 0;
+  }
+
+  /**
+   * Pick N free cells with co-op head-radius rules (same as fruit object pool).
+   */
+  function pickKeySokoCells(g, n) {
+    const out = [];
+    const want = Math.max(0, n | 0);
+    if (!want) return out;
+    let pool = null;
+    try {
+      if (typeof root.__mpCoopBuildFruitSpawnPool === "function") {
+        pool = root.__mpCoopBuildFruitSpawnPool(g, { headRadius: true });
+      }
+    } catch (eP) { /* ignore */ }
+    if (pool && pool.length) {
+      const used = Object.create(null);
+      for (let i = 0; i < want && pool.length; i++) {
+        let picked = null;
+        try {
+          if (typeof root.__mpCoopPickFruitSpawn === "function") {
+            picked = root.__mpCoopPickFruitSpawn(pool);
+          }
+        } catch (ePick) { /* ignore */ }
+        if (!picked && pool.length) {
+          picked = pool[Math.floor(Math.random() * pool.length)];
+        }
+        if (!picked) break;
+        const key = (picked.x | 0) + "," + (picked.y | 0);
+        // Remove chosen cell from pool for next pick
+        pool = pool.filter(function (c) {
+          return (c.x | 0) + "," + (c.y | 0) !== key;
+        });
+        if (used[key]) continue;
+        used[key] = 1;
+        out.push({ x: picked.x | 0, y: picked.y | 0 });
+      }
+      return out;
+    }
+    const live = boardSizeFromGame(g) || {};
+    const w = Number(live.width) | 0;
+    const h = Number(live.height) | 0;
+    const occ = coopOccupiedCells(g);
+    for (let y = 0; y < h && out.length < want; y++) {
+      for (let x = 0; x < w && out.length < want; x++) {
+        if (occ[x + "," + y]) continue;
+        out.push({ x: x, y: y });
+        occ[x + "," + y] = 1;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Owner seed for Key / Sokoban: no fruit; plant keys(+keyblocks) or boxes+goals.
+   * Prefer native reset stock when already present.
+   */
+  function plantInitialKeySokoban(gIn) {
+    if (root.__mpCoopServerAuth) return false;
+    const g = gIn || gameInstance();
+    if (!g || !isKeyOrSokobanMode()) return false;
+    const modeKey = effectiveModeKey ? effectiveModeKey() : scrapeModeKey();
+    const isKey = boardHasMode({ modeKey: modeKey }, "key");
+    const isSoko = boardHasMode({ modeKey: modeKey }, "sokoban");
+
+    let countIdx = readSettingIndex("count");
+    if (countIdx == null && root.__mpCoopPlaySettings) {
+      countIdx = root.__mpCoopPlaySettings.count;
+    }
+    countIdx = Number(countIdx);
+    if (!Number.isFinite(countIdx) || countIdx < 0) countIdx = 0;
+    const fruitWant = classicFruitWantCount(countIdx);
+    // Native converts fruit pairs → one object per pair; always at least one.
+    const objectWant = Math.max(1, Math.floor(fruitWant / 2) || 1);
+
+    if (isKey) {
+      if (!g.Ba) g.Ba = { keys: [] };
+      if (!Array.isArray(g.Ba.keys)) g.Ba.keys = [];
+      if (countHostItems(g.Ba.keys) > 0) {
+        clearFruitHost(g);
+        return true;
+      }
+      // Each key needs pos + keyblock → 2 cells
+      const cells = pickKeySokoCells(g, objectWant * 2);
+      if (cells.length < 2) return false;
+      g.Ba.keys.length = 0;
+      const pairs = Math.floor(cells.length / 2);
+      for (let i = 0; i < pairs; i++) {
+        const block = cells[i * 2];
+        const keyPos = cells[i * 2 + 1];
+        const type = Math.max(0, Math.min(23, i | 0));
+        const keyObj = {
+          pos: makeNativePoint(keyPos.x, keyPos.y, null),
+          r7a: makeNativePoint(block.x, block.y, null),
+          type: type,
+          yNa: type,
+          xL: 0,
+          wm: false,
+          Lh: true,
+        };
+        keyObj.r7a.type = type;
+        g.Ba.keys.push(keyObj);
+      }
+      clearFruitHost(g);
+      return g.Ba.keys.length > 0;
+    }
+
+    if (isSoko) {
+      if (!g.Aa) g.Aa = {};
+      if (!g.Aa.oa) g.Aa.oa = [];
+      if (!g.Aa.d_ && !g.Aa.da) g.Aa.d_ = [];
+      const boxHost = g.Aa.oa;
+      const goalHost = g.Aa.d_ || g.Aa.da;
+      if (countHostItems(boxHost) > 0 && countHostItems(goalHost) > 0) {
+        clearFruitHost(g);
+        return true;
+      }
+      const cells = pickKeySokoCells(g, objectWant * 2);
+      if (cells.length < 2) return false;
+      function writeHost(host, list, asBox) {
+        if (Array.isArray(host)) {
+          host.length = 0;
+          for (let i = 0; i < list.length; i++) {
+            const p = list[i];
+            if (asBox) {
+              host.push({
+                pos: makeNativePoint(p.x, p.y, null),
+                prev: null,
+                wm: true,
+                Lh: true,
+              });
+            } else {
+              host.push(makeNativePoint(p.x, p.y, null));
+            }
+          }
+          return;
+        }
+        if (host && typeof host.clear === "function") {
+          host.clear();
+          for (let i = 0; i < list.length; i++) {
+            const p = list[i];
+            const obj = asBox
+              ? {
+                  pos: makeNativePoint(p.x, p.y, null),
+                  prev: null,
+                  wm: true,
+                  Lh: true,
+                }
+              : makeNativePoint(p.x, p.y, null);
+            if (typeof host.add === "function") host.add(obj);
+            else if (typeof host.set === "function") {
+              host.set((p.x | 0) + "," + (p.y | 0), obj);
+            }
+          }
+        }
+      }
+      const boxes = [];
+      const goals = [];
+      const pairs = Math.floor(cells.length / 2);
+      for (let i = 0; i < pairs; i++) {
+        boxes.push(cells[i * 2]);
+        goals.push(cells[i * 2 + 1]);
+      }
+      writeHost(boxHost, boxes, true);
+      writeHost(goalHost, goals, false);
+      clearFruitHost(g);
+      return countHostItems(boxHost) > 0 && countHostItems(goalHost) > 0;
+    }
+    return false;
   }
 
   /**
@@ -970,9 +1317,11 @@
       try {
         root.__mpForceLiveBoardDims = dims.width + "x" + dims.height;
       } catch (eFlag) { /* ignore */ }
-      // Ma/Sna skipped — plant Classic aT so owner scrape is not empty/(0,0)
+      // Ma/Sna skipped — plant Classic aT so owner scrape is not empty/(0,0).
+      // Key / Sokoban get mode objects instead of fruit.
       try {
-        plantClassicInitialFruit(g);
+        if (isKeyOrSokobanMode()) plantInitialKeySokoban(g);
+        else plantClassicInitialFruit(g);
       } catch (eFruit) { /* ignore */ }
       try {
         root.__mpForceLiveBoardDims = dims.width + "x" + dims.height;
@@ -3485,15 +3834,18 @@
   }
 
   /**
-   * Winged (and Slot winged roll): fruit drifts on He each tick. Co-op must seed
-   * spawn pos + direction once, then trust each client's native motion — late
-   * pos sync rubber-bands fruit backwards.
+   * Winged / Magnet (and Slot rolls 6 / 18): fruit drifts on He each tick.
+   * Co-op must seed spawn pos + direction once, then trust each client's native
+   * motion — late pos sync rubber-bands fruit backwards.
    */
   function isCoopFruitMotionMode() {
-    if (boardHasMode({ modeKey: scrapeModeKey() }, "winged")) return true;
+    const mk = scrapeModeKey();
+    if (boardHasMode({ modeKey: mk }, "winged")) return true;
+    if (boardHasMode({ modeKey: mk }, "magnet")) return true;
     try {
       const slot = root.__slotActive != null ? Number(root.__slotActive) | 0 : -1;
       if (slot === 6) return true; // Winged roll
+      if (slot === 18) return true; // Magnet roll
     } catch (e) { /* ignore */ }
     return false;
   }
@@ -8478,6 +8830,10 @@
     findPlayController: findPlayController,
     classicInitialFruit: classicInitialFruit,
     plantClassicInitialFruit: plantClassicInitialFruit,
+    plantInitialKeySokoban: plantInitialKeySokoban,
+    isKeyOrSokobanMode: isKeyOrSokobanMode,
+    isShieldMode: isShieldMode,
+    assignCoopFruitShields: assignCoopFruitShields,
     matchAppleType: matchAppleType,
     ensureFruitHostTemplate: ensureFruitHostTemplate,
     forceLiveBoardDims: forceLiveBoardDims,

@@ -113,7 +113,7 @@
         const sc = map[id];
         if (!sc || !sc.goalCompleted) return;
         const t = sc.bestGoalTimeMs;
-        if (t == null || !Number.isFinite(Number(t))) return;
+        if (t == null || !Number.isFinite(Number(t)) || !(Number(t) > 0)) return;
         if (bestT == null || Number(t) < bestT) {
           bestT = Number(t);
           bestId = id;
@@ -154,15 +154,17 @@
     if (!sc) return "—";
     const g = RaceState.normalizeGoal(goal);
     if (RaceState.isTimedGoal(g)) {
-      if (sc.bestGoalTimeMs == null) {
-        if (sc.goalCompleted) return "done";
-        // Goal not reached — show the score that counts instead, plus how fast
-        const s = scoreOf(sc);
-        if (!s) return "not yet";
-        const t = bestScoreTimeOf(sc);
-        return s + " apples" + (t != null ? " (" + formatMs(t) + ")" : "");
+      const goalMs = Number(sc.bestGoalTimeMs);
+      // 0ms is impossible for Best 25/50/100 — treat as unset
+      if (Number.isFinite(goalMs) && goalMs > 0) {
+        return formatMs(goalMs);
       }
-      return formatMs(sc.bestGoalTimeMs);
+      if (sc.goalCompleted && sc.bestGoalTimeMs == null) return "done";
+      // Goal not reached (or stale 0.00s PB) — show the score that counts
+      const s = scoreOf(sc);
+      if (!s) return "not yet";
+      const t = bestScoreTimeOf(sc);
+      return s + " apples" + (t != null ? " (" + formatMs(t) + ")" : "");
     }
     if (sc.bestScore != null) return String(sc.bestScore);
     if (sc.score != null) return String(sc.score);
@@ -183,8 +185,14 @@
       const sa = map[a] || {};
       const sb = map[b] || {};
       if (timed) {
-        const ca = !!sa.goalCompleted && sa.bestGoalTimeMs != null;
-        const cb = !!sb.goalCompleted && sb.bestGoalTimeMs != null;
+        const ca =
+          !!sa.goalCompleted &&
+          sa.bestGoalTimeMs != null &&
+          Number(sa.bestGoalTimeMs) > 0;
+        const cb =
+          !!sb.goalCompleted &&
+          sb.bestGoalTimeMs != null &&
+          Number(sb.bestGoalTimeMs) > 0;
         if (ca !== cb) return ca ? -1 : 1;
         if (ca && cb) {
           return Number(sa.bestGoalTimeMs) - Number(sb.bestGoalTimeMs);
