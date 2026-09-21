@@ -1,10 +1,10 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-20T19:51:56.606Z */
+/* Built: 2026-09-21T00:30:53.462Z */
 
 window.__MP_MOD_VERSION="13";
 
-window.__MP_MOD_BUILT="2026-09-20T19:51:56.606Z";
+window.__MP_MOD_BUILT="2026-09-21T00:30:53.462Z";
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -43488,6 +43488,81 @@ window.RemixMod.runCodeAfter = function () {
     return makeNativePoint(nx, ny, template || pos || null);
   }
 
+  /**
+   * Stock P5E draws the rounded tip using Ya as a virtual point *past* the last
+   * ka cell (qc holds the deferred copy during grow). Co-op writeNativeBody must
+   * refresh Ya/qc or the cap glitches toward a stale beyond-tip.
+   */
+  function syncNativeTailVirtual(snake) {
+    if (!snake || !Array.isArray(snake.ka) || !snake.ka.length) return false;
+    const tip = snake.ka[snake.ka.length - 1];
+    if (!tip) return false;
+    const tx = Math.round(Number(tip.x));
+    const ty = Math.round(Number(tip.y));
+    if (!Number.isFinite(tx) || !Number.isFinite(ty)) return false;
+
+    let dx = 0;
+    let dy = 0;
+    if (snake.ka.length >= 2) {
+      const neck = snake.ka[snake.ka.length - 2];
+      const nx = Math.round(Number(neck && neck.x));
+      const ny = Math.round(Number(neck && neck.y));
+      if (Number.isFinite(nx) && Number.isFinite(ny)) {
+        dx = tx - nx;
+        dy = ty - ny;
+      }
+    }
+    if (dx === 0 && dy === 0) {
+      const d = String(snake.direction || snake.dir || snake.Ca || "RIGHT").toUpperCase();
+      if (d === "LEFT") {
+        dx = -1;
+        dy = 0;
+      } else if (d === "UP") {
+        dx = 0;
+        dy = -1;
+      } else if (d === "DOWN") {
+        dx = 0;
+        dy = 1;
+      } else {
+        dx = 1;
+        dy = 0;
+      }
+    } else if (Math.abs(dx) >= Math.abs(dy)) {
+      dx = dx > 0 ? 1 : -1;
+      dy = 0;
+    } else {
+      dx = 0;
+      dy = dy > 0 ? 1 : -1;
+    }
+
+    const bx = tx + dx;
+    const by = ty + dy;
+    function assignVirtual(key) {
+      const cur = snake[key];
+      if (cur && typeof cur.clone === "function") {
+        cur.x = bx;
+        cur.y = by;
+        return;
+      }
+      if (cur && typeof cur === "object") {
+        cur.x = bx;
+        cur.y = by;
+        if (typeof cur.clone !== "function") {
+          cur.clone = function () {
+            return makeNativePoint(this.x, this.y, tip);
+          };
+        }
+        return;
+      }
+      snake[key] = makeNativePoint(bx, by, tip);
+    }
+    assignVirtual("Ya");
+    if (snake.qc != null || Object.prototype.hasOwnProperty.call(snake, "qc")) {
+      assignVirtual("qc");
+    }
+    return true;
+  }
+
   /** Write board.body into game.oa.ka without stripping native point methods. */
   function writeNativeBody(snake, body) {
     if (!snake || !Array.isArray(body)) return false;
@@ -43523,6 +43598,9 @@ window.RemixMod.runCodeAfter = function () {
     try {
       ensureSnakeSegmentFlags(snake);
     } catch (eWa) { /* ignore */ }
+    try {
+      syncNativeTailVirtual(snake);
+    } catch (eYa) { /* ignore */ }
     return true;
   }
 
@@ -50495,6 +50573,7 @@ window.RemixMod.runCodeAfter = function () {
     makeNativePoint: makeNativePoint,
     ensureNativePos: ensureNativePos,
     writeNativeBody: writeNativeBody,
+    syncNativeTailVirtual: syncNativeTailVirtual,
     writeNativeHead: writeNativeHead,
     followBodyFromHead: followBodyFromHead,
     bodyTrailConnected: bodyTrailConnected,
@@ -53643,25 +53722,16 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     layoutHudCounters();
   };
 
-  /** Push Pudding wall/stat counter right of the (longer) mod status line. */
+  /**
+   * Keep Pudding wall/stat counters at a fixed offset. Tracking the live mod
+   * status width shoved them far right after connect ("Connected [Nms] …").
+   */
   function layoutHudCounters() {
-    const ind = document.getElementById("mp-mod-indicator");
     const icon = document.getElementById("stat-icon");
     const num = document.getElementById("counter-num");
     if (!icon) return;
 
-    // Measure with left reset so relative offset is from natural position
-    icon.style.left = "0px";
-    if (num) num.style.left = "0px";
-
-    // Extra gap so the counter never sits on top of the mod status line
-    const GAP = 48;
-    let delta = 260;
-    if (ind) {
-      const need = ind.getBoundingClientRect().right + GAP;
-      const natural = icon.getBoundingClientRect().left;
-      delta = Math.max(260, Math.ceil(need - natural));
-    }
+    const delta = 260;
     icon.style.left = delta + "px";
     if (num) num.style.left = delta + 34 + "px";
   }

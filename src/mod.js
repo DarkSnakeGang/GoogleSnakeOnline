@@ -91,25 +91,16 @@
     layoutHudCounters();
   };
 
-  /** Push Pudding wall/stat counter right of the (longer) mod status line. */
+  /**
+   * Keep Pudding wall/stat counters at a fixed offset. Tracking the live mod
+   * status width shoved them far right after connect ("Connected [Nms] …").
+   */
   function layoutHudCounters() {
-    const ind = document.getElementById("mp-mod-indicator");
     const icon = document.getElementById("stat-icon");
     const num = document.getElementById("counter-num");
     if (!icon) return;
 
-    // Measure with left reset so relative offset is from natural position
-    icon.style.left = "0px";
-    if (num) num.style.left = "0px";
-
-    // Extra gap so the counter never sits on top of the mod status line
-    const GAP = 48;
-    let delta = 260;
-    if (ind) {
-      const need = ind.getBoundingClientRect().right + GAP;
-      const natural = icon.getBoundingClientRect().left;
-      delta = Math.max(260, Math.ceil(need - natural));
-    }
+    const delta = 260;
     icon.style.left = delta + "px";
     if (num) num.style.left = delta + 34 + "px";
   }

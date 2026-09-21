@@ -10,6 +10,7 @@ use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use multiplayer_server::protocol::{parse_envelope, Envelope};
 use multiplayer_server::room::{generate_room_code, Room, MAX_CONNECTIONS};
+use multiplayer_server::upnp::UpnpMapping;
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -53,6 +54,15 @@ struct Args {
     /// Co-op product path is native-relay. Set false / 0 for legacy server-sim tests.
     #[arg(long, env = "MULTIPLAYER_COOP_NATIVE_RELAY", default_value_t = true)]
     coop_native_relay: bool,
+
+    /// Open a UPnP/IGD TCP mapping for the bind port (internet friends).
+    /// Off by default until a stable wss path (tunnel / TLS) is in place.
+    #[arg(long, env = "MULTIPLAYER_UPNP", default_value_t = false)]
+    upnp: bool,
+
+    /// Disable UPnP (pure LAN / CGNAT / double-NAT).
+    #[arg(long = "no-upnp")]
+    no_upnp: bool,
 }
 
 struct AppState {
@@ -208,6 +218,7 @@ async fn main() {
         .expect("rustls CryptoProvider::install_default(ring) failed");
 
     let args = Args::parse();
+    let upnp_enabled = args.upnp && !args.no_upnp;
     std::fs::create_dir_all(&args.log_dir).ok();
 
     let file_appender = tracing_appender::rolling::daily(&args.log_dir, "multiplayer");
@@ -300,10 +311,22 @@ async fn main() {
             args.bind,
             args.bind.port()
         );
+        let mut upnp_mapping = try_open_upnp(upnp_enabled, args.bind.port(), true).await;
+        let handle = axum_server::Handle::new();
+        let handle_shutdown = handle.clone();
+        tokio::spawn(async move {
+            wait_for_shutdown_signal().await;
+            info!(event = "shutdown_signal");
+            handle_shutdown.graceful_shutdown(Some(Duration::from_secs(5)));
+        });
         axum_server::bind_rustls(args.bind, config)
+            .handle(handle)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await
             .unwrap();
+        if let Some(mut mapping) = upnp_mapping.take() {
+            mapping.close().await;
+        }
     } else {
         let listener = tokio::net::TcpListener::bind(args.bind)
             .await
@@ -318,13 +341,72 @@ async fn main() {
             "Multiplayer server listening on http://{local}  ws://{local}/ws\nShare ws://<your-lan-ip>:{}/ws\n(Optional TLS: --tls-cert cert.pem --tls-key key.pem for wss://)",
             local.port()
         );
-
+        let mut upnp_mapping = try_open_upnp(upnp_enabled, local.port(), false).await;
         axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
+        .with_graceful_shutdown(async {
+            wait_for_shutdown_signal().await;
+            info!(event = "shutdown_signal");
+        })
         .await
         .unwrap();
+        if let Some(mut mapping) = upnp_mapping.take() {
+            mapping.close().await;
+        }
+    }
+}
+
+async fn try_open_upnp(enabled: bool, port: u16, tls: bool) -> Option<UpnpMapping> {
+    if !enabled {
+        info!(event = "upnp_disabled");
+        return None;
+    }
+    match UpnpMapping::open(port).await {
+        Ok((mapping, external_ip)) => {
+            let scheme = if tls { "wss" } else { "ws" };
+            let public_ws = format!("{scheme}://{external_ip}:{port}/ws");
+            info!(%public_ws, event = "upnp_ready");
+            eprintln!("UPnP mapped — internet friends join: {public_ws}");
+            Some(mapping)
+        }
+        Err(e) => {
+            warn!(error = %e, event = "upnp_skipped");
+            eprintln!("UPnP unavailable ({e}) — LAN-only until the router allows IGD.");
+            None
+        }
+    }
+}
+
+async fn wait_for_shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            warn!(error = %e, event = "ctrl_c_listen_failed");
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, event = "sigterm_listen_failed");
+                ctrl_c.await;
+                return;
+            }
+        };
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = term.recv() => {},
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        ctrl_c.await;
     }
 }
 

@@ -1447,6 +1447,81 @@
     return makeNativePoint(nx, ny, template || pos || null);
   }
 
+  /**
+   * Stock P5E draws the rounded tip using Ya as a virtual point *past* the last
+   * ka cell (qc holds the deferred copy during grow). Co-op writeNativeBody must
+   * refresh Ya/qc or the cap glitches toward a stale beyond-tip.
+   */
+  function syncNativeTailVirtual(snake) {
+    if (!snake || !Array.isArray(snake.ka) || !snake.ka.length) return false;
+    const tip = snake.ka[snake.ka.length - 1];
+    if (!tip) return false;
+    const tx = Math.round(Number(tip.x));
+    const ty = Math.round(Number(tip.y));
+    if (!Number.isFinite(tx) || !Number.isFinite(ty)) return false;
+
+    let dx = 0;
+    let dy = 0;
+    if (snake.ka.length >= 2) {
+      const neck = snake.ka[snake.ka.length - 2];
+      const nx = Math.round(Number(neck && neck.x));
+      const ny = Math.round(Number(neck && neck.y));
+      if (Number.isFinite(nx) && Number.isFinite(ny)) {
+        dx = tx - nx;
+        dy = ty - ny;
+      }
+    }
+    if (dx === 0 && dy === 0) {
+      const d = String(snake.direction || snake.dir || snake.Ca || "RIGHT").toUpperCase();
+      if (d === "LEFT") {
+        dx = -1;
+        dy = 0;
+      } else if (d === "UP") {
+        dx = 0;
+        dy = -1;
+      } else if (d === "DOWN") {
+        dx = 0;
+        dy = 1;
+      } else {
+        dx = 1;
+        dy = 0;
+      }
+    } else if (Math.abs(dx) >= Math.abs(dy)) {
+      dx = dx > 0 ? 1 : -1;
+      dy = 0;
+    } else {
+      dx = 0;
+      dy = dy > 0 ? 1 : -1;
+    }
+
+    const bx = tx + dx;
+    const by = ty + dy;
+    function assignVirtual(key) {
+      const cur = snake[key];
+      if (cur && typeof cur.clone === "function") {
+        cur.x = bx;
+        cur.y = by;
+        return;
+      }
+      if (cur && typeof cur === "object") {
+        cur.x = bx;
+        cur.y = by;
+        if (typeof cur.clone !== "function") {
+          cur.clone = function () {
+            return makeNativePoint(this.x, this.y, tip);
+          };
+        }
+        return;
+      }
+      snake[key] = makeNativePoint(bx, by, tip);
+    }
+    assignVirtual("Ya");
+    if (snake.qc != null || Object.prototype.hasOwnProperty.call(snake, "qc")) {
+      assignVirtual("qc");
+    }
+    return true;
+  }
+
   /** Write board.body into game.oa.ka without stripping native point methods. */
   function writeNativeBody(snake, body) {
     if (!snake || !Array.isArray(body)) return false;
@@ -1482,6 +1557,9 @@
     try {
       ensureSnakeSegmentFlags(snake);
     } catch (eWa) { /* ignore */ }
+    try {
+      syncNativeTailVirtual(snake);
+    } catch (eYa) { /* ignore */ }
     return true;
   }
 
@@ -8454,6 +8532,7 @@
     makeNativePoint: makeNativePoint,
     ensureNativePos: ensureNativePos,
     writeNativeBody: writeNativeBody,
+    syncNativeTailVirtual: syncNativeTailVirtual,
     writeNativeHead: writeNativeHead,
     followBodyFromHead: followBodyFromHead,
     bodyTrailConnected: bodyTrailConnected,

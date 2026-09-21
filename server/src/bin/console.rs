@@ -542,7 +542,10 @@ async fn start_server_inner(
         s.server_bin.display(),
         s.server_bind
     ));
-
+    s.push_log(
+        "[console] UPnP: off by default (pass --upnp on the game process to map); Stop still best-effort deletes any forward"
+            .into(),
+    );
     let mut cmd = Command::new(&s.server_bin);
     cmd.arg("--bind")
         .arg(s.server_bind.to_string())
@@ -614,6 +617,18 @@ async fn stop_server_inner(
     s: Arc<Shared>,
 ) -> Result<Status, (axum::http::StatusCode, Status)> {
     s.set_phase(Phase::Stopping, "Stopping…".to_string());
+    // Child kill on Windows is TerminateProcess — Drop/unmap never runs there.
+    // Clear the IGD forward first so a stopped host does not leave TCP open.
+    let port = s.server_bind.port();
+    s.push_log(format!(
+        "[console] UPnP: deleting TCP {port} mapping (best-effort)…"
+    ));
+    match multiplayer_server::upnp::delete_tcp_mapping(port).await {
+        Ok(()) => s.push_log(format!("[console] UPnP: TCP {port} unmapped")),
+        Err(e) => s.push_log(format!(
+            "[console] UPnP: unmap skipped ({e}) — router may already be clear"
+        )),
+    }
     let child = s.child.lock().take();
     if let Some(mut c) = child {
         let pid = c.id();
@@ -1041,7 +1056,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
       <div id="log" aria-live="polite"></div>
     </section>
 
-    <footer>Open this page on the host machine · clients still use ws://&lt;lan-ip&gt;:7777/ws</footer>
+    <footer>Host controls stay on this page (:7778) · friends join ws://&lt;lan-ip&gt;:7777/ws on LAN (UPnP off by default)</footer>
   </div>
 <script>
 (function () {

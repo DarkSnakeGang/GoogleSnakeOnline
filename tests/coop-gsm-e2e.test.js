@@ -1318,6 +1318,78 @@ async function sampleSnakeParity(page, opts) {
         };
       }
 
+      function sampleYaVirtual(snakeBody, liveSnake) {
+        if (!snakeBody || snakeBody.length < 1) {
+          return { ok: false, reason: "no-body", yaBeyondOk: false };
+        }
+        const tip = snakeBody[snakeBody.length - 1];
+        const tipX = Number(tip.x);
+        const tipY = Number(tip.y);
+        let dx = 0;
+        let dy = 0;
+        if (snakeBody.length >= 2) {
+          const neck = snakeBody[snakeBody.length - 2];
+          dx = tipX - Number(neck.x);
+          dy = tipY - Number(neck.y);
+        }
+        if (dx === 0 && dy === 0) {
+          const d = String(
+            (liveSnake && (liveSnake.direction || liveSnake.dir || liveSnake.Ca)) ||
+              "RIGHT"
+          ).toUpperCase();
+          if (d === "LEFT") {
+            dx = -1;
+            dy = 0;
+          } else if (d === "UP") {
+            dx = 0;
+            dy = -1;
+          } else if (d === "DOWN") {
+            dx = 0;
+            dy = 1;
+          } else {
+            dx = 1;
+            dy = 0;
+          }
+        } else if (Math.abs(dx) >= Math.abs(dy)) {
+          dx = dx > 0 ? 1 : -1;
+          dy = 0;
+        } else {
+          dx = 0;
+          dy = dy > 0 ? 1 : -1;
+        }
+        const expectX = tipX + dx;
+        const expectY = tipY + dy;
+        const ya = liveSnake && liveSnake.Ya;
+        if (!ya || ya.x == null || ya.y == null) {
+          return {
+            ok: false,
+            reason: "no-Ya",
+            yaBeyondOk: false,
+            tip: { x: tipX, y: tipY },
+            expect: { x: expectX, y: expectY },
+          };
+        }
+        const yx = Number(ya.x);
+        const yy = Number(ya.y);
+        const yaBeyondOk =
+          Math.round(yx) === Math.round(expectX) &&
+          Math.round(yy) === Math.round(expectY);
+        return {
+          ok: true,
+          yaBeyondOk: yaBeyondOk,
+          ya: { x: yx, y: yy },
+          tip: { x: tipX, y: tipY },
+          neck:
+            snakeBody.length >= 2
+              ? {
+                  x: Number(snakeBody[snakeBody.length - 2].x),
+                  y: Number(snakeBody[snakeBody.length - 2].y),
+                }
+              : null,
+          expect: { x: expectX, y: expectY },
+        };
+      }
+
       const board = boardMeta();
       if (!board) return { ok: false, reason: "no-board" };
       const snake = resolveBody(opts.role || "peer", opts.peerClientId || null);
@@ -1376,6 +1448,12 @@ async function sampleSnakeParity(page, opts) {
         transitionDir: snake.transitionDir,
       });
 
+      let yaVirtual = null;
+      if ((opts.role || "peer") === "local") {
+        const g = board.g;
+        yaVirtual = sampleYaVirtual(snake.body, g && g.oa);
+      }
+
       return {
         ok: true,
         role: opts.role || "peer",
@@ -1394,6 +1472,7 @@ async function sampleSnakeParity(page, opts) {
         movementDir: snake.movementDir,
         headDir: snake.headDir,
         transitionDir: snake.transitionDir,
+        yaVirtual: yaVirtual,
       };
     },
     {
@@ -5027,6 +5106,11 @@ async function connectPage(page, wsUrl, displayName, roomCode) {
                 (Math.abs(aPeerB.head.proj || 0) < 0.45 &&
                   Math.abs(bLocal.head.proj || 0) < 0.45),
               lerpOk: !!(lerpA && lerpA.smoothOk),
+              yaBeyondOk: !!(
+                bLocal &&
+                bLocal.yaVirtual &&
+                bLocal.yaVirtual.yaBeyondOk
+              ),
             },
           };
           evidence.parity = parity;
@@ -5099,6 +5183,24 @@ async function connectPage(page, wsUrl, displayName, roomCode) {
               !!(lerpA && lerpA.progressChanged) +
               " maxHold=" +
               ((lerpA && lerpA.maxHold) || 0) +
+              ")"
+          );
+          assert.ok(
+            parity.gates.yaBeyondOk,
+            "B-local oa.Ya must sit one cell past tip (ya=" +
+              JSON.stringify(
+                (bLocal && bLocal.yaVirtual && bLocal.yaVirtual.ya) || null
+              ) +
+              " tip=" +
+              JSON.stringify(
+                (bLocal && bLocal.yaVirtual && bLocal.yaVirtual.tip) || null
+              ) +
+              " expect=" +
+              JSON.stringify(
+                (bLocal && bLocal.yaVirtual && bLocal.yaVirtual.expect) || null
+              ) +
+              " reason=" +
+              ((bLocal && bLocal.yaVirtual && bLocal.yaVirtual.reason) || "") +
               ")"
           );
 

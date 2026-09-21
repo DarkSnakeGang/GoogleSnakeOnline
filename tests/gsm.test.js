@@ -4129,4 +4129,75 @@ describe("gsm hooks", () => {
     assert.ok(Gsm.coopSpawnPoseForSlot(0, -1, 17, 15));
     assert.ok(Gsm.coopYinYangCorner(0, 17, 15));
   });
+
+  it("writeNativeBody syncs Ya one cell past tip on tip−neck ray", () => {
+    assert.equal(typeof Gsm.writeNativeBody, "function");
+    assert.equal(typeof Gsm.syncNativeTailVirtual, "function");
+    assert.equal(typeof Gsm.makeNativePoint, "function");
+
+    const pt = function (x, y) {
+      return Gsm.makeNativePoint(x, y, null);
+    };
+    // Vertical body with Ya stuck on the old tip (documents the glitch).
+    const snake = {
+      ka: [pt(5, 5), pt(5, 6), pt(5, 7)],
+      Ya: pt(5, 7),
+      qc: pt(5, 7),
+    };
+    assert.equal(snake.Ya.x, 5);
+    assert.equal(snake.Ya.y, 7);
+
+    const ok = Gsm.writeNativeBody(snake, [
+      { x: 5, y: 5 },
+      { x: 6, y: 5 },
+      { x: 7, y: 5 },
+    ]);
+    assert.equal(ok, true);
+    assert.equal(snake.ka[snake.ka.length - 1].x, 7);
+    assert.equal(snake.ka[snake.ka.length - 1].y, 5);
+    assert.equal(snake.ka[snake.ka.length - 2].x, 6);
+    assert.equal(snake.ka[snake.ka.length - 2].y, 5);
+    // Beyond tip along tip−neck (+1,0) → (8,5)
+    assert.equal(snake.Ya.x, 8, "Ya.x beyond tip");
+    assert.equal(snake.Ya.y, 5, "Ya.y beyond tip");
+    assert.equal(snake.qc.x, 8, "qc tracks Ya");
+    assert.equal(snake.qc.y, 5);
+  });
+
+  it("writeNativeBody syncs Ya from direction when body length is 1", () => {
+    const pt = function (x, y) {
+      return Gsm.makeNativePoint(x, y, null);
+    };
+    const snake = {
+      ka: [pt(4, 4)],
+      Ya: pt(4, 4),
+      direction: "LEFT",
+    };
+    assert.equal(Gsm.writeNativeBody(snake, [{ x: 9, y: 3 }]), true);
+    assert.equal(snake.ka[0].x, 9);
+    assert.equal(snake.ka[0].y, 3);
+    assert.equal(snake.Ya.x, 8);
+    assert.equal(snake.Ya.y, 3);
+  });
+
+  it("writeNativeBody moves Ya off the tip when it was seeded on the tip cell", () => {
+    const pt = function (x, y) {
+      return Gsm.makeNativePoint(x, y, null);
+    };
+    const snake = {
+      ka: [pt(1, 1), pt(2, 1), pt(3, 1)],
+      Ya: pt(3, 1), // same as tip — flattens rounded cap
+    };
+    assert.equal(
+      Gsm.writeNativeBody(snake, [
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+        { x: 3, y: 1 },
+      ]),
+      true
+    );
+    assert.equal(snake.Ya.x, 4);
+    assert.equal(snake.Ya.y, 1);
+    assert.notEqual(snake.Ya.x, snake.ka[2].x);
+  });
 });

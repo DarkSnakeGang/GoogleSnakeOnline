@@ -38,6 +38,8 @@ Clients connect to:
 
 Allow TCP **7777** in Windows Firewall for LAN.
 
+**UPnP (default off):** enable with `--upnp` to map TCP 7777 on the router. Plain `ws://` public IPs are blocked from HTTPS GSM — use a tunnel / `wss://` for internet play. Details: [server/README.md](server/README.md).
+
 **TLS is optional.** Friends on LAN should use plain `ws://` (no certs). For GSM over HTTPS / public internet, either:
 
 - put Caddy / nginx / Cloudflare Tunnel in front, **or**
