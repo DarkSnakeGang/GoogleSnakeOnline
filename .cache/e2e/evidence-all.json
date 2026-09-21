@@ -8,7 +8,7 @@
       },
       "peerSc": "#19D8E6",
       "peerBackend": "layers",
-      "faceCtxRetargets": 161,
+      "faceCtxRetargets": 173,
       "clip": {
         "x": 316,
         "y": 313,
@@ -16,8 +16,8 @@
         "height": 82
       },
       "ink": 0,
-      "sclera": 2531,
-      "body": 374920,
+      "sclera": 2759,
+      "body": 374715,
       "total": 377580,
       "inkRatio": 0,
       "hasPupils": true,
@@ -31,7 +31,7 @@
       },
       "peerSc": "#4E7CF6",
       "peerBackend": "layers",
-      "faceCtxRetargets": 49,
+      "faceCtxRetargets": 47,
       "clip": {
         "x": 574,
         "y": 184,
@@ -39,8 +39,8 @@
         "height": 82
       },
       "ink": 0,
-      "sclera": 2452,
-      "body": 375055,
+      "sclera": 2449,
+      "body": 375058,
       "total": 377580,
       "inkRatio": 0,
       "hasPupils": true,
@@ -50,197 +50,248 @@
   "lag": {
     "samples": [
       {
-        "t": 1789931926563,
+        "t": 1789950726281,
         "ping": 1,
-        "fps": 40.69398851399081,
-        "averageRefreshMs": 1.5517631997910741,
-        "refreshCount": 542,
-        "renderCount": 542,
-        "compositeCount": 542,
+        "fps": 34.34761822448621,
+        "averageRefreshMs": 1.7196543999702936,
+        "refreshCount": 531,
+        "renderCount": 531,
+        "compositeCount": 531,
         "faceTintSwaps": 1,
         "faceTintRestores": 1,
-        "faceCtxRetargets": 542,
-        "leanPassCount": 541,
+        "faceCtxRetargets": 531,
+        "leanPassCount": 530,
         "fullPassCount": 1,
         "audited": true,
         "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 36fps - Co-op Mode"
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 34fps - Co-op Mode"
       },
       {
-        "t": 1789931926686,
+        "t": 1789950726426,
         "ping": 1,
-        "fps": 41.18718015800679,
-        "averageRefreshMs": 0.7573777652416165,
-        "refreshCount": 547,
-        "renderCount": 547,
-        "compositeCount": 547,
+        "fps": 34.25735910530833,
+        "averageRefreshMs": 0.9505043537186083,
+        "refreshCount": 536,
+        "renderCount": 536,
+        "compositeCount": 536,
         "faceTintSwaps": 1,
         "faceTintRestores": 1,
-        "faceCtxRetargets": 547,
-        "leanPassCount": 546,
+        "faceCtxRetargets": 536,
+        "leanPassCount": 535,
         "fullPassCount": 1,
         "audited": true,
         "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 41fps - Co-op Mode"
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 35fps - Co-op Mode"
       },
       {
-        "t": 1789931926809,
+        "t": 1789950726578,
         "ping": 1,
-        "fps": 41.184868272029085,
-        "averageRefreshMs": 0.4410735457683085,
-        "refreshCount": 552,
-        "renderCount": 552,
-        "compositeCount": 552,
+        "fps": 34.182787706043804,
+        "averageRefreshMs": 0.6430132665578492,
+        "refreshCount": 541,
+        "renderCount": 541,
+        "compositeCount": 541,
         "faceTintSwaps": 1,
         "faceTintRestores": 1,
-        "faceCtxRetargets": 552,
-        "leanPassCount": 551,
+        "faceCtxRetargets": 541,
+        "leanPassCount": 540,
         "fullPassCount": 1,
         "audited": true,
         "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 41fps - Co-op Mode"
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 35fps - Co-op Mode"
       },
       {
-        "t": 1789931926933,
+        "t": 1789950726704,
         "ping": 1,
-        "fps": 41.04137368275123,
-        "averageRefreshMs": 0.36107497955043466,
-        "refreshCount": 557,
-        "renderCount": 557,
-        "compositeCount": 557,
+        "fps": 34.06734354363677,
+        "averageRefreshMs": 0.5425782337436765,
+        "refreshCount": 545,
+        "renderCount": 545,
+        "compositeCount": 545,
         "faceTintSwaps": 1,
         "faceTintRestores": 1,
-        "faceCtxRetargets": 557,
-        "leanPassCount": 556,
+        "faceCtxRetargets": 545,
+        "leanPassCount": 544,
         "fullPassCount": 1,
         "audited": true,
         "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 41fps - Co-op Mode"
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 35fps - Co-op Mode"
       },
       {
-        "t": 1789931927074,
+        "t": 1789950726852,
         "ping": 1,
-        "fps": 40.86095760611447,
-        "averageRefreshMs": 0.3435944393350326,
-        "refreshCount": 563,
-        "renderCount": 563,
-        "compositeCount": 563,
+        "fps": 34.09242597673017,
+        "averageRefreshMs": 0.5483840361462049,
+        "refreshCount": 550,
+        "renderCount": 550,
+        "compositeCount": 550,
         "faceTintSwaps": 1,
         "faceTintRestores": 1,
-        "faceCtxRetargets": 563,
-        "leanPassCount": 562,
+        "faceCtxRetargets": 550,
+        "leanPassCount": 549,
         "fullPassCount": 1,
         "audited": true,
         "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 41fps - Co-op Mode"
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 35fps - Co-op Mode"
       },
       {
-        "t": 1789931927200,
+        "t": 1789950727017,
         "ping": 1,
-        "fps": 41.0296670242196,
-        "averageRefreshMs": 0.23886102541090365,
-        "refreshCount": 568,
-        "renderCount": 568,
-        "compositeCount": 568,
+        "fps": 34.751548893042504,
+        "averageRefreshMs": 0.5303987847913473,
+        "refreshCount": 556,
+        "renderCount": 556,
+        "compositeCount": 556,
         "faceTintSwaps": 1,
         "faceTintRestores": 1,
-        "faceCtxRetargets": 568,
-        "leanPassCount": 567,
+        "faceCtxRetargets": 556,
+        "leanPassCount": 555,
         "fullPassCount": 1,
         "audited": true,
         "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 41fps - Co-op Mode"
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 35fps - Co-op Mode"
       },
       {
-        "t": 1789931927324,
+        "t": 1789950727163,
         "ping": 1,
-        "fps": 41.391204705168576,
-        "averageRefreshMs": 0.2845739802765212,
-        "refreshCount": 573,
-        "renderCount": 573,
-        "compositeCount": 573,
+        "fps": 34.33206071330766,
+        "averageRefreshMs": 0.5478490735066971,
+        "refreshCount": 561,
+        "renderCount": 561,
+        "compositeCount": 561,
         "faceTintSwaps": 1,
         "faceTintRestores": 1,
-        "faceCtxRetargets": 573,
-        "leanPassCount": 572,
+        "faceCtxRetargets": 561,
+        "leanPassCount": 560,
         "fullPassCount": 1,
         "audited": true,
         "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 41fps - Co-op Mode"
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 35fps - Co-op Mode"
       },
       {
-        "t": 1789931927450,
+        "t": 1789950727311,
         "ping": 1,
-        "fps": 40.85464316294082,
-        "averageRefreshMs": 0.2800972021748225,
-        "refreshCount": 578,
-        "renderCount": 578,
-        "compositeCount": 578,
+        "fps": 34.38905903152782,
+        "averageRefreshMs": 0.5448631840595372,
+        "refreshCount": 566,
+        "renderCount": 566,
+        "compositeCount": 566,
         "faceTintSwaps": 1,
         "faceTintRestores": 1,
-        "faceCtxRetargets": 578,
-        "leanPassCount": 577,
+        "faceCtxRetargets": 566,
+        "leanPassCount": 565,
         "fullPassCount": 1,
         "audited": true,
         "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 41fps - Co-op Mode"
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 35fps - Co-op Mode"
       },
       {
-        "t": 1789931927585,
+        "t": 1789950727457,
         "ping": 1,
-        "fps": 40.8122690416113,
-        "averageRefreshMs": 0.24403700121110508,
-        "refreshCount": 584,
-        "renderCount": 584,
-        "compositeCount": 584,
+        "fps": 34.421815382492355,
+        "averageRefreshMs": 0.5497087679292311,
+        "refreshCount": 571,
+        "renderCount": 571,
+        "compositeCount": 571,
         "faceTintSwaps": 1,
         "faceTintRestores": 1,
-        "faceCtxRetargets": 584,
-        "leanPassCount": 583,
+        "faceCtxRetargets": 571,
+        "leanPassCount": 570,
         "fullPassCount": 1,
         "audited": true,
         "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 41fps - Co-op Mode"
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 34fps - Co-op Mode"
       },
       {
-        "t": 1789931927713,
+        "t": 1789950727605,
         "ping": 1,
-        "fps": 40.477669835445084,
-        "averageRefreshMs": 0.2784620444283474,
-        "refreshCount": 589,
-        "renderCount": 589,
-        "compositeCount": 589,
+        "fps": 34.737525894732144,
+        "averageRefreshMs": 0.5280965692510033,
+        "refreshCount": 576,
+        "renderCount": 576,
+        "compositeCount": 576,
         "faceTintSwaps": 1,
         "faceTintRestores": 1,
-        "faceCtxRetargets": 589,
-        "leanPassCount": 588,
+        "faceCtxRetargets": 576,
+        "leanPassCount": 575,
         "fullPassCount": 1,
         "audited": true,
         "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 41fps - Co-op Mode"
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 34fps - Co-op Mode"
       },
       {
-        "t": 1789931927838,
+        "t": 1789950727759,
         "ping": 1,
-        "fps": 41.14426791645883,
-        "averageRefreshMs": 0.262702442843093,
-        "refreshCount": 594,
-        "renderCount": 594,
-        "compositeCount": 594,
+        "fps": 34.042952579828594,
+        "averageRefreshMs": 0.571286683878926,
+        "refreshCount": 581,
+        "renderCount": 581,
+        "compositeCount": 581,
         "faceTintSwaps": 1,
         "faceTintRestores": 1,
-        "faceCtxRetargets": 594,
-        "leanPassCount": 593,
+        "faceCtxRetargets": 581,
+        "leanPassCount": 580,
         "fullPassCount": 1,
         "audited": true,
         "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 41fps - Co-op Mode"
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 34fps - Co-op Mode"
       },
       {
-        "t": 1789931927984,
+        "t": 1789950727910,
         "ping": 1,
-        "fps": 41.44564342397416,
-        "averageRefreshMs": 0.22462906893971948,
+        "fps": 34.05376094963112,
+        "averageRefreshMs": 0.5247992216677879,
+        "refreshCount": 586,
+        "renderCount": 586,
+        "compositeCount": 586,
+        "faceTintSwaps": 1,
+        "faceTintRestores": 1,
+        "faceCtxRetargets": 586,
+        "leanPassCount": 585,
+        "fullPassCount": 1,
+        "audited": true,
+        "a7": 0,
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 34fps - Co-op Mode"
+      },
+      {
+        "t": 1789950728060,
+        "ping": 1,
+        "fps": 34.04856749294029,
+        "averageRefreshMs": 0.500318209435799,
+        "refreshCount": 591,
+        "renderCount": 591,
+        "compositeCount": 591,
+        "faceTintSwaps": 1,
+        "faceTintRestores": 1,
+        "faceCtxRetargets": 591,
+        "leanPassCount": 590,
+        "fullPassCount": 1,
+        "audited": true,
+        "a7": 0,
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 34fps - Co-op Mode"
+      },
+      {
+        "t": 1789950728184,
+        "ping": 1,
+        "fps": 33.739042013839686,
+        "averageRefreshMs": 0.5258903382236991,
+        "refreshCount": 595,
+        "renderCount": 595,
+        "compositeCount": 595,
+        "faceTintSwaps": 1,
+        "faceTintRestores": 1,
+        "faceCtxRetargets": 595,
+        "leanPassCount": 594,
+        "fullPassCount": 1,
+        "audited": true,
+        "a7": 0,
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 34fps - Co-op Mode"
+      },
+      {
+        "t": 1789950728323,
+        "ping": 1,
+        "fps": 34.70032927198088,
+        "averageRefreshMs": 0.5202917462050948,
         "refreshCount": 600,
         "renderCount": 600,
         "compositeCount": 600,
@@ -251,241 +302,36 @@
         "fullPassCount": 1,
         "audited": true,
         "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 41fps - Co-op Mode"
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 34fps - Co-op Mode"
       },
       {
-        "t": 1789931928107,
+        "t": 1789950728464,
         "ping": 1,
-        "fps": 41.43490773806819,
-        "averageRefreshMs": 0.24791045308998777,
-        "refreshCount": 605,
-        "renderCount": 605,
-        "compositeCount": 605,
+        "fps": 32.89434740693127,
+        "averageRefreshMs": 0.5185514993981948,
+        "refreshCount": 604,
+        "renderCount": 604,
+        "compositeCount": 604,
         "faceTintSwaps": 1,
         "faceTintRestores": 1,
-        "faceCtxRetargets": 605,
-        "leanPassCount": 604,
+        "faceCtxRetargets": 604,
+        "leanPassCount": 603,
         "fullPassCount": 1,
         "audited": true,
         "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 41fps - Co-op Mode"
-      },
-      {
-        "t": 1789931928230,
-        "ping": 1,
-        "fps": 40.296411994049414,
-        "averageRefreshMs": 0.26593929695298024,
-        "refreshCount": 610,
-        "renderCount": 610,
-        "compositeCount": 610,
-        "faceTintSwaps": 1,
-        "faceTintRestores": 1,
-        "faceCtxRetargets": 610,
-        "leanPassCount": 609,
-        "fullPassCount": 1,
-        "audited": true,
-        "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 40fps - Co-op Mode"
-      },
-      {
-        "t": 1789931928373,
-        "ping": 1,
-        "fps": 40.711045165469216,
-        "averageRefreshMs": 0.2742775907489959,
-        "refreshCount": 616,
-        "renderCount": 616,
-        "compositeCount": 616,
-        "faceTintSwaps": 1,
-        "faceTintRestores": 1,
-        "faceCtxRetargets": 616,
-        "leanPassCount": 615,
-        "fullPassCount": 1,
-        "audited": true,
-        "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 40fps - Co-op Mode"
-      },
-      {
-        "t": 1789931928497,
-        "ping": 1,
-        "fps": 40.976696340744006,
-        "averageRefreshMs": 0.26277128044513115,
-        "refreshCount": 621,
-        "renderCount": 621,
-        "compositeCount": 621,
-        "faceTintSwaps": 1,
-        "faceTintRestores": 1,
-        "faceCtxRetargets": 621,
-        "leanPassCount": 620,
-        "fullPassCount": 1,
-        "audited": true,
-        "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 40fps - Co-op Mode"
-      },
-      {
-        "t": 1789931928622,
-        "ping": 1,
-        "fps": 40.81307369327905,
-        "averageRefreshMs": 0.2538488934311301,
-        "refreshCount": 626,
-        "renderCount": 626,
-        "compositeCount": 626,
-        "faceTintSwaps": 1,
-        "faceTintRestores": 1,
-        "faceCtxRetargets": 626,
-        "leanPassCount": 625,
-        "fullPassCount": 1,
-        "audited": true,
-        "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 40fps - Co-op Mode"
-      },
-      {
-        "t": 1789931928752,
-        "ping": 1,
-        "fps": 41.355838458992224,
-        "averageRefreshMs": 0.2438852060531373,
-        "refreshCount": 631,
-        "renderCount": 631,
-        "compositeCount": 631,
-        "faceTintSwaps": 1,
-        "faceTintRestores": 1,
-        "faceCtxRetargets": 631,
-        "leanPassCount": 630,
-        "fullPassCount": 1,
-        "audited": true,
-        "a7": 0,
-        "statusText": "Multiplayer Mod v13 - Connected [1ms] 41fps - Co-op Mode"
+        "statusText": "Multiplayer Mod v13 - Connected [1ms] 32fps - Co-op Mode"
       }
     ],
     "a7": 0
   },
-  "death": {
-    "a": {
-      "clientId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
-      "peerId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
-      "endReason": null,
-      "sessionActive": true,
-      "deadSent": true,
-      "localDead": true,
-      "nj": true,
-      "overlayVisible": true,
-      "gsmOverlayVisible": true,
-      "overlayVisibility": "visible",
-      "overlayOpacity": "1",
-      "menuVisibility": "hidden",
-      "hudAlive": false,
-      "scoreAlive": false,
-      "peerHudAlive": true,
-      "peerRemoteAlive": true,
-      "scores": {
-        "1861e322-e8f0-4044-99d4-35d5c2bf7e04": {
-          "score": 0,
-          "alive": false
-        },
-        "f3a1d07a-a218-48cb-8162-1e82088e90bc": {
-          "score": 0,
-          "alive": true
-        }
-      },
-      "remotes": {
-        "f3a1d07a-a218-48cb-8162-1e82088e90bc": {
-          "alive": true,
-          "head": {
-            "x": 5,
-            "y": 5
-          }
-        }
-      }
-    },
-    "b": {
-      "clientId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
-      "peerId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
-      "endReason": null,
-      "sessionActive": true,
-      "deadSent": false,
-      "localDead": false,
-      "nj": false,
-      "overlayVisible": false,
-      "gsmOverlayVisible": false,
-      "overlayVisibility": "hidden",
-      "overlayOpacity": "0",
-      "menuVisibility": "hidden",
-      "hudAlive": true,
-      "scoreAlive": true,
-      "peerHudAlive": false,
-      "peerRemoteAlive": false,
-      "scores": {
-        "1861e322-e8f0-4044-99d4-35d5c2bf7e04": {
-          "score": 0,
-          "alive": false
-        },
-        "f3a1d07a-a218-48cb-8162-1e82088e90bc": {
-          "score": 0,
-          "alive": true
-        }
-      },
-      "remotes": {
-        "1861e322-e8f0-4044-99d4-35d5c2bf7e04": {
-          "alive": false,
-          "head": {
-            "x": 9,
-            "y": 3
-          }
-        }
-      }
-    },
-    "killed": {
-      "ok": true,
-      "clientId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
-      "deadSent": true,
-      "generation": 1,
-      "eventSeq": 144,
-      "bodyLen": 3
-    },
-    "preB": {
-      "clientId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
-      "peerId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
-      "endReason": null,
-      "sessionActive": true,
-      "deadSent": false,
-      "localDead": false,
-      "nj": false,
-      "overlayVisible": false,
-      "gsmOverlayVisible": false,
-      "overlayVisibility": "hidden",
-      "overlayOpacity": "0",
-      "menuVisibility": "hidden",
-      "hudAlive": true,
-      "scoreAlive": true,
-      "peerHudAlive": false,
-      "peerRemoteAlive": false,
-      "scores": {
-        "1861e322-e8f0-4044-99d4-35d5c2bf7e04": {
-          "score": 0,
-          "alive": false
-        },
-        "f3a1d07a-a218-48cb-8162-1e82088e90bc": {
-          "score": 0,
-          "alive": true
-        }
-      },
-      "remotes": {
-        "1861e322-e8f0-4044-99d4-35d5c2bf7e04": {
-          "alive": false,
-          "head": {
-            "x": 9,
-            "y": 3
-          }
-        }
-      }
-    }
-  },
+  "death": null,
   "parity": {
-    "idA": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
-    "idB": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
+    "idA": "1831800c-1517-4f99-93b5-4fa74fbb1a07",
+    "idB": "8faf8121-bb54-44ae-9a1e-7f36bc719741",
     "bLocal": {
       "ok": true,
       "role": "local",
-      "clientId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
+      "clientId": "8faf8121-bb54-44ae-9a1e-7f36bc719741",
       "bodyLen": 3,
       "liveSc": "#19D8E6",
       "liveYc": "#15B5C1",
@@ -573,27 +419,47 @@
       },
       "movementDir": "NONE",
       "headDir": "RIGHT",
-      "transitionDir": "NONE"
+      "transitionDir": "NONE",
+      "yaVirtual": {
+        "ok": true,
+        "yaBeyondOk": true,
+        "ya": {
+          "x": 2,
+          "y": 5
+        },
+        "tip": {
+          "x": 3,
+          "y": 5
+        },
+        "neck": {
+          "x": 4,
+          "y": 5
+        },
+        "expect": {
+          "x": 2,
+          "y": 5
+        }
+      }
     },
     "aPeerB": {
       "ok": true,
       "role": "peer",
-      "clientId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
+      "clientId": "8faf8121-bb54-44ae-9a1e-7f36bc719741",
       "bodyLen": 3,
       "liveSc": "#19D8E6",
       "liveYc": "#15B5C1",
       "bodyColor": {
         "r": 24,
-        "g": 210,
-        "b": 223,
-        "hex": "#18D2DF",
+        "g": 213,
+        "b": 226,
+        "hex": "#18D5E2",
         "n": 25
       },
       "headPatch": {
-        "r": 255,
-        "g": 255,
-        "b": 255,
-        "hex": "#FFFFFF",
+        "r": 25,
+        "g": 216,
+        "b": 230,
+        "hex": "#19D8E6",
         "n": 25
       },
       "midCell": {
@@ -628,19 +494,19 @@
       },
       "eyeFringe": {
         "ok": true,
-        "fringeN": 106,
+        "fringeN": 27,
         "median": {
-          "r": 108,
-          "g": 227,
-          "b": 236
+          "r": 126,
+          "g": 232,
+          "b": 240
         },
-        "medianHex": "#6CE3EC",
+        "medianHex": "#7EE8F0",
         "liveSc": "#19D8E6",
-        "scDist": 100
+        "scDist": 127
       },
       "head": {
         "ok": true,
-        "proj": -0.04587369236729983,
+        "proj": -0.48585928809788625,
         "f": {
           "x": 1,
           "y": 0
@@ -649,9 +515,9 @@
           "x": 5,
           "y": 5
         },
-        "mass": 534,
-        "pupils": 30,
-        "sclera": 504,
+        "mass": 124,
+        "pupils": 35,
+        "sclera": 89,
         "marks": 0,
         "paintedIndex": 0,
         "dirs": {
@@ -666,12 +532,13 @@
       },
       "movementDir": "RIGHT",
       "headDir": "RIGHT",
-      "transitionDir": "NONE"
+      "transitionDir": "NONE",
+      "yaVirtual": null
     },
     "aLocal": {
       "ok": true,
       "role": "local",
-      "clientId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
+      "clientId": "1831800c-1517-4f99-93b5-4fa74fbb1a07",
       "bodyLen": 3,
       "liveSc": "#4E7CF6",
       "liveYc": "#17439F",
@@ -696,10 +563,10 @@
       },
       "tail": {
         "ok": true,
-        "proj": 0.020559783097156246,
-        "outRatio": 0.5121815138553096,
+        "proj": 0.012109332179858061,
+        "outRatio": 0.5061104474869061,
         "outward": 5508,
-        "inward": 5246,
+        "inward": 5375,
         "u": {
           "x": -1,
           "y": 0
@@ -712,8 +579,8 @@
           "x": 7,
           "y": 3
         },
-        "mass": 11510,
-        "facingOk": true
+        "mass": 11639,
+        "facingOk": false
       },
       "corner": {
         "ok": false,
@@ -759,12 +626,32 @@
       },
       "movementDir": "RIGHT",
       "headDir": "RIGHT",
-      "transitionDir": "NONE"
+      "transitionDir": "NONE",
+      "yaVirtual": {
+        "ok": true,
+        "yaBeyondOk": true,
+        "ya": {
+          "x": 5,
+          "y": 3
+        },
+        "tip": {
+          "x": 6,
+          "y": 3
+        },
+        "neck": {
+          "x": 7,
+          "y": 3
+        },
+        "expect": {
+          "x": 5,
+          "y": 3
+        }
+      }
     },
     "bPeerA": {
       "ok": true,
       "role": "peer",
-      "clientId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
+      "clientId": "1831800c-1517-4f99-93b5-4fa74fbb1a07",
       "bodyLen": 3,
       "liveSc": "#4E7CF6",
       "liveYc": "#17439F",
@@ -852,7 +739,8 @@
       },
       "movementDir": "RIGHT",
       "headDir": "RIGHT",
-      "transitionDir": "NONE"
+      "transitionDir": "NONE",
+      "yaVirtual": null
     },
     "eyesBLocal": {
       "ok": true,
@@ -868,8 +756,8 @@
         "height": 82
       },
       "ink": 0,
-      "sclera": 2442,
-      "body": 375117,
+      "sclera": 2471,
+      "body": 375109,
       "total": 377580,
       "inkRatio": 0,
       "hasPupils": true,
@@ -885,7 +773,7 @@
       "n": 14
     },
     "gates": {
-      "bodyRgbDist": 2,
+      "bodyRgbDist": 4,
       "bodyOk": true,
       "tailA": {
         "ok": true,
@@ -941,15 +829,15 @@
       "cornerOk": true,
       "fringeA": {
         "ok": true,
-        "fringeN": 106,
+        "fringeN": 27,
         "median": {
-          "r": 108,
-          "g": 227,
-          "b": 236
+          "r": 126,
+          "g": 232,
+          "b": 240
         },
-        "medianHex": "#6CE3EC",
+        "medianHex": "#7EE8F0",
         "liveSc": "#19D8E6",
-        "scDist": 100
+        "scDist": 127
       },
       "fringeB": {
         "ok": true,
@@ -966,7 +854,7 @@
       "fringeOk": true,
       "headA": {
         "ok": true,
-        "proj": -0.04587369236729983,
+        "proj": -0.48585928809788625,
         "f": {
           "x": 1,
           "y": 0
@@ -975,9 +863,9 @@
           "x": 5,
           "y": 5
         },
-        "mass": 534,
-        "pupils": 30,
-        "sclera": 504,
+        "mass": 124,
+        "pupils": 35,
+        "sclera": 89,
         "marks": 0,
         "paintedIndex": 0,
         "dirs": {
@@ -1009,85 +897,8 @@
         }
       },
       "headOk": true,
-      "lerpOk": true
-    }
-  },
-  "lagSummary": {
-    "pingMin": 1,
-    "pingMax": 1,
-    "maxRefresh": 0.4410735457683085,
-    "medianFps": 41.0296670242196,
-    "faceTintSwaps": 1,
-    "faceTintRestores": 1,
-    "faceCtxRetargets": 631,
-    "a7": 0
-  },
-  "dualDeath": {
-    "a": {
-      "clientId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
-      "peerId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
-      "endReason": "ALL_DEAD",
-      "sessionActive": false,
-      "deadSent": false,
-      "localDead": false,
-      "nj": true,
-      "overlayVisible": true,
-      "gsmOverlayVisible": true,
-      "overlayVisibility": "visible",
-      "overlayOpacity": "1",
-      "menuVisibility": "visible",
-      "hudAlive": false,
-      "scoreAlive": false,
-      "peerHudAlive": false,
-      "peerRemoteAlive": null,
-      "scores": {
-        "1861e322-e8f0-4044-99d4-35d5c2bf7e04": {
-          "score": 0,
-          "alive": false
-        },
-        "f3a1d07a-a218-48cb-8162-1e82088e90bc": {
-          "score": 0,
-          "alive": false
-        }
-      },
-      "remotes": {}
-    },
-    "b": {
-      "clientId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
-      "peerId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
-      "endReason": "ALL_DEAD",
-      "sessionActive": false,
-      "deadSent": false,
-      "localDead": false,
-      "nj": true,
-      "overlayVisible": true,
-      "gsmOverlayVisible": true,
-      "overlayVisibility": "visible",
-      "overlayOpacity": "0.9694",
-      "menuVisibility": "visible",
-      "hudAlive": false,
-      "scoreAlive": false,
-      "peerHudAlive": false,
-      "peerRemoteAlive": null,
-      "scores": {
-        "1861e322-e8f0-4044-99d4-35d5c2bf7e04": {
-          "score": 0,
-          "alive": false
-        },
-        "f3a1d07a-a218-48cb-8162-1e82088e90bc": {
-          "score": 0,
-          "alive": false
-        }
-      },
-      "remotes": {}
-    },
-    "killedB": {
-      "ok": true,
-      "clientId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
-      "deadSent": true,
-      "generation": 1,
-      "eventSeq": 3,
-      "bodyLen": 3
+      "lerpOk": true,
+      "yaBeyondOk": true
     }
   }
 }

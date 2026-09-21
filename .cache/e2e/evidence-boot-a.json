@@ -1,6 +1,6 @@
 {
   "modVersion": "13",
-  "modBuilt": "2026-09-20T19:17:40.217Z",
+  "modBuilt": "2026-09-21T00:30:53.462Z",
   "liveBoard": {
     "width": 10,
     "height": 9
@@ -68,51 +68,51 @@
   "nativeRenderDebug": {
     "generation": 1,
     "backend": "layers",
-    "cadence": 30,
-    "renderCount": 14,
-    "refreshCount": 14,
-    "compositeCount": 13,
+    "cadence": 20,
+    "renderCount": 1,
+    "refreshCount": 1,
+    "compositeCount": 0,
     "layerAllocations": 1,
     "layerReleases": 0,
     "bufferGrowth": 3,
     "fallbackReason": null,
     "renderExceptions": 0,
-    "averageRefreshMs": 7.591942012570194,
-    "leanPassCount": 13,
+    "averageRefreshMs": 260.9000000022352,
+    "leanPassCount": 0,
     "fullPassCount": 1,
     "faceTintCacheBakes": 2,
-    "faceTintBlits": 27,
+    "faceTintBlits": 1,
     "audited": true,
     "faceTintSwaps": 1,
-    "faceCtxRetargets": 14,
+    "faceCtxRetargets": 1,
     "faceTintRestores": 1
   },
   "nativeRenderMetrics": {
     "generation": 1,
     "backend": "layers",
-    "cadence": 60,
-    "renderCount": 40,
-    "refreshCount": 40,
-    "compositeCount": 40,
+    "cadence": 20,
+    "renderCount": 9,
+    "refreshCount": 9,
+    "compositeCount": 9,
     "layerAllocations": 1,
     "layerReleases": 0,
     "bufferGrowth": 3,
     "fallbackReason": null,
     "renderExceptions": 0,
-    "averageRefreshMs": 0.3775959863323145,
-    "leanPassCount": 39,
+    "averageRefreshMs": 44.440750847447745,
+    "leanPassCount": 8,
     "fullPassCount": 1,
     "faceTintCacheBakes": 2,
-    "faceTintBlits": 79,
+    "faceTintBlits": 17,
     "audited": true,
     "faceTintSwaps": 1,
-    "faceCtxRetargets": 40,
+    "faceCtxRetargets": 9,
     "faceTintRestores": 1
   },
   "fallbackReason": null,
   "peerBackend": "layers",
   "coopEndReason": null,
-  "statusText": "Multiplayer Mod v13 - Connected [5ms] 40fps - Co-op Mode",
+  "statusText": "Multiplayer Mod v13 - Connected [32ms] 23fps - Co-op Mode",
   "local": {
     "body": [
       {
@@ -136,10 +136,10 @@
     "Sc": "#4E7CF6",
     "Yc": "#17439F",
     "score": 0,
-    "clientId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04"
+    "clientId": "1831800c-1517-4f99-93b5-4fa74fbb1a07"
   },
   "remotes": {
-    "f3a1d07a-a218-48cb-8162-1e82088e90bc": {
+    "8faf8121-bb54-44ae-9a1e-7f36bc719741": {
       "body": [
         {
           "x": 5,
@@ -161,22 +161,22 @@
       "dir": "RIGHT",
       "Sc": "#19D8E6",
       "Yc": "#15B5C1",
-      "score": 0,
+      "score": null,
       "colorId": 1
     }
   },
   "hudScores": {
     "scores": {
-      "1861e322-e8f0-4044-99d4-35d5c2bf7e04": {
+      "1831800c-1517-4f99-93b5-4fa74fbb1a07": {
         "score": 0,
         "alive": true
       },
-      "f3a1d07a-a218-48cb-8162-1e82088e90bc": {
+      "8faf8121-bb54-44ae-9a1e-7f36bc719741": {
         "score": 0,
         "alive": true
       }
     },
     "total": 0
   },
-  "poseFp": "L:5,3>4,3>3,3|NONE|#4E7CF6/#17439F##f3a1d07a-a218-48cb-8162-1e82088e90bc:5,5>4,5>3,5|RIGHT|#19D8E6/#15B5C1##7,4"
+  "poseFp": "L:5,3>4,3>3,3|NONE|#4E7CF6/#17439F##8faf8121-bb54-44ae-9a1e-7f36bc719741:5,5>4,5>3,5|RIGHT|#19D8E6/#15B5C1##7,4"
 }

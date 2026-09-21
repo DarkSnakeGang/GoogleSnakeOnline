@@ -1,10 +1,10 @@
 {
-  "idA": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
-  "idB": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
+  "idA": "1831800c-1517-4f99-93b5-4fa74fbb1a07",
+  "idB": "8faf8121-bb54-44ae-9a1e-7f36bc719741",
   "bLocal": {
     "ok": true,
     "role": "local",
-    "clientId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
+    "clientId": "8faf8121-bb54-44ae-9a1e-7f36bc719741",
     "bodyLen": 3,
     "liveSc": "#19D8E6",
     "liveYc": "#15B5C1",
@@ -92,27 +92,47 @@
     },
     "movementDir": "NONE",
     "headDir": "RIGHT",
-    "transitionDir": "NONE"
+    "transitionDir": "NONE",
+    "yaVirtual": {
+      "ok": true,
+      "yaBeyondOk": true,
+      "ya": {
+        "x": 2,
+        "y": 5
+      },
+      "tip": {
+        "x": 3,
+        "y": 5
+      },
+      "neck": {
+        "x": 4,
+        "y": 5
+      },
+      "expect": {
+        "x": 2,
+        "y": 5
+      }
+    }
   },
   "aPeerB": {
     "ok": true,
     "role": "peer",
-    "clientId": "f3a1d07a-a218-48cb-8162-1e82088e90bc",
+    "clientId": "8faf8121-bb54-44ae-9a1e-7f36bc719741",
     "bodyLen": 3,
     "liveSc": "#19D8E6",
     "liveYc": "#15B5C1",
     "bodyColor": {
       "r": 24,
-      "g": 210,
-      "b": 223,
-      "hex": "#18D2DF",
+      "g": 213,
+      "b": 226,
+      "hex": "#18D5E2",
       "n": 25
     },
     "headPatch": {
-      "r": 255,
-      "g": 255,
-      "b": 255,
-      "hex": "#FFFFFF",
+      "r": 25,
+      "g": 216,
+      "b": 230,
+      "hex": "#19D8E6",
       "n": 25
     },
     "midCell": {
@@ -147,19 +167,19 @@
     },
     "eyeFringe": {
       "ok": true,
-      "fringeN": 106,
+      "fringeN": 27,
       "median": {
-        "r": 108,
-        "g": 227,
-        "b": 236
+        "r": 126,
+        "g": 232,
+        "b": 240
       },
-      "medianHex": "#6CE3EC",
+      "medianHex": "#7EE8F0",
       "liveSc": "#19D8E6",
-      "scDist": 100
+      "scDist": 127
     },
     "head": {
       "ok": true,
-      "proj": -0.04587369236729983,
+      "proj": -0.48585928809788625,
       "f": {
         "x": 1,
         "y": 0
@@ -168,9 +188,9 @@
         "x": 5,
         "y": 5
       },
-      "mass": 534,
-      "pupils": 30,
-      "sclera": 504,
+      "mass": 124,
+      "pupils": 35,
+      "sclera": 89,
       "marks": 0,
       "paintedIndex": 0,
       "dirs": {
@@ -185,12 +205,13 @@
     },
     "movementDir": "RIGHT",
     "headDir": "RIGHT",
-    "transitionDir": "NONE"
+    "transitionDir": "NONE",
+    "yaVirtual": null
   },
   "aLocal": {
     "ok": true,
     "role": "local",
-    "clientId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
+    "clientId": "1831800c-1517-4f99-93b5-4fa74fbb1a07",
     "bodyLen": 3,
     "liveSc": "#4E7CF6",
     "liveYc": "#17439F",
@@ -215,10 +236,10 @@
     },
     "tail": {
       "ok": true,
-      "proj": 0.020559783097156246,
-      "outRatio": 0.5121815138553096,
+      "proj": 0.012109332179858061,
+      "outRatio": 0.5061104474869061,
       "outward": 5508,
-      "inward": 5246,
+      "inward": 5375,
       "u": {
         "x": -1,
         "y": 0
@@ -231,8 +252,8 @@
         "x": 7,
         "y": 3
       },
-      "mass": 11510,
-      "facingOk": true
+      "mass": 11639,
+      "facingOk": false
     },
     "corner": {
       "ok": false,
@@ -278,12 +299,32 @@
     },
     "movementDir": "RIGHT",
     "headDir": "RIGHT",
-    "transitionDir": "NONE"
+    "transitionDir": "NONE",
+    "yaVirtual": {
+      "ok": true,
+      "yaBeyondOk": true,
+      "ya": {
+        "x": 5,
+        "y": 3
+      },
+      "tip": {
+        "x": 6,
+        "y": 3
+      },
+      "neck": {
+        "x": 7,
+        "y": 3
+      },
+      "expect": {
+        "x": 5,
+        "y": 3
+      }
+    }
   },
   "bPeerA": {
     "ok": true,
     "role": "peer",
-    "clientId": "1861e322-e8f0-4044-99d4-35d5c2bf7e04",
+    "clientId": "1831800c-1517-4f99-93b5-4fa74fbb1a07",
     "bodyLen": 3,
     "liveSc": "#4E7CF6",
     "liveYc": "#17439F",
@@ -371,7 +412,8 @@
     },
     "movementDir": "RIGHT",
     "headDir": "RIGHT",
-    "transitionDir": "NONE"
+    "transitionDir": "NONE",
+    "yaVirtual": null
   },
   "eyesBLocal": {
     "ok": true,
@@ -387,8 +429,8 @@
       "height": 82
     },
     "ink": 0,
-    "sclera": 2442,
-    "body": 375117,
+    "sclera": 2471,
+    "body": 375109,
     "total": 377580,
     "inkRatio": 0,
     "hasPupils": true,
@@ -404,7 +446,7 @@
     "n": 14
   },
   "gates": {
-    "bodyRgbDist": 2,
+    "bodyRgbDist": 4,
     "bodyOk": true,
     "tailA": {
       "ok": true,
@@ -460,15 +502,15 @@
     "cornerOk": true,
     "fringeA": {
       "ok": true,
-      "fringeN": 106,
+      "fringeN": 27,
       "median": {
-        "r": 108,
-        "g": 227,
-        "b": 236
+        "r": 126,
+        "g": 232,
+        "b": 240
       },
-      "medianHex": "#6CE3EC",
+      "medianHex": "#7EE8F0",
       "liveSc": "#19D8E6",
-      "scDist": 100
+      "scDist": 127
     },
     "fringeB": {
       "ok": true,
@@ -485,7 +527,7 @@
     "fringeOk": true,
     "headA": {
       "ok": true,
-      "proj": -0.04587369236729983,
+      "proj": -0.48585928809788625,
       "f": {
         "x": 1,
         "y": 0
@@ -494,9 +536,9 @@
         "x": 5,
         "y": 5
       },
-      "mass": 534,
-      "pupils": 30,
-      "sclera": 504,
+      "mass": 124,
+      "pupils": 35,
+      "sclera": 89,
       "marks": 0,
       "paintedIndex": 0,
       "dirs": {
@@ -528,6 +570,7 @@
       }
     },
     "headOk": true,
-    "lerpOk": true
+    "lerpOk": true,
+    "yaBeyondOk": true
   }
 }

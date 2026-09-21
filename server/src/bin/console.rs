@@ -1726,7 +1726,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   refresh();
   setInterval(refresh, 2000);
   pollSpectate();
-  setInterval(pollSpectate, 150);
+  setInterval(pollSpectate, 16);
   window.addEventListener("resize", function () { renderSpectate(lastSnap); });
 
   const es = new EventSource("/api/logs");

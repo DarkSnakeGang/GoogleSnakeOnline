@@ -3079,8 +3079,8 @@ impl Room {
             return;
         }
 
-        // Main loop calls tick every ~100ms
-        self.coop_accum_ms = self.coop_accum_ms.saturating_add(100);
+        // Main loop calls tick every ROOM_TICK_MS (16ms)
+        self.coop_accum_ms = self.coop_accum_ms.saturating_add(crate::ROOM_TICK_MS);
         let mut stepped = false;
         while self.coop_accum_ms >= interval {
             self.coop_accum_ms -= interval;

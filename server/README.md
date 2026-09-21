@@ -33,6 +33,12 @@ cargo run --release --manifest-path server/Cargo.toml --bin multiplayer-server -
 
 Clients connect to `ws://<lan-or-public-ip>:7777/ws`.
 
+## Tick / net cadence
+
+- **In-game step:** clients publish co-op poses / race boards on each native Snake tick (`g.Fb`, ~135ms at normal speed).
+- **Server room loop:** 16ms flush/GC/sim accumulator (not the pose clock). Native-relay poses fan out as soon as they arrive.
+- **Console spectate:** polls `/api/spectate` every 16ms.
+
 ## Config
 
 | Flag / env | Default | Meaning |

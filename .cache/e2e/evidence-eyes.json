@@ -7,7 +7,7 @@
     },
     "peerSc": "#19D8E6",
     "peerBackend": "layers",
-    "faceCtxRetargets": 161,
+    "faceCtxRetargets": 173,
     "clip": {
       "x": 316,
       "y": 313,
@@ -15,8 +15,8 @@
       "height": 82
     },
     "ink": 0,
-    "sclera": 2531,
-    "body": 374920,
+    "sclera": 2759,
+    "body": 374715,
     "total": 377580,
     "inkRatio": 0,
     "hasPupils": true,
@@ -30,7 +30,7 @@
     },
     "peerSc": "#4E7CF6",
     "peerBackend": "layers",
-    "faceCtxRetargets": 49,
+    "faceCtxRetargets": 47,
     "clip": {
       "x": 574,
       "y": 184,
@@ -38,8 +38,8 @@
       "height": 82
     },
     "ink": 0,
-    "sclera": 2452,
-    "body": 375055,
+    "sclera": 2449,
+    "body": 375058,
     "total": 377580,
     "inkRatio": 0,
     "hasPupils": true,

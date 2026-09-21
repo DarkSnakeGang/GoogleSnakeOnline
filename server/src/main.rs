@@ -264,8 +264,10 @@ async fn main() {
     }
 
     let tick_state = state.clone();
+    // High-frequency flush / GC / sim accum — not the in-game pose clock (that is client Fb).
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        let mut interval =
+            tokio::time::interval(Duration::from_millis(multiplayer_server::ROOM_TICK_MS));
         let mut gc_ticks: u32 = 0;
         loop {
             interval.tick().await;
@@ -283,7 +285,8 @@ async fn main() {
                 tick_state.flush_outbox(&code);
                 tick_state.reap_orphans(&code);
             }
-            if gc_ticks % 50 == 0 {
+            // ~5s wall time at 16ms/tick (was %50 at 100ms)
+            if gc_ticks % 312 == 0 {
                 tick_state.gc_empty_rooms();
             }
         }

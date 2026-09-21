@@ -2628,12 +2628,16 @@
       window.__mpCoopFlushPendingDeltas = function () {
         self.flushPendingCoopSnakeDeltas();
       };
-      window.__mpCoopAfterTick =
-        this._coopAuthority === "native-relay-v1"
-          ? function () { self.publishCoopState(); }
-          : function () {
-              // Server sim binder owns pose and fruit.
-            };
+      if (typeof self.installNativeTickNetPublish === "function") {
+        self.installNativeTickNetPublish();
+      } else {
+        window.__mpCoopAfterTick =
+          this._coopAuthority === "native-relay-v1"
+            ? function () {
+                self.publishCoopState();
+              }
+            : function () {};
+      }
       window.__mpCoopLastTickAt = 0;
       window.__mpCoopOnLocalReset = function () {
         if (self._coopAuthority === "server-sim-v1") {
@@ -3557,7 +3561,11 @@
       window.__mpCoopSpectator = false;
       window.__mpCoopServerAuth = false;
       window.__mpCoopPlaySettings = null;
-      window.__mpCoopAfterTick = null;
+      if (typeof this.installNativeTickNetPublish === "function") {
+        this.installNativeTickNetPublish();
+      } else {
+        window.__mpCoopAfterTick = null;
+      }
       window.__mpCoopFlushPendingDeltas = null;
       window.__mpCoopOnFriendlyDeath = null;
       window.__mpCoopOnBoardFull = null;
@@ -3849,7 +3857,11 @@
       );
     }
     if (typeof window !== "undefined") {
-      window.__mpCoopAfterTick = null;
+      if (typeof this.installNativeTickNetPublish === "function") {
+        this.installNativeTickNetPublish();
+      } else {
+        window.__mpCoopAfterTick = null;
+      }
       window.__mpCoopFlushPendingDeltas = null;
       window.__mpCoopSession = false;
       window.__mpCoopInject = false;
@@ -3932,7 +3944,15 @@
     const fp = Gsm.snakeDeltaFingerprint
       ? Gsm.snakeDeltaFingerprint(delta)
       : null;
-    if (fp && fp === this._coopLastPoseFp && !this._coopDeadSent && !needColors) {
+    delta.moved = this._coopLocalHasMoved(delta);
+    // Skip only when idle (same pose, not crawling). While moving, one send per tick.
+    if (
+      fp &&
+      fp === this._coopLastPoseFp &&
+      !this._coopDeadSent &&
+      !needColors &&
+      !delta.moved
+    ) {
       return;
     }
     this._coopLastPoseFp = fp;
@@ -3948,10 +3968,25 @@
       });
     }
 
-    delta.moved = this._coopLocalHasMoved(delta);
     delta.speedEpoch = this.coop.speedEpoch;
-    if (this.coop.speedState && this.coop.speedState.intervalMs != null) {
-      delta.stepIntervalMs = Number(this.coop.speedState.intervalMs);
+    // Prefer live native step length (Fb ≈ 135ms at normal) for peer lerp.
+    let stepMs = NaN;
+    try {
+      const g =
+        Gsm.gameInstance && typeof Gsm.gameInstance === "function"
+          ? Gsm.gameInstance()
+          : null;
+      if (g && typeof g.Fb === "number") stepMs = Number(g.Fb);
+    } catch (eFb) { /* ignore */ }
+    if (
+      (!Number.isFinite(stepMs) || stepMs <= 0) &&
+      this.coop.speedState &&
+      this.coop.speedState.intervalMs != null
+    ) {
+      stepMs = Number(this.coop.speedState.intervalMs);
+    }
+    if (Number.isFinite(stepMs) && stepMs > 0) {
+      delta.stepIntervalMs = stepMs;
     }
 
     // The initial seated pose may establish the corpse/seat cache. Movement
@@ -4967,16 +5002,49 @@
     });
 
     if (this._scoreTimer) clearInterval(this._scoreTimer);
-    this._scoreTimer = setInterval(function () {
-      if (!self.client || !self.client.connected) return;
-      const me = self.client.me();
-      if (!me || me.role !== "player") return;
-      if (!self.client.roster || self.client.roster.mode !== "race") return;
-      const s = Gsm.readScoreAndAlive();
-      // Fallback arm if TimeKeeper.start was missed (late wrap)
+    this._scoreTimer = null;
+    // Race scores/boards publish on native tick (installNativeTickNetPublish).
+    // Death / goal paths still call _pulseScore directly.
+  };
+
+  /**
+   * Native game-step net publish for co-op + race (Fb-aligned, ~135ms at normal).
+   * Installed once; no-ops when session inactive.
+   */
+  MultiplayerApp.prototype.installNativeTickNetPublish = function () {
+    const self = this;
+    if (typeof window === "undefined") return;
+    window.__mpCoopAfterTick = function () {
+      try {
+        if (!self.client || !self.client.connected) return;
+        const roster = self.client.roster;
+        if (!roster || !roster.sessionActive) return;
+        if (roster.mode === "coop") {
+          if (self._coopAuthority === "native-relay-v1") {
+            self.publishCoopState();
+          }
+        } else if (roster.mode === "race") {
+          self.publishRaceTick();
+        }
+      } catch (e) {
+        console.warn("__mpCoopAfterTick net", e);
+      }
+    };
+  };
+
+  /** One BOARD_DELTA + SCORE_PULSE per native race tick (spectator cadence = Fb). */
+  MultiplayerApp.prototype.publishRaceTick = function () {
+    if (!this.client || !this.client.connected) return;
+    const me = this.client.me();
+    if (!me || me.role !== "player") return;
+    const roster = this.client.roster;
+    if (!roster || roster.mode !== "race" || !roster.sessionActive) return;
+
+    const s = Gsm.readScoreAndAlive && Gsm.readScoreAndAlive();
+    if (s) {
       if (
         s.alive !== false &&
-        self._raceRunStartedAtMs == null &&
+        this._raceRunStartedAtMs == null &&
         root.timeKeeper &&
         root.timeKeeper.playing
       ) {
@@ -4984,18 +5052,46 @@
           s.timeMs != null && Number.isFinite(Number(s.timeMs))
             ? Number(s.timeMs)
             : 0;
-        self._raceRunStartedAtMs = Date.now() - Math.max(0, elapsed);
+        this._raceRunStartedAtMs = Date.now() - Math.max(0, elapsed);
       }
-      self.client.scorePulse({
-        score: s.score,
-        timeMs: s.timeMs != null && Number.isFinite(s.timeMs) ? s.timeMs : 0,
-        alive: s.alive,
-        runStartedAtMs:
-          self._raceRunStartedAtMs != null
-            ? Number(self._raceRunStartedAtMs)
-            : undefined,
-      });
-    }, 250);
+      this._pulseScore(
+        s.score,
+        s.timeMs != null && Number.isFinite(s.timeMs) ? s.timeMs : 0,
+        s.alive
+      );
+    }
+
+    const specs = (roster.clients || []).filter(function (c) {
+      return c.role === "spectator";
+    });
+    if (!specs.length) return;
+    const board = Gsm.scrapeBoard({
+      colorId: me.colorId != null ? me.colorId : undefined,
+    });
+    if (!board) return;
+    try {
+      const g =
+        Gsm.gameInstance && typeof Gsm.gameInstance === "function"
+          ? Gsm.gameInstance()
+          : null;
+      if (g && typeof g.Fb === "number" && Number(g.Fb) > 0) {
+        board.stepIntervalMs = Number(g.Fb);
+        board.intervalMs = Number(g.Fb);
+      }
+    } catch (eFb) { /* ignore */ }
+    const fp = Gsm.boardDeltaFingerprint
+      ? Gsm.boardDeltaFingerprint(board)
+      : null;
+    if (fp && fp === this._raceLastBoardFp) return;
+    this._raceLastBoardFp = fp;
+    this.client.boardDelta(board);
+  };
+
+  MultiplayerApp.prototype.hookBoardUpload = function () {
+    // Tick-aligned publish replaces the old fixed 80ms board poll.
+    this.installNativeTickNetPublish();
+    if (this._boardTimer) clearInterval(this._boardTimer);
+    this._boardTimer = null;
   };
 
   MultiplayerApp.prototype._pulseScore = function (score, timeMs, alive, extra) {
