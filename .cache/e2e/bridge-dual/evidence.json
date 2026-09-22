@@ -1,0 +1,180 @@
+{
+  "built": "2026-09-22T01:41:48.956Z",
+  "wsUrl": "wss://127.0.0.1:53278/ws",
+  "steps": [
+    "mod_loaded",
+    "joined",
+    "session_start"
+  ],
+  "roomCode": "YBYC",
+  "wallTrophy": {
+    "index": 20,
+    "via": "cliMode",
+    "modeId": "bridge"
+  },
+  "modeId": "bridge",
+  "modeCheck": {
+    "effective": "bridge",
+    "registry": "bridge",
+    "CurrentModeNum": 20
+  },
+  "pre": {
+    "modeKey": "bridge",
+    "fruit": 1,
+    "players": 2,
+    "aaReady": true,
+    "settings": {
+      "ob": 20,
+      "ub": 20,
+      "Sa": 1,
+      "Aa": 1,
+      "Qa": false
+    },
+    "coopPlay": {
+      "_nativeGraphicsCount": 4,
+      "_rowLengths": {
+        "apple": 52,
+        "color": 49,
+        "count": 17,
+        "graphics": 7,
+        "size": 12,
+        "speed": 17,
+        "theme": 19,
+        "trophy": 32
+      },
+      "apple": 0,
+      "count": 0,
+      "size": 1,
+      "speed": 1,
+      "trophy": 20
+    },
+    "alterSizePatched": true,
+    "forceSa": true,
+    "CurrentModeNum": 20,
+    "maSnippet": "Ma(){try{window.__mpPlayController=this;}catch(_mpCap){}if(this.menu.isVisible()||this.wb.nj||(window.__mpCoopPlaySettings||window.__mpMatchPlaySettings)){(()=>{try{window.__mpForceSaBeforeAa=1;var _mps=window.__mpCoopPlaySettings||window.__mpMatchPlaySettings;if(_mps&&this.settings){if(_mps.size!=null){this.settings.Sa=Number(_mps.size)|0;this.settings.Aa=this.settings.Sa;}if(_mps.trophy!=null){t"
+  },
+  "unlocked": null,
+  "baseline": {
+    "fruitLen": 1,
+    "bodyLen": 4,
+    "head": {
+      "x": 3,
+      "y": 4
+    },
+    "apple": {
+      "x": 7,
+      "y": 4
+    },
+    "wallCount": 0,
+    "wallCoords": [],
+    "nj": false,
+    "Sh": 0,
+    "keyCount": 0,
+    "boxCount": 0,
+    "aaSize": 0
+  },
+  "seated": {
+    "hx": 6,
+    "hy": 4,
+    "ax": 7,
+    "ay": 4
+  },
+  "hunt": [
+    {
+      "fruitLen": 1,
+      "bodyLen": 3,
+      "head": {
+        "x": 5,
+        "y": 3
+      },
+      "apple": {
+        "x": 7,
+        "y": 4
+      },
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": false,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 1,
+      "bodyLen": 4,
+      "head": {
+        "x": 8,
+        "y": 4
+      },
+      "apple": {
+        "x": 0,
+        "y": 2
+      },
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 1,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 1,
+      "bodyLen": 4,
+      "head": {
+        "x": 1,
+        "y": 2
+      },
+      "apple": {
+        "x": 0,
+        "y": 2
+      },
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": false,
+      "Sh": 1,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    }
+  ],
+  "eatBreak": {
+    "fruitLen": 1,
+    "bodyLen": 4,
+    "head": {
+      "x": 1,
+      "y": 2
+    },
+    "apple": {
+      "x": 0,
+      "y": 2
+    },
+    "wallCount": 0,
+    "wallCoords": [],
+    "nj": false,
+    "Sh": 1,
+    "keyCount": 0,
+    "boxCount": 0,
+    "aaSize": 0
+  },
+  "ateProof": true,
+  "afterA": {
+    "modeKey": "bridge",
+    "wallCount": 0,
+    "walls": [],
+    "fruitLen": 0,
+    "bodyLen": 4,
+    "nj": true,
+    "aaHasAdd": true,
+    "aaSize": 0,
+    "wallCoords": [],
+    "Sh": 0
+  },
+  "afterB": {
+    "wallCount": 0,
+    "walls": [],
+    "nj": true
+  },
+  "errsA": [],
+  "errsB": []
+}

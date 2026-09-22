@@ -1,0 +1,1594 @@
+{
+  "built": "2026-09-22T01:41:48.956Z",
+  "wsUrl": "wss://127.0.0.1:62609/ws",
+  "steps": [
+    "mod_loaded",
+    "joined",
+    "session_start"
+  ],
+  "roomCode": "XAPB",
+  "wallTrophy": {
+    "index": 17,
+    "via": "cliMode",
+    "modeId": "hotdog"
+  },
+  "modeId": "hotdog",
+  "modeCheck": {
+    "effective": "hotdog",
+    "registry": "hotdog",
+    "CurrentModeNum": 17
+  },
+  "pre": {
+    "modeKey": "hotdog",
+    "fruit": 1,
+    "players": 2,
+    "aaReady": true,
+    "settings": {
+      "ob": 17,
+      "ub": 17,
+      "Sa": 1,
+      "Aa": 1,
+      "Qa": false
+    },
+    "coopPlay": {
+      "_nativeGraphicsCount": 4,
+      "_rowLengths": {
+        "apple": 52,
+        "color": 49,
+        "count": 17,
+        "graphics": 7,
+        "size": 12,
+        "speed": 17,
+        "theme": 19,
+        "trophy": 32
+      },
+      "apple": 0,
+      "count": 0,
+      "size": 1,
+      "speed": 1,
+      "trophy": 17
+    },
+    "alterSizePatched": true,
+    "forceSa": true,
+    "CurrentModeNum": 17,
+    "maSnippet": "Ma(){try{window.__mpPlayController=this;}catch(_mpCap){}if(this.menu.isVisible()||this.wb.nj||(window.__mpCoopPlaySettings||window.__mpMatchPlaySettings)){(()=>{try{window.__mpForceSaBeforeAa=1;var _mps=window.__mpCoopPlaySettings||window.__mpMatchPlaySettings;if(_mps&&this.settings){if(_mps.size!=null){this.settings.Sa=Number(_mps.size)|0;this.settings.Aa=this.settings.Sa;}if(_mps.trophy!=null){t"
+  },
+  "unlocked": null,
+  "baseline": {
+    "fruitLen": 1,
+    "bodyLen": 4,
+    "head": {
+      "x": 3,
+      "y": 4
+    },
+    "apple": {
+      "x": 7,
+      "y": 4
+    },
+    "wallCount": 0,
+    "wallCoords": [],
+    "nj": false,
+    "Sh": 0,
+    "keyCount": 0,
+    "boxCount": 0,
+    "aaSize": 4
+  },
+  "seated": {
+    "hx": 6,
+    "hy": 4,
+    "ax": 7,
+    "ay": 4
+  },
+  "hunt": [
+    {
+      "fruitLen": 1,
+      "bodyLen": 4,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": {
+        "x": 7,
+        "y": 4
+      },
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": false,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 4
+    },
+    {
+      "fruitLen": 1,
+      "bodyLen": 3,
+      "head": {
+        "x": 5,
+        "y": 3
+      },
+      "apple": {
+        "x": 7,
+        "y": 4
+      },
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": false,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 4
+    },
+    {
+      "fruitLen": 1,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": {
+        "x": 7,
+        "y": 4
+      },
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": false,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 4
+    },
+    {
+      "fruitLen": 1,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": {
+        "x": 7,
+        "y": 4
+      },
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": false,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 4
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    }
+  ],
+  "eatAssist": [
+    {
+      "ok": true,
+      "Sh": 1,
+      "wallPlanted": true,
+      "method": "force_eat_wall"
+    }
+  ],
+  "wallPlanted": true,
+  "eatBreak": {
+    "fruitLen": 0,
+    "bodyLen": 4,
+    "head": {
+      "x": 6,
+      "y": 4
+    },
+    "apple": null,
+    "wallCount": 0,
+    "wallCoords": [
+      {
+        "x": 6,
+        "y": 4
+      }
+    ],
+    "nj": false,
+    "Sh": 1,
+    "keyCount": 0,
+    "boxCount": 0,
+    "aaSize": 1
+  },
+  "ateProof": true,
+  "eatMethod": "force_eat_wall",
+  "afterA": {
+    "modeKey": "hotdog",
+    "wallCount": 0,
+    "walls": [],
+    "fruitLen": 0,
+    "bodyLen": 4,
+    "nj": false,
+    "aaHasAdd": true,
+    "aaSize": 1,
+    "wallCoords": [
+      {
+        "x": 6,
+        "y": 4
+      }
+    ],
+    "Sh": 1
+  },
+  "afterB": {
+    "wallCount": 0,
+    "walls": [],
+    "nj": true
+  },
+  "errsA": [
+    "Cannot create property 'rR' on boolean 'true'"
+  ],
+  "errsB": []
+}

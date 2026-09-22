@@ -1,10 +1,10 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-21T22:27:29.511Z */
+/* Built: 2026-09-22T02:00:08.735Z */
 
 window.__MP_MOD_VERSION="13";
 
-window.__MP_MOD_BUILT="2026-09-21T22:27:29.511Z";
+window.__MP_MOD_BUILT="2026-09-22T02:00:08.735Z";
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -37908,6 +37908,11 @@ window.RemixMod.runCodeAfter = function () {
     // Server-auth: death is STATE-only — never native die / nj stars
     if (root.__mpCoopServerAuth) return false;
     if (root.__mpCoopSpectator || root.__mpCoopLocalDead) return false;
+    // Start grace: seat paint / peer seeds must not friendly-hit before input
+    try {
+      const until = root.__mpCoopIgnoreStartUntil;
+      if (until != null && Number(until) > Date.now()) return false;
+    } catch (eGrace) { /* ignore */ }
     if (game.nj || game.dead || game.isDead) return false;
     const snake = game.oa;
     const head = snake && snake.ka && snake.ka[0];
@@ -41043,10 +41048,10 @@ window.RemixMod.runCodeAfter = function () {
 
   /**
    * Wrap game freePos helpers so fruit never lands on co-op snakes / walls,
-   * and Wall-mode picks (arg === 5) obey shared-board wall spawn rules.
+   * and Wall-mode picks via Rb/Tb/Sb (arg === 5) obey shared-board rules.
    * Fruit pick path (Rb/Tb/Sb → board.Ga): pool + single roll.
-   * Occupancy path (Vb → board.Ca): native Set + peer body serials for P3E
-   * shield placement — must NOT return a fruit pool point.
+   * Occupancy path (Vb → board.Ca): ALWAYS a Set — p6E wall grow does
+   * `p6E(Ca, Vb(null,5))` and needs `.add`/`.has`. Never treat Vb as a point.
    * Also rebinds board.Ga / board.Ca — native constructs them as Rb/Vb.bind at
    * board create time, so fear_spawn_pick would otherwise bypass our wrap.
    */
@@ -41249,19 +41254,16 @@ window.RemixMod.runCodeAfter = function () {
         game[name] = wrapped;
       });
 
-      // Vb → board.Ca: occupancy Set (P3E shields) or wallPick (arg===5)
+      // Vb → board.Ca: ALWAYS returns an occupancy Set (never a point).
+      // Wall grow calls p6E(Ca, Vb(null,5)) and does set.add/has — treating
+      // arg===5 as a position pick made p6E crash / skip wall placement.
       if (typeof game.Vb === "function" && !game.Vb.__mpCoopFreePos) {
         const origVb = game.Vb;
         const wrappedVb = function () {
           repairHosts(this);
-          const wallPick = arguments.length >= 2 && Number(arguments[1]) === 5;
           const g = game || this;
 
-          if (wallPick) {
-            return runWallPick(origVb, this, arguments, g);
-          }
-
-          // Occupancy builder (P3E / shield): native Set + peer body serials
+          // Occupancy builder (P3E / shield / p6E wall grow)
           let result;
           try {
             result = origVb.apply(this, arguments);
@@ -41285,7 +41287,8 @@ window.RemixMod.runCodeAfter = function () {
           ) {
             return augmentOccupancySet(g, result);
           }
-          // Defensive: some paths may return a point
+          // Defensive: some forks may return a point — only sanitize, never
+          // invent a Set from a point (would break p6E.add).
           if (result && result.x != null && result.y != null) {
             return sanitizePos(g, result);
           }
@@ -44077,21 +44080,22 @@ window.RemixMod.runCodeAfter = function () {
         if (needClick) {
           if (!keepSettingsOpen) closeSettingsPanel();
           clearDeathOverlayOverrides();
-          // Re-stamp Sa/Aa (etc.) immediately before Play — Ma() copies Sa→Aa
+          // Re-stamp menu + Sa/Aa/ob immediately before Play — Ma() copies
+          // Sa→Aa and ob→ub; a half-applied trophy left co-op Wall as Classic.
           try {
             const forceSettings =
               root.__mpCoopPlaySettings || root.__mpMatchPlaySettings;
-            if (
-              forceSettings &&
-              typeof forceEngineMatchFieldsForPlay === "function"
-            ) {
-              forceEngineMatchFieldsForPlay(forceSettings);
-            } else if (
-              forceSettings &&
-              forceSettings.size != null &&
-              typeof forceEngineSizeForPlay === "function"
-            ) {
-              forceEngineSizeForPlay(forceSettings.size);
+            if (forceSettings) {
+              if (typeof forceMatchSettingsForPlay === "function") {
+                forceMatchSettingsForPlay(forceSettings);
+              } else if (typeof forceEngineMatchFieldsForPlay === "function") {
+                forceEngineMatchFieldsForPlay(forceSettings);
+              } else if (
+                forceSettings.size != null &&
+                typeof forceEngineSizeForPlay === "function"
+              ) {
+                forceEngineSizeForPlay(forceSettings.size);
+              }
             }
           } catch (eSz) { /* ignore */ }
           if (triggerPlay()) playClicks++;
@@ -45014,14 +45018,22 @@ window.RemixMod.runCodeAfter = function () {
       try {
         const aa = wallHost.Aa;
         if (aa && typeof aa.forEach === "function") {
-          aa.forEach(function (w) {
-            if (!w) return;
-            const pos = w.pos || w;
-            if (pos.x == null || pos.y == null) return;
+          aa.forEach(function (w, key) {
+            let pos = null;
+            if (w) pos = w.pos || w;
+            // Native Map is serial→wallObj; recover x/y from the key if needed
+            if (
+              (!pos || pos.x == null || pos.y == null) &&
+              typeof key === "number" &&
+              Number.isFinite(key)
+            ) {
+              pos = { x: key >> 16, y: key & 65535 };
+            }
+            if (!pos || pos.x == null || pos.y == null) return;
             const lockType =
-              w.yNa != null && Number(w.yNa) >= 0
+              w && w.yNa != null && Number(w.yNa) >= 0
                 ? Math.max(0, Math.min(23, Number(w.yNa) | 0))
-                : w.XNa != null && Number(w.XNa) >= 0
+                : w && w.XNa != null && Number(w.XNa) >= 0
                   ? Math.max(0, Math.min(23, Number(w.XNa) | 0))
                   : null;
             addWall({
@@ -45029,8 +45041,8 @@ window.RemixMod.runCodeAfter = function () {
               y: Number(pos.y),
               lock: lockType != null ? true : undefined,
               lockType: lockType,
-              hotdog: !!(w.ty || w.ez) || undefined,
-              temp: !!(w.__tempWall || w.temp) || undefined,
+              hotdog: !!(w && (w.ty || w.ez)) || undefined,
+              temp: !!(w && (w.__tempWall || w.temp)) || undefined,
             });
           });
         }
@@ -46246,6 +46258,20 @@ window.RemixMod.runCodeAfter = function () {
    */
   function effectiveModeKey() {
     let key = "";
+    // Co-op Play can leave CurrentModeNum at Classic while settings.ub is Wall —
+    // re-align so ModeRegistry matches what e7(settings, n) sees.
+    try {
+      const g = gameInstance();
+      const ub = g && g.settings && g.settings.ub;
+      if (
+        ub != null &&
+        Number.isFinite(Number(ub)) &&
+        typeof root.CurrentModeNum === "number"
+      ) {
+        const n = Number(ub) | 0;
+        if (root.CurrentModeNum !== n) root.CurrentModeNum = n;
+      }
+    } catch (eUb) { /* ignore */ }
     try {
       if (root.ModeRegistry && typeof root.ModeRegistry.getCurrentModeKey === "function") {
         key = String(root.ModeRegistry.getCurrentModeKey() || "");
@@ -49156,17 +49182,29 @@ window.RemixMod.runCodeAfter = function () {
     if (out.indexOf("__mpCoopFreePos") === -1) {
       out += "\n;window.__mpCoopFreePos=1;\n";
     }
-    // Play's Ma() does Aa=Sa then Sna() bakes dims. Force size before bake.
+    // Play's Ma() copies menu→bake: Sa→Aa, Ca→ka, Oa→yb, ob→ub.
+    // Force match settings into this.settings immediately before those copies
+    // so co-op Wall (trophy) cannot bake as Classic.
     // Never inject before a labeled `a:switch` (steals label) or before `case`
     // inside a switch (SyntaxError).
     if (out.indexOf("__mpForceSaBeforeAa") === -1) {
       let patched = false;
+      const forceMpsIntoSettings =
+        "var _mps=window.__mpCoopPlaySettings||window.__mpMatchPlaySettings;if(_mps&&this.settings){if(_mps.size!=null){this.settings.Sa=Number(_mps.size)|0;this.settings.Aa=this.settings.Sa;}if(_mps.trophy!=null){this.settings.ob=Number(_mps.trophy)|0;this.settings.ub=this.settings.ob;try{window.CurrentModeNum=this.settings.ob;}catch(_mpCm){}}if(_mps.count!=null){this.settings.Ca=Number(_mps.count)|0;this.settings.ka=this.settings.Ca;}if(_mps.speed!=null){this.settings.Oa=Number(_mps.speed)|0;this.settings.yb=this.settings.Oa;}}";
+      const forceMpsIntoA =
+        "var _mps=window.__mpCoopPlaySettings||window.__mpMatchPlaySettings;if(_mps){if(_mps.size!=null){a.Sa=Number(_mps.size)|0;}if(_mps.trophy!=null){a.ob=Number(_mps.trophy)|0;try{window.CurrentModeNum=a.ob;}catch(_mpCm){}}if(_mps.count!=null){a.Ca=Number(_mps.count)|0;}if(_mps.speed!=null){a.Oa=Number(_mps.speed)|0;}}";
+      const hasMatchSettings =
+        "(window.__mpCoopPlaySettings||window.__mpMatchPlaySettings)";
       if (/Ma\(\)\{if\(this\.menu\.isVisible\(\)\|\|this\.wb\.nj\)\{/.test(out)) {
         // Ma only bakes when the settings menu is visible — Start Co-op closes
         // the panel first, so force the gate open when match settings are set.
         out = out.replace(
           /Ma\(\)\{if\(this\.menu\.isVisible\(\)\|\|this\.wb\.nj\)\{/,
-          "Ma(){try{window.__mpPlayController=this;}catch(_mpCap){}if(this.menu.isVisible()||this.wb.nj||(window.__mpCoopPlaySettings&&window.__mpCoopPlaySettings.size!=null)||(window.__mpMatchPlaySettings&&window.__mpMatchPlaySettings.size!=null)){(()=>{try{window.__mpForceSaBeforeAa=1;var _mps=window.__mpCoopPlaySettings||window.__mpMatchPlaySettings;if(_mps&&_mps.size!=null&&this.settings){this.settings.Sa=Number(_mps.size)|0;this.settings.Aa=this.settings.Sa;}}catch(_mpMa){}})();"
+          "Ma(){try{window.__mpPlayController=this;}catch(_mpCap){}if(this.menu.isVisible()||this.wb.nj||" +
+            hasMatchSettings +
+            "){(()=>{try{window.__mpForceSaBeforeAa=1;" +
+            forceMpsIntoSettings +
+            "}catch(_mpMa){}})();"
         );
         patched = true;
       }
@@ -49177,10 +49215,21 @@ window.RemixMod.runCodeAfter = function () {
         );
         patched = true;
       }
+      if (/a\.ub=a\.ob/.test(out)) {
+        out = out.replace(
+          /a\.ub=a\.ob/g,
+          "(()=>{try{" +
+            forceMpsIntoA +
+            "window.__mpForceSaBeforeAa=1;}catch(_mpMa){}})(),a.ub=a.ob"
+        );
+        patched = true;
+      }
       if (/a\.Aa=a\.Sa/.test(out)) {
         out = out.replace(
           /a\.Aa=a\.Sa/g,
-          "(()=>{try{var _mps=window.__mpCoopPlaySettings||window.__mpMatchPlaySettings;if(_mps&&_mps.size!=null){a.Sa=Number(_mps.size)|0;}window.__mpForceSaBeforeAa=1;}catch(_mpMa){}})(),a.Aa=a.Sa"
+          "(()=>{try{" +
+            forceMpsIntoA +
+            "window.__mpForceSaBeforeAa=1;}catch(_mpMa){}})(),a.Aa=a.Sa"
         );
         patched = true;
       }
@@ -49339,9 +49388,17 @@ window.RemixMod.runCodeAfter = function () {
       g.nj = false;
       if (g.dead != null) g.dead = false;
       if (g.isDead != null) g.isDead = false;
+      // Drop leftover facing from native Play — idle-until-key until local input
+      // (or local flushCoopRelayQueue). Shared COOP_TIMER_START must not crawl us.
+      try {
+        if ("direction" in g.oa) g.oa.direction = null;
+        if ("dir" in g.oa) g.oa.dir = null;
+      } catch (eDir) { /* ignore */ }
       if (root.timeKeeper) {
         root.timeKeeper._dead = false;
-        root.timeKeeper.playing = true;
+        // Keep clock stopped until local first move / armCoopRunTimer — seating
+        // used to set playing=true which let lag catch-up ticks kill idle snakes.
+        root.timeKeeper.playing = false;
       }
       if (typeof window !== "undefined") {
         window.__mpCoopLocalDead = false;
@@ -49455,7 +49512,7 @@ window.RemixMod.runCodeAfter = function () {
     }
   }
 
-  /** First co-op player moved: give this idle snake its spawn facing so it crawls. */
+  /** First local co-op key: give this idle snake its spawn facing so it crawls. */
   function applyCoopStartMoving(dir) {
     const g = gameInstance();
     if (!g || !g.oa) return false;
@@ -49467,6 +49524,14 @@ window.RemixMod.runCodeAfter = function () {
       if ("dir" in g.oa) g.oa.dir = d;
       root.pauseGame = 0;
       if (g.nj) g.nj = false;
+      // Local engagement ends start grace for friendly-hit checks
+      if (typeof root.__mpCoopIgnoreStartUntil !== "undefined") {
+        root.__mpCoopIgnoreStartUntil = 0;
+      }
+      if (root.timeKeeper) {
+        root.timeKeeper._dead = false;
+        root.timeKeeper.playing = true;
+      }
       return true;
     } catch (e) {
       console.warn("applyCoopStartMoving", e);
@@ -57035,6 +57100,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     this._coopDeadSent = false;
     this._coopIgnoreStartUntil = Date.now() + 2000;
     if (typeof window !== "undefined") {
+      window.__mpCoopIgnoreStartUntil = this._coopIgnoreStartUntil;
       window.__mpCoopSpectator = !!opts.spectator;
       if (opts.spectator) {
         window.__mpCoopLocalDead = true;
@@ -58593,6 +58659,11 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
           Gsm.applyCoopStartMoving(queued.input);
         } catch (eMove) { /* ignore */ }
       }
+      this._coopPlayerMoved = true;
+      this._coopIgnoreStartUntil = 0;
+      if (typeof window !== "undefined") {
+        window.__mpCoopIgnoreStartUntil = 0;
+      }
       if (
         typeof window !== "undefined" &&
         typeof window.KeyboardEvent === "function"
@@ -58780,7 +58851,8 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         : Date.now();
     this._coopTimerArmed = true;
     this._coopTimerStartedAtMs = t;
-    this._coopPlayerMoved = true;
+    // Do NOT set _coopPlayerMoved here — that conflates "shared clock armed"
+    // with "this client already moved" and used to force idle peers to crawl.
     // Unpause so native TimeKeeper can advance (physics still server-owned)
     try {
       if (Gsm.setLocalPaused) Gsm.setLocalPaused(false);

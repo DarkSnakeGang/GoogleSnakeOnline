@@ -2590,6 +2590,7 @@
     this._coopDeadSent = false;
     this._coopIgnoreStartUntil = Date.now() + 2000;
     if (typeof window !== "undefined") {
+      window.__mpCoopIgnoreStartUntil = this._coopIgnoreStartUntil;
       window.__mpCoopSpectator = !!opts.spectator;
       if (opts.spectator) {
         window.__mpCoopLocalDead = true;
@@ -4148,6 +4149,11 @@
           Gsm.applyCoopStartMoving(queued.input);
         } catch (eMove) { /* ignore */ }
       }
+      this._coopPlayerMoved = true;
+      this._coopIgnoreStartUntil = 0;
+      if (typeof window !== "undefined") {
+        window.__mpCoopIgnoreStartUntil = 0;
+      }
       if (
         typeof window !== "undefined" &&
         typeof window.KeyboardEvent === "function"
@@ -4335,7 +4341,8 @@
         : Date.now();
     this._coopTimerArmed = true;
     this._coopTimerStartedAtMs = t;
-    this._coopPlayerMoved = true;
+    // Do NOT set _coopPlayerMoved here — that conflates "shared clock armed"
+    // with "this client already moved" and used to force idle peers to crawl.
     // Unpause so native TimeKeeper can advance (physics still server-owned)
     try {
       if (Gsm.setLocalPaused) Gsm.setLocalPaused(false);

@@ -4003,7 +4003,7 @@ async function connectPage(page, wsUrl, displayName, roomCode) {
       const baseArgs = [
         "--ignore-certificate-errors",
         "--mute-audio",
-        "--disable-features=LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights",
+        "--disable-features=LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessPermissionPrompt",
         "--window-size=" + halfW + "," + fullH,
       ];
       browserA = await chromium.launch({
@@ -4020,11 +4020,20 @@ async function connectPage(page, wsUrl, displayName, roomCode) {
 
     async function openDualPages() {
       const screen = global.__mpE2EScreen || getScreenSize();
-      const ctxOpts = { ignoreHTTPSErrors: true, viewport: null };
+      const gsmOrigin = new URL(GSM_URL).origin;
+      const ctxOpts = {
+        ignoreHTTPSErrors: true,
+        viewport: null,
+        permissions: ["local-network-access"],
+      };
       const [ctxA, ctxB] = await Promise.all([
         browserA.newContext(ctxOpts),
         browserB.newContext(ctxOpts),
       ]);
+      await Promise.all([
+        ctxA.grantPermissions(["local-network-access"], { origin: gsmOrigin }),
+        ctxB.grantPermissions(["local-network-access"], { origin: gsmOrigin }),
+      ]).catch(function () {});
       const [pageA, pageB] = await Promise.all([
         ctxA.newPage(),
         ctxB.newPage(),

@@ -50,7 +50,8 @@ function makeGame(W, H) {
       return { x: 0, y: 0, clone: function () { return { x: this.x, y: this.y }; } };
     },
     Vb: function (extra, mode) {
-      // Native occupancy builder: Set of serials (local body)
+      // Native occupancy builder: ALWAYS a Set of serials (local body + extras).
+      // p6E wall grow calls Vb(null,5) and needs .add/.has — never a point.
       const set = new Set();
       const body = this.oa && this.oa.ka;
       for (let i = 0; body && i < body.length; i++) {
@@ -58,9 +59,12 @@ function makeGame(W, H) {
         if (p && p.x != null) set.add((p.x << 16) | p.y);
       }
       if (extra && extra.x != null) set.add((extra.x << 16) | extra.y);
-      if (Number(mode) === 5) {
-        return { x: 2, y: 2, clone: function () { return { x: 2, y: 2 }; } };
+      else if (extra && typeof extra[Symbol.iterator] === "function") {
+        for (const p of extra) {
+          if (p && p.x != null) set.add((p.x << 16) | p.y);
+        }
       }
+      void mode;
       return set;
     },
   };
@@ -146,7 +150,7 @@ describe("coop shield Vb occupancy + head radius", () => {
     assert.ok(viaCa && viaCa.has((6 << 16) | 4));
   });
 
-  it("Vb wallPick (null,5) still returns a point not a Set", () => {
+  it("Vb(null,5) returns occupancy Set for p6E wall grow", () => {
     const g = makeGame(10, 9);
     win.__mpGame = g;
     win.__remixGame = g;
@@ -154,10 +158,14 @@ describe("coop shield Vb occupancy + head radius", () => {
     delete require.cache[require.resolve(path.join(ROOT, "src/coop/native.js"))];
     require(path.join(ROOT, "src/coop/native.js"));
     win.__mpCoopOnTick(g);
-    const p = g.Vb(null, 5);
-    assert.ok(p);
-    assert.ok(p.x != null && p.y != null);
-    assert.equal(typeof p.has, "undefined");
+    const set = g.Vb(null, 5);
+    assert.ok(set && typeof set.has === "function", "must be a Set");
+    assert.equal(typeof set.add, "function");
+    // Local head serial present
+    assert.equal(set.has((5 << 16) | 4), true);
+    // p6E must be able to add wall cells
+    set.add((3 << 16) | 3);
+    assert.equal(set.has((3 << 16) | 3), true);
   });
 });
 

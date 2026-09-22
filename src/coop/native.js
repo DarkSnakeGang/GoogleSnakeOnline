@@ -540,6 +540,11 @@
     // Server-auth: death is STATE-only — never native die / nj stars
     if (root.__mpCoopServerAuth) return false;
     if (root.__mpCoopSpectator || root.__mpCoopLocalDead) return false;
+    // Start grace: seat paint / peer seeds must not friendly-hit before input
+    try {
+      const until = root.__mpCoopIgnoreStartUntil;
+      if (until != null && Number(until) > Date.now()) return false;
+    } catch (eGrace) { /* ignore */ }
     if (game.nj || game.dead || game.isDead) return false;
     const snake = game.oa;
     const head = snake && snake.ka && snake.ka[0];
@@ -3675,10 +3680,10 @@
 
   /**
    * Wrap game freePos helpers so fruit never lands on co-op snakes / walls,
-   * and Wall-mode picks (arg === 5) obey shared-board wall spawn rules.
+   * and Wall-mode picks via Rb/Tb/Sb (arg === 5) obey shared-board rules.
    * Fruit pick path (Rb/Tb/Sb → board.Ga): pool + single roll.
-   * Occupancy path (Vb → board.Ca): native Set + peer body serials for P3E
-   * shield placement — must NOT return a fruit pool point.
+   * Occupancy path (Vb → board.Ca): ALWAYS a Set — p6E wall grow does
+   * `p6E(Ca, Vb(null,5))` and needs `.add`/`.has`. Never treat Vb as a point.
    * Also rebinds board.Ga / board.Ca — native constructs them as Rb/Vb.bind at
    * board create time, so fear_spawn_pick would otherwise bypass our wrap.
    */
@@ -3881,19 +3886,16 @@
         game[name] = wrapped;
       });
 
-      // Vb → board.Ca: occupancy Set (P3E shields) or wallPick (arg===5)
+      // Vb → board.Ca: ALWAYS returns an occupancy Set (never a point).
+      // Wall grow calls p6E(Ca, Vb(null,5)) and does set.add/has — treating
+      // arg===5 as a position pick made p6E crash / skip wall placement.
       if (typeof game.Vb === "function" && !game.Vb.__mpCoopFreePos) {
         const origVb = game.Vb;
         const wrappedVb = function () {
           repairHosts(this);
-          const wallPick = arguments.length >= 2 && Number(arguments[1]) === 5;
           const g = game || this;
 
-          if (wallPick) {
-            return runWallPick(origVb, this, arguments, g);
-          }
-
-          // Occupancy builder (P3E / shield): native Set + peer body serials
+          // Occupancy builder (P3E / shield / p6E wall grow)
           let result;
           try {
             result = origVb.apply(this, arguments);
@@ -3917,7 +3919,8 @@
           ) {
             return augmentOccupancySet(g, result);
           }
-          // Defensive: some paths may return a point
+          // Defensive: some forks may return a point — only sanitize, never
+          // invent a Set from a point (would break p6E.add).
           if (result && result.x != null && result.y != null) {
             return sanitizePos(g, result);
           }

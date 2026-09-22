@@ -115,6 +115,8 @@ struct Shared {
     site_public_url: Mutex<Option<String>>,
     site_busy: AtomicBool,
     site_shutdown: Mutex<Option<oneshot::Sender<()>>>,
+    /// Signal to quit the console GUI process itself (ends start-server.bat / cargo).
+    console_shutdown: Mutex<Option<oneshot::Sender<()>>>,
     http_client: reqwest::Client,
     manifest: PathBuf,
     repo_root: PathBuf,
@@ -257,6 +259,7 @@ async fn main() {
         .user_agent("GoogleSnakeLAN-console-site/1.0")
         .build()
         .expect("reqwest Client");
+    let (console_shutdown_tx, console_shutdown_rx) = oneshot::channel::<()>();
     let shared = Arc::new(Shared {
         phase: Mutex::new(Phase::Idle),
         message: Mutex::new("Ready".into()),
@@ -272,6 +275,7 @@ async fn main() {
         site_public_url: Mutex::new(None),
         site_busy: AtomicBool::new(false),
         site_shutdown: Mutex::new(None),
+        console_shutdown: Mutex::new(Some(console_shutdown_tx)),
         http_client,
         manifest,
         repo_root,
@@ -309,6 +313,7 @@ async fn main() {
         .route("/api/start", post(api_start))
         .route("/api/stop", post(api_stop))
         .route("/api/restart", post(api_restart))
+        .route("/api/shutdown", post(api_shutdown))
         .route("/api/site/start", post(api_site_start))
         .route("/api/site/stop", post(api_site_stop))
         .route("/api/logs", get(api_logs))
@@ -330,12 +335,16 @@ async fn main() {
         args.server_bind, args.site_bind
     );
     let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
-        let _ = tokio::signal::ctrl_c().await;
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = console_shutdown_rx => {}
+        }
     });
     if let Err(e) = serve.await {
         eprintln!("console serve error: {e}");
     }
-    // Best-effort: tear down site host + UPnP on console exit.
+    // Best-effort: tear down game server + site host + UPnP on console exit.
+    let _ = stop_server_inner(shared.clone()).await;
     let _ = stop_site_inner(shared).await;
 }
 
@@ -386,6 +395,28 @@ async fn api_restart(State(s): State<Arc<Shared>>) -> (axum::http::StatusCode, J
         Ok(st) => (axum::http::StatusCode::OK, Json(st)),
         Err((code, st)) => (code, Json(st)),
     }
+}
+
+/// Stop game server + site host, then quit the console process (ends cargo / .bat).
+async fn api_shutdown(State(s): State<Arc<Shared>>) -> (axum::http::StatusCode, Json<Status>) {
+    s.push_log("[console] Shutdown requested — stopping hosts, then quitting…".into());
+    s.set_phase(Phase::Stopping, "Shutting down console…".into());
+    let _ = stop_server_inner(s.clone()).await;
+    let _ = stop_site_inner(s.clone()).await;
+    s.set_phase(Phase::Idle, "Console exiting…".into());
+    let st = s.status();
+    // Defer the quit signal so this HTTP response can flush first.
+    let tx = s.console_shutdown.lock().take();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        if let Some(tx) = tx {
+            let _ = tx.send(());
+        }
+        // Hard exit so cargo run / start-server.bat do not hang on stray tasks.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        std::process::exit(0);
+    });
+    (axum::http::StatusCode::OK, Json(st))
 }
 
 async fn api_site_start(State(s): State<Arc<Shared>>) -> (axum::http::StatusCode, Json<Status>) {
@@ -1204,6 +1235,14 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   button.restart:hover:not(:disabled) {
     background: #152218; border-color: var(--td-ok);
   }
+  button.shutdown {
+    border-color: #6a2a2a;
+    color: #ffb0b0;
+    margin-left: auto;
+  }
+  button.shutdown:hover:not(:disabled) {
+    background: #3a1212; border-color: #c04040;
+  }
   .meta {
     margin-top: 14px;
     display: grid;
@@ -1359,7 +1398,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     <header class="top">
       <div class="brand">
         <h1>Multiplayer Server</h1>
-        <div class="sub">True Dark console · stop / rebuild / spectate</div>
+        <div class="sub">True Dark console · stop / rebuild / shut down</div>
       </div>
       <div class="status-pill" id="pill">
         <span class="dot" id="dot"></span>
@@ -1373,6 +1412,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
         <button class="primary" id="btnPower" type="button">Start</button>
         <button class="primary" id="btnSite" type="button">Start site</button>
         <button class="restart" id="btnRestart" type="button">Restart</button>
+        <button class="shutdown" id="btnShutdown" type="button" title="Stop everything and exit the console (ends start-server.bat)">Shutdown</button>
       </div>
       <div class="meta">
         <div class="cell"><div class="label">Message</div><div class="value" id="msg">—</div></div>
@@ -1438,6 +1478,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   const btnPower = document.getElementById("btnPower");
   const btnSite = document.getElementById("btnSite");
   const btnRestart = document.getElementById("btnRestart");
+  const btnShutdown = document.getElementById("btnShutdown");
   const roomPick = document.getElementById("roomPick");
   const viewSeg = document.getElementById("viewSeg");
   const btnBackMosaic = document.getElementById("btnBackMosaic");
@@ -1454,6 +1495,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   let raceView = "mosaic";
   let focusId = null;
   let lastSnap = null;
+  let shuttingDown = false;
 
   const COLORS = {
     0:["#4E7CF6","#17439F"],1:["#19D8E6","#15B5C1"],2:["#B648F2","#910FD7"],
@@ -1494,12 +1536,13 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     const gameOn = !!st.running;
     btnPower.textContent = gameOn ? "Stop" : "Start";
     btnPower.className = gameOn ? "danger" : "primary";
-    btnPower.disabled = busy;
+    btnPower.disabled = busy || shuttingDown;
     const siteOn = !!st.site_running;
     btnSite.textContent = siteOn ? "Stop site" : "Start site";
     btnSite.className = siteOn ? "danger" : "primary";
-    btnSite.disabled = siteBusy;
-    btnRestart.disabled = busy;
+    btnSite.disabled = siteBusy || shuttingDown;
+    btnRestart.disabled = busy || shuttingDown;
+    btnShutdown.disabled = shuttingDown;
   }
 
   function appendLog(line) {
@@ -1534,6 +1577,27 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     post(btnSite.textContent === "Stop site" ? "/api/site/stop" : "/api/site/start");
   });
   btnRestart.addEventListener("click", function () { post("/api/restart"); });
+  btnShutdown.addEventListener("click", async function () {
+    if (shuttingDown) return;
+    if (!window.confirm("Shut down the console completely?\n\nThis stops the game server, site host, and exits start-server.bat.")) {
+      return;
+    }
+    shuttingDown = true;
+    btnShutdown.disabled = true;
+    btnPower.disabled = true;
+    btnSite.disabled = true;
+    btnRestart.disabled = true;
+    btnShutdown.textContent = "Shutting down…";
+    phaseLabel.textContent = "shutting down";
+    msg.textContent = "Console exiting…";
+    appendLog("[console] Shutdown requested");
+    try {
+      await fetch("/api/shutdown", { method: "POST" });
+    } catch (e) {
+      /* connection drop is expected as the process exits */
+    }
+    appendLog("[console] Console process exiting — bat window should close");
+  });
   document.getElementById("btnClear").addEventListener("click", function () {
     logEl.innerHTML = "";
   });

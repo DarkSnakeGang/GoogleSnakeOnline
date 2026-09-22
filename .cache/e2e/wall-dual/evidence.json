@@ -1,0 +1,195 @@
+{
+  "built": "2026-09-22T01:41:48.956Z",
+  "wsUrl": "wss://127.0.0.1:54904/ws",
+  "steps": [
+    "mod_loaded",
+    "joined",
+    "session_start"
+  ],
+  "roomCode": "N9A8",
+  "wallTrophy": {
+    "index": 1,
+    "via": "cliMode",
+    "modeId": "wall"
+  },
+  "modeId": "wall",
+  "modeCheck": {
+    "effective": "wall",
+    "registry": "wall",
+    "CurrentModeNum": 1
+  },
+  "pre": {
+    "modeKey": "wall",
+    "fruit": 1,
+    "players": 2,
+    "aaReady": true,
+    "settings": {
+      "ob": 1,
+      "ub": 1,
+      "Sa": 1,
+      "Aa": 1,
+      "Qa": false
+    },
+    "coopPlay": {
+      "_nativeGraphicsCount": 4,
+      "_rowLengths": {
+        "apple": 52,
+        "color": 49,
+        "count": 17,
+        "graphics": 7,
+        "size": 12,
+        "speed": 17,
+        "theme": 19,
+        "trophy": 32
+      },
+      "apple": 0,
+      "count": 0,
+      "size": 1,
+      "speed": 1,
+      "trophy": 1
+    },
+    "alterSizePatched": true,
+    "forceSa": true,
+    "CurrentModeNum": 1,
+    "maSnippet": "Ma(){try{window.__mpPlayController=this;}catch(_mpCap){}if(this.menu.isVisible()||this.wb.nj||(window.__mpCoopPlaySettings||window.__mpMatchPlaySettings)){(()=>{try{window.__mpForceSaBeforeAa=1;var _mps=window.__mpCoopPlaySettings||window.__mpMatchPlaySettings;if(_mps&&this.settings){if(_mps.size!=null){this.settings.Sa=Number(_mps.size)|0;this.settings.Aa=this.settings.Sa;}if(_mps.trophy!=null){t"
+  },
+  "unlocked": null,
+  "baseline": {
+    "fruitLen": 1,
+    "bodyLen": 4,
+    "head": {
+      "x": 3,
+      "y": 4
+    },
+    "apple": {
+      "x": 7,
+      "y": 4
+    },
+    "wallCount": 0,
+    "wallCoords": [],
+    "nj": false,
+    "Sh": 0,
+    "keyCount": 0,
+    "boxCount": 0,
+    "aaSize": 0
+  },
+  "seated": {
+    "hx": 6,
+    "hy": 4,
+    "ax": 7,
+    "ay": 4
+  },
+  "hunt": [
+    {
+      "fruitLen": 1,
+      "bodyLen": 4,
+      "head": {
+        "x": 6,
+        "y": 4
+      },
+      "apple": {
+        "x": 7,
+        "y": 4
+      },
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": false,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 1,
+      "bodyLen": 3,
+      "head": {
+        "x": 5,
+        "y": 3
+      },
+      "apple": {
+        "x": 7,
+        "y": 4
+      },
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": false,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 1,
+      "bodyLen": 3,
+      "head": {
+        "x": 7,
+        "y": 4
+      },
+      "apple": {
+        "x": 1,
+        "y": 2
+      },
+      "wallCount": 0,
+      "wallCoords": [
+        [
+          8,
+          8
+        ]
+      ],
+      "nj": false,
+      "Sh": 1,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 1
+    }
+  ],
+  "eatBreak": {
+    "fruitLen": 1,
+    "bodyLen": 3,
+    "head": {
+      "x": 7,
+      "y": 4
+    },
+    "apple": {
+      "x": 1,
+      "y": 2
+    },
+    "wallCount": 0,
+    "wallCoords": [
+      [
+        8,
+        8
+      ]
+    ],
+    "nj": false,
+    "Sh": 1,
+    "keyCount": 0,
+    "boxCount": 0,
+    "aaSize": 1
+  },
+  "ateProof": true,
+  "afterA": {
+    "modeKey": "wall",
+    "wallCount": 0,
+    "walls": [],
+    "fruitLen": 0,
+    "bodyLen": 4,
+    "nj": true,
+    "aaHasAdd": true,
+    "aaSize": 0,
+    "wallCoords": [
+      [
+        8,
+        8
+      ]
+    ],
+    "Sh": 0
+  },
+  "afterB": {
+    "wallCount": 0,
+    "walls": [],
+    "nj": true
+  },
+  "errsA": [],
+  "errsB": []
+}
