@@ -6877,6 +6877,72 @@
     }
   }
 
+  /**
+   * Park local snake idle. Native GSM only skips ticks when
+   * `direction === "NONE"` (and Ga is NONE). Setting direction to null still
+   * ticks because `null !== "NONE"`. Face field `Ca` may stay RIGHT — that is
+   * head sprite angle, not crawl.
+   */
+  function clearCoopIdleFacing(snake) {
+    if (!snake || typeof snake !== "object") return false;
+    let cleared = false;
+    try {
+      if ("direction" in snake && snake.direction !== "NONE") {
+        snake.direction = "NONE";
+        cleared = true;
+      }
+      if ("dir" in snake && snake.dir != null && snake.dir !== "NONE") {
+        snake.dir = "NONE";
+        cleared = true;
+      }
+      // Face angle (Ca) is OK to keep; pending turn (Ga) must be NONE or the
+      // engine treats y5E as moving (`Ga !== "NONE"`).
+      if (typeof snake.Ga === "string" && snake.Ga !== "NONE") {
+        snake.Ga = "NONE";
+        cleared = true;
+      } else if (snake.Ga && typeof snake.Ga === "object") {
+        if ("direction" in snake.Ga && snake.Ga.direction != null &&
+            snake.Ga.direction !== "NONE") {
+          snake.Ga.direction = "NONE";
+          cleared = true;
+        }
+        if ("dir" in snake.Ga && snake.Ga.dir != null && snake.Ga.dir !== "NONE") {
+          snake.Ga.dir = "NONE";
+          cleared = true;
+        }
+      }
+      // Object-shaped Ca hosts: clear nested crawl dirs only.
+      if (snake.Ca && typeof snake.Ca === "object") {
+        if ("direction" in snake.Ca && snake.Ca.direction != null &&
+            snake.Ca.direction !== "NONE") {
+          snake.Ca.direction = "NONE";
+          cleared = true;
+        }
+        if ("dir" in snake.Ca && snake.Ca.dir != null && snake.Ca.dir !== "NONE") {
+          snake.Ca.dir = "NONE";
+          cleared = true;
+        }
+      }
+    } catch (e) { /* ignore */ }
+    return cleared;
+  }
+
+  /**
+   * True when native would tick/crawl this snake. Face-only Ca (RIGHT while
+   * direction is NONE) is idle — do not treat it as engaged.
+   */
+  function coopSnakeHasCrawlFacing(snake) {
+    if (!snake) return false;
+    const move = normalizePoseDirection(snake.direction || snake.dir);
+    if (move) return true;
+    const pending = normalizePoseDirection(
+      typeof snake.Ga === "string"
+        ? snake.Ga
+        : snake.Ga && (snake.Ga.direction || snake.Ga.dir)
+    );
+    return !!pending;
+  }
+
   function applyCoopSpawnOffset(oy, opts) {
     opts = opts || {};
     const g = gameInstance();
@@ -6888,10 +6954,7 @@
       if (g.isDead != null) g.isDead = false;
       // Drop leftover facing from native Play — idle-until-key until local input
       // (or local flushCoopRelayQueue). Shared COOP_TIMER_START must not crawl us.
-      try {
-        if ("direction" in g.oa) g.oa.direction = null;
-        if ("dir" in g.oa) g.oa.dir = null;
-      } catch (eDir) { /* ignore */ }
+      clearCoopIdleFacing(g.oa);
       if (root.timeKeeper) {
         root.timeKeeper._dead = false;
         // Keep clock stopped until local first move / armCoopRunTimer — seating
@@ -7003,23 +7066,34 @@
     const body = coopSpawnBodyFromPose(pose);
     try {
       // Keep native idle-until-key behavior: do not assign direction here.
-      return writeNativeBody(g.oa, body);
+      const ok = writeNativeBody(g.oa, body);
+      // writeNativeBody must not resurrect Play facing — park again after seat.
+      clearCoopIdleFacing(g.oa);
+      return ok;
     } catch (e) {
       console.warn("applyCoopSpawnOffset", e);
       return false;
     }
   }
 
-  /** First local co-op key: give this idle snake its spawn facing so it crawls. */
+  /** First local co-op key: leave NONE idle and crawl in `dir`. */
   function applyCoopStartMoving(dir) {
     const g = gameInstance();
     if (!g || !g.oa) return false;
-    const cur = g.oa.direction || g.oa.dir;
-    if (cur) return true;
+    if (coopSnakeHasCrawlFacing(g.oa)) return true;
     const d = dir === "LEFT" || dir === "UP" || dir === "DOWN" ? dir : "RIGHT";
     try {
+      // Native turn(): direction + Ca face; Ga stays NONE until a buffered turn.
       g.oa.direction = d;
       if ("dir" in g.oa) g.oa.dir = d;
+      if (typeof g.oa.Ca === "string" || g.oa.Ca == null) {
+        g.oa.Ca = d;
+      } else if (g.oa.Ca && typeof g.oa.Ca === "object" && "direction" in g.oa.Ca) {
+        g.oa.Ca.direction = d;
+      }
+      if (typeof g.oa.Ga === "string" || g.oa.Ga == null) {
+        g.oa.Ga = "NONE";
+      }
       root.pauseGame = 0;
       if (g.nj) g.nj = false;
       // Local engagement ends start grace for friendly-hit checks
@@ -8911,6 +8985,8 @@
     scrapeCoopSnakeDelta: scrapeCoopSnakeDelta,
     normalizePoseDirection: normalizePoseDirection,
     readNativeDirection: readNativeDirection,
+    clearCoopIdleFacing: clearCoopIdleFacing,
+    coopSnakeHasCrawlFacing: coopSnakeHasCrawlFacing,
     reflectDirection: reflectDirection,
     snakeDeltaFingerprint: snakeDeltaFingerprint,
     boardDeltaFingerprint: boardDeltaFingerprint,

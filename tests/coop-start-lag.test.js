@@ -84,6 +84,8 @@ describe("coop start lag / idle peer crawl", () => {
         ],
         direction: "RIGHT",
         dir: "RIGHT",
+        Ca: "RIGHT",
+        Ga: "RIGHT",
         oa: { width: 17, height: 15 },
       },
       Ca: { Aa: null, wa: [] },
@@ -98,8 +100,10 @@ describe("coop start lag / idle peer crawl", () => {
       Gsm.applyCoopSpawnOffset(-1, { slot: 0, x: 8, y: 6, dir: "RIGHT" }),
       true
     );
-    assert.equal(g.oa.direction, null, "stale Play facing cleared");
-    assert.equal(g.oa.dir, null);
+    assert.equal(g.oa.direction, "NONE", "stale Play facing parked as NONE");
+    assert.equal(g.oa.dir, "NONE");
+    assert.equal(g.oa.Ca, "RIGHT", "face Ca kept");
+    assert.equal(g.oa.Ga, "NONE", "pending Ga parked");
     assert.equal(win.timeKeeper.playing, false, "clock stays off until local move");
   });
 

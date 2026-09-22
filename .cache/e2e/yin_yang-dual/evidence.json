@@ -1,12 +1,12 @@
 {
-  "built": "2026-09-22T01:41:48.956Z",
-  "wsUrl": "wss://127.0.0.1:51376/ws",
+  "built": "2026-09-22T08:50:52.533Z",
+  "wsUrl": "wss://127.0.0.1:57180/ws",
   "steps": [
     "mod_loaded",
     "joined",
     "session_start"
   ],
-  "roomCode": "L3E9",
+  "roomCode": "YXL2",
   "wallTrophy": {
     "index": 7,
     "via": "cliMode",
@@ -81,982 +81,93 @@
   },
   "hunt": [
     {
-      "fruitLen": 0,
+      "fruitLen": 1,
       "bodyLen": 3,
       "head": {
         "x": 3,
         "y": 4
       },
-      "apple": null,
+      "apple": {
+        "x": 4,
+        "y": 4
+      },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": true,
+      "nj": false,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
       "aaSize": 0
     },
     {
-      "fruitLen": 0,
+      "fruitLen": 1,
       "bodyLen": 3,
       "head": {
         "x": 3,
+        "y": 1
+      },
+      "apple": {
+        "x": 4,
         "y": 4
       },
-      "apple": null,
       "wallCount": 0,
       "wallCoords": [],
-      "nj": true,
+      "nj": false,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
       "aaSize": 0
     },
     {
-      "fruitLen": 0,
+      "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 3,
+        "x": 4,
         "y": 4
       },
-      "apple": null,
+      "apple": {
+        "x": 0,
+        "y": 0
+      },
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
-      "bodyLen": 3,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": true,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    }
-  ],
-  "eatAssist": [
-    {
-      "ok": true,
       "Sh": 1,
-      "wallPlanted": false,
-      "method": "force_eat"
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 1,
+      "bodyLen": 3,
+      "head": {
+        "x": 2,
+        "y": 0
+      },
+      "apple": {
+        "x": 0,
+        "y": 0
+      },
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": false,
+      "Sh": 1,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
     }
   ],
   "eatBreak": {
-    "fruitLen": 0,
-    "bodyLen": 4,
+    "fruitLen": 1,
+    "bodyLen": 3,
     "head": {
-      "x": 6,
-      "y": 4
+      "x": 2,
+      "y": 0
     },
-    "apple": null,
+    "apple": {
+      "x": 0,
+      "y": 0
+    },
     "wallCount": 0,
     "wallCoords": [],
     "nj": false,
@@ -1066,13 +177,12 @@
     "aaSize": 0
   },
   "ateProof": true,
-  "eatMethod": "force_eat",
   "afterA": {
     "modeKey": "yin_yang",
     "wallCount": 0,
     "walls": [],
-    "fruitLen": 0,
-    "bodyLen": 4,
+    "fruitLen": 1,
+    "bodyLen": 3,
     "nj": false,
     "aaHasAdd": true,
     "aaSize": 0,
@@ -1082,7 +192,7 @@
   "afterB": {
     "wallCount": 0,
     "walls": [],
-    "nj": true
+    "nj": false
   },
   "errsA": [],
   "errsB": []

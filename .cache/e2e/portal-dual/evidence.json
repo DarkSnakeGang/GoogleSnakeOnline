@@ -1,12 +1,12 @@
 {
-  "built": "2026-09-22T01:41:48.956Z",
-  "wsUrl": "wss://127.0.0.1:52455/ws",
+  "built": "2026-09-22T08:50:52.533Z",
+  "wsUrl": "wss://127.0.0.1:49433/ws",
   "steps": [
     "mod_loaded",
     "joined",
     "session_start"
   ],
-  "roomCode": "RQVQ",
+  "roomCode": "F47B",
   "wallTrophy": {
     "index": 2,
     "via": "cliMode",
@@ -56,10 +56,10 @@
   "unlocked": null,
   "baseline": {
     "fruitLen": 2,
-    "bodyLen": 4,
+    "bodyLen": 3,
     "head": {
-      "x": 3,
-      "y": 4
+      "x": 5,
+      "y": 3
     },
     "apple": {
       "x": 6,
@@ -82,7 +82,7 @@
   "hunt": [
     {
       "fruitLen": 2,
-      "bodyLen": 4,
+      "bodyLen": 3,
       "head": {
         "x": 5,
         "y": 2
@@ -122,7 +122,7 @@
       "fruitLen": 2,
       "bodyLen": 3,
       "head": {
-        "x": 9,
+        "x": 8,
         "y": 3
       },
       "apple": {
@@ -145,8 +145,8 @@
         "y": 6
       },
       "apple": {
-        "x": 2,
-        "y": 2
+        "x": 0,
+        "y": 3
       },
       "wallCount": 0,
       "wallCoords": [],
@@ -165,8 +165,8 @@
       "y": 6
     },
     "apple": {
-      "x": 2,
-      "y": 2
+      "x": 0,
+      "y": 3
     },
     "wallCount": 0,
     "wallCoords": [],
@@ -181,18 +181,18 @@
     "modeKey": "portal",
     "wallCount": 0,
     "walls": [],
-    "fruitLen": 0,
+    "fruitLen": 2,
     "bodyLen": 4,
     "nj": true,
     "aaHasAdd": true,
     "aaSize": 0,
     "wallCoords": [],
-    "Sh": 0
+    "Sh": 1
   },
   "afterB": {
     "wallCount": 0,
     "walls": [],
-    "nj": true
+    "nj": false
   },
   "errsA": [],
   "errsB": []

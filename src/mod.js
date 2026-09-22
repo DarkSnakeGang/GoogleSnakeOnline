@@ -2588,7 +2588,16 @@
     this._coopLastWallCount = null;
     this._coopWallGrowArmed = false;
     this._coopDeadSent = false;
-    this._coopIgnoreStartUntil = Date.now() + 2000;
+    // Drop menu/load keypresses queued before seats exist — board-ready flush
+    // used to applyCoopStartMoving from those and auto-crawl on Start.
+    if (this.coopSession) {
+      try {
+        this.coopSession.pendingInput = null;
+        this.coopSession.pendingPose = null;
+      } catch (eQ) { /* ignore */ }
+    }
+    // Long enough that late peer seeds cannot wipe idle seats; first key clears it.
+    this._coopIgnoreStartUntil = Date.now() + 15000;
     if (typeof window !== "undefined") {
       window.__mpCoopIgnoreStartUntil = this._coopIgnoreStartUntil;
       window.__mpCoopSpectator = !!opts.spectator;
@@ -2648,7 +2657,20 @@
         }
         if (self._coopAuthority === "native-relay-v1" && self._coopSessionActive) {
           const me = self.client && self.client.me && self.client.me();
-          // Admin mid-match Reset / Play-again → shared SESSION_START (full wipe on all clients)
+          const localDead =
+            !!self._coopDeadSent ||
+            !!self._coopMatchEndHandled ||
+            (self.coopSession && !!self.coopSession.localDead) ||
+            (typeof window !== "undefined" && !!window.__mpCoopLocalDead);
+          // Death / match-end often calls GameInstance.reset(). That must NOT
+          // fire Start Co-op again (was: die → SESSION_START → die → loop).
+          if (localDead) {
+            if (typeof self.resetNativeCoopRun === "function") {
+              self.resetNativeCoopRun({ localOnly: true });
+            }
+            return true;
+          }
+          // Admin mid-match Reset / Play-again while still alive → shared restart
           if (me && me.isAdmin && typeof self.startMatchAsAdmin === "function") {
             try {
               self.startMatchAsAdmin();
@@ -3217,9 +3239,16 @@
     const g = Gsm.gameInstance && Gsm.gameInstance();
     const body = g && g.oa && g.oa.ka;
     if (!body || !body.length) return false;
-    // Player already moved — stop reasserting
-    const dir = g.oa.direction || g.oa.dir;
-    if (dir && this._coopPlayerMoved) return true;
+    // Player already moved — stop reasserting (NONE is idle, not engaged)
+    if (this._coopPlayerMoved) {
+      const crawl = Gsm.coopSnakeHasCrawlFacing
+        ? Gsm.coopSnakeHasCrawlFacing(g.oa)
+        : (function () {
+            const d = g.oa.direction || g.oa.dir;
+            return !!(d && d !== "NONE" && d !== "none");
+          })();
+      if (crawl) return true;
+    }
     const expected = this._coopSpawnPose
       ? Gsm.coopSpawnBodyFromPose
         ? Gsm.coopSpawnBodyFromPose(this._coopSpawnPose)
@@ -3252,10 +3281,16 @@
     if (typeof window !== "undefined" && window.__mpCoopSpectator) return;
     const g = Gsm.gameInstance && Gsm.gameInstance();
     if (!g || !g.oa) return;
-    const dir = g.oa.direction || g.oa.dir;
-    if (dir) {
-      // Native assigned a facing → player/input engaged; lock seat
-      this._coopPlayerMoved = true;
+    // Native idle is direction==="NONE" (truthy string). Only real crawl dirs
+    // mean the player engaged — never treat leftover Play facing as moved.
+    const crawl =
+      Gsm.coopSnakeHasCrawlFacing
+        ? Gsm.coopSnakeHasCrawlFacing(g.oa)
+        : (function () {
+            const d = g.oa.direction || g.oa.dir;
+            return !!(d && d !== "NONE" && d !== "none");
+          })();
+    if (crawl && this._coopPlayerMoved) {
       this._coopSpawnApplied = true;
       this._coopSeatedPublish = true;
       return;
@@ -4093,6 +4128,15 @@
     this._coopDeadSent = true;
     this._logCoopDeath("friendly_hit");
     if (typeof window !== "undefined") window.__mpCoopLocalDead = true;
+    // Mirror native_die: clear Ready so death cannot immediately Start again.
+    try {
+      const me = this.client.me && this.client.me();
+      if (me && me.role === "player" && me.ready) {
+        me.ready = false;
+        if (this.client.setReady) this.client.setReady(false);
+        if (typeof this.applyControlLocks === "function") this.applyControlLocks();
+      }
+    } catch (eReady) { /* ignore */ }
     const deathPayload = {
       generation: this.coop && this.coop.generation,
       eventSeq:
@@ -4137,13 +4181,15 @@
       !this.coopSession
     ) return false;
     const queued = this.coopSession.takeQueued();
-    this.removeCoopRelayInputGate();
+    // Keep the keydown gate installed — after board-ready it latches the
+    // first local key via applyCoopStartMoving (do not removeCoopRelayInputGate).
     try {
       if (Gsm.setLocalPaused) Gsm.setLocalPaused(false);
       else if (typeof window !== "undefined") window.pauseGame = 0;
     } catch (eUnpause) { /* ignore */ }
-    if (queued.input) {
-      // Prefer writing native facing directly — synthetic keydown can miss hooks.
+    // Only honor pre-ready keys after the local seat exists — never crawl from
+    // lobby/menu key noise flushed on COOP_BOARD_READY.
+    if (queued.input && this._coopSpawnApplied && !this._coopDeadSent) {
       if (Gsm.applyCoopStartMoving) {
         try {
           Gsm.applyCoopStartMoving(queued.input);
@@ -4202,15 +4248,32 @@
       d: "RIGHT",
       D: "RIGHT",
     };
-    // Remember the last pre-ready key for board-ready flush, but never block
-    // native input — swallowing keys deadlocks start when board-ready is late.
+    // Capture-phase: queue pre-ready keys, and on first post-seat key leave
+    // native NONE-idle via applyCoopStartMoving (canvas focus is unreliable
+    // while the multiplayer panel still holds DOM focus).
     this._coopRelayInputGate = function (ev) {
-      if (self._coopAuthority !== "native-relay-v1" || self.coop.boardReady) {
-        return;
-      }
+      if (self._coopAuthority !== "native-relay-v1") return;
       const dir = dirs[ev && ev.key];
       if (!dir || !self.coopSession) return;
-      self.coopSession.queueInput(dir);
+      if (!self.coop.boardReady) {
+        self.coopSession.queueInput(dir);
+        return;
+      }
+      if (
+        self._coopSpawnApplied &&
+        !self._coopPlayerMoved &&
+        !self._coopDeadSent &&
+        Gsm.applyCoopStartMoving
+      ) {
+        try {
+          Gsm.applyCoopStartMoving(dir);
+        } catch (eMove) { /* ignore */ }
+        self._coopPlayerMoved = true;
+        self._coopIgnoreStartUntil = 0;
+        if (typeof window !== "undefined") {
+          window.__mpCoopIgnoreStartUntil = 0;
+        }
+      }
     };
     window.addEventListener("keydown", this._coopRelayInputGate, true);
   };
@@ -4380,26 +4443,10 @@
     if (this.ui && this.ui.updateHud) this.ui.updateHud(this);
     this._ensureCoopHudTick();
     if (isSpectator) return;
-    // Server-auth: crawl is decided by server `started` — do not force native facing
-    if (
-      this._coopServerAuth ||
-      (typeof window !== "undefined" && window.__mpCoopServerAuth)
-    ) {
-      return;
-    }
-    // Client-auth: peers who are still idle start crawling on shared first-move
-    const pose = this._coopSpawnPose;
-    if (!pose) {
-      const slot = this._myCoopSlotIndex();
-      const oy = this._myCoopSpawnOy();
-      if (slot == null || oy == null) return;
-      this._coopSpawnPose = this._coopSpawnPoseFor(slot, oy);
-    }
-    if (Gsm.applyCoopStartMoving) {
-      Gsm.applyCoopStartMoving(
-        (this._coopSpawnPose && this._coopSpawnPose.dir) || undefined
-      );
-    }
+    // Do NOT applyCoopStartMoving here. Shared clock arm used to force every
+    // idle peer to crawl spawn.dir (usually RIGHT) the instant someone moved —
+    // snakes started "by themselves" and peer-collided. Facing is local-key only
+    // (flushCoopRelayQueue / applyCoopStartMoving on this client's input).
   };
 
   /** Keep the co-op HUD clock advancing between pose publishes. */

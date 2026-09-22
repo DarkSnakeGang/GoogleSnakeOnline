@@ -1,0 +1,730 @@
+{
+  "built": "2026-09-22T08:50:52.533Z",
+  "wsUrl": "wss://127.0.0.1:63483/ws",
+  "holdMs": 3500,
+  "steps": [
+    "mod_loaded",
+    "joined",
+    "session_start",
+    "idle_hold_ok",
+    "a_key_peer_still_idle",
+    "b_key_ok"
+  ],
+  "roomCode": "5URB",
+  "t0": {
+    "a": {
+      "hasGame": true,
+      "head": {
+        "x": 5,
+        "y": 3
+      },
+      "body": [
+        {
+          "x": 5,
+          "y": 3
+        },
+        {
+          "x": 4,
+          "y": 3
+        },
+        {
+          "x": 3,
+          "y": 3
+        }
+      ],
+      "direction": "NONE",
+      "Ca": "RIGHT",
+      "Ga": "NONE",
+      "crawlFacing": null,
+      "hasCrawl": false,
+      "nj": false,
+      "localDead": false,
+      "playerMoved": false,
+      "tkPlaying": false,
+      "built": "2026-09-22T08:50:52.533Z"
+    },
+    "b": {
+      "hasGame": true,
+      "head": {
+        "x": 5,
+        "y": 5
+      },
+      "body": [
+        {
+          "x": 5,
+          "y": 5
+        },
+        {
+          "x": 4,
+          "y": 5
+        },
+        {
+          "x": 3,
+          "y": 5
+        }
+      ],
+      "direction": "NONE",
+      "Ca": "RIGHT",
+      "Ga": "NONE",
+      "crawlFacing": null,
+      "hasCrawl": false,
+      "nj": false,
+      "localDead": false,
+      "playerMoved": false,
+      "tkPlaying": false,
+      "built": "2026-09-22T08:50:52.533Z"
+    }
+  },
+  "holdSamples": [
+    {
+      "i": 0,
+      "a": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 3
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 3
+          },
+          {
+            "x": 4,
+            "y": 3
+          },
+          {
+            "x": 3,
+            "y": 3
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      },
+      "b": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 5
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 5
+          },
+          {
+            "x": 4,
+            "y": 5
+          },
+          {
+            "x": 3,
+            "y": 5
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      }
+    },
+    {
+      "i": 1,
+      "a": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 3
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 3
+          },
+          {
+            "x": 4,
+            "y": 3
+          },
+          {
+            "x": 3,
+            "y": 3
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      },
+      "b": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 5
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 5
+          },
+          {
+            "x": 4,
+            "y": 5
+          },
+          {
+            "x": 3,
+            "y": 5
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      }
+    },
+    {
+      "i": 2,
+      "a": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 3
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 3
+          },
+          {
+            "x": 4,
+            "y": 3
+          },
+          {
+            "x": 3,
+            "y": 3
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      },
+      "b": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 5
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 5
+          },
+          {
+            "x": 4,
+            "y": 5
+          },
+          {
+            "x": 3,
+            "y": 5
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      }
+    },
+    {
+      "i": 3,
+      "a": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 3
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 3
+          },
+          {
+            "x": 4,
+            "y": 3
+          },
+          {
+            "x": 3,
+            "y": 3
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      },
+      "b": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 5
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 5
+          },
+          {
+            "x": 4,
+            "y": 5
+          },
+          {
+            "x": 3,
+            "y": 5
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      }
+    },
+    {
+      "i": 4,
+      "a": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 3
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 3
+          },
+          {
+            "x": 4,
+            "y": 3
+          },
+          {
+            "x": 3,
+            "y": 3
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      },
+      "b": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 5
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 5
+          },
+          {
+            "x": 4,
+            "y": 5
+          },
+          {
+            "x": 3,
+            "y": 5
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      }
+    },
+    {
+      "i": 5,
+      "a": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 3
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 3
+          },
+          {
+            "x": 4,
+            "y": 3
+          },
+          {
+            "x": 3,
+            "y": 3
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      },
+      "b": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 5
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 5
+          },
+          {
+            "x": 4,
+            "y": 5
+          },
+          {
+            "x": 3,
+            "y": 5
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      }
+    },
+    {
+      "i": 6,
+      "a": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 3
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 3
+          },
+          {
+            "x": 4,
+            "y": 3
+          },
+          {
+            "x": 3,
+            "y": 3
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      },
+      "b": {
+        "hasGame": true,
+        "head": {
+          "x": 5,
+          "y": 5
+        },
+        "body": [
+          {
+            "x": 5,
+            "y": 5
+          },
+          {
+            "x": 4,
+            "y": 5
+          },
+          {
+            "x": 3,
+            "y": 5
+          }
+        ],
+        "direction": "NONE",
+        "Ca": "RIGHT",
+        "Ga": "NONE",
+        "crawlFacing": null,
+        "hasCrawl": false,
+        "nj": false,
+        "localDead": false,
+        "playerMoved": false,
+        "tkPlaying": false,
+        "built": "2026-09-22T08:50:52.533Z"
+      }
+    }
+  ],
+  "t1": {
+    "a": {
+      "hasGame": true,
+      "head": {
+        "x": 5,
+        "y": 3
+      },
+      "body": [
+        {
+          "x": 5,
+          "y": 3
+        },
+        {
+          "x": 4,
+          "y": 3
+        },
+        {
+          "x": 3,
+          "y": 3
+        }
+      ],
+      "direction": "NONE",
+      "Ca": "RIGHT",
+      "Ga": "NONE",
+      "crawlFacing": null,
+      "hasCrawl": false,
+      "nj": false,
+      "localDead": false,
+      "playerMoved": false,
+      "tkPlaying": false,
+      "built": "2026-09-22T08:50:52.533Z"
+    },
+    "b": {
+      "hasGame": true,
+      "head": {
+        "x": 5,
+        "y": 5
+      },
+      "body": [
+        {
+          "x": 5,
+          "y": 5
+        },
+        {
+          "x": 4,
+          "y": 5
+        },
+        {
+          "x": 3,
+          "y": 5
+        }
+      ],
+      "direction": "NONE",
+      "Ca": "RIGHT",
+      "Ga": "NONE",
+      "crawlFacing": null,
+      "hasCrawl": false,
+      "nj": false,
+      "localDead": false,
+      "playerMoved": false,
+      "tkPlaying": false,
+      "built": "2026-09-22T08:50:52.533Z"
+    }
+  },
+  "t2_afterAKey": {
+    "a": {
+      "hasGame": true,
+      "head": {
+        "x": 8,
+        "y": 3
+      },
+      "body": [
+        {
+          "x": 8,
+          "y": 3
+        },
+        {
+          "x": 7,
+          "y": 3
+        },
+        {
+          "x": 6,
+          "y": 3
+        }
+      ],
+      "direction": "RIGHT",
+      "Ca": "RIGHT",
+      "Ga": "NONE",
+      "crawlFacing": "RIGHT",
+      "hasCrawl": true,
+      "nj": true,
+      "localDead": false,
+      "playerMoved": true,
+      "tkPlaying": false,
+      "built": "2026-09-22T08:50:52.533Z"
+    },
+    "b": {
+      "hasGame": true,
+      "head": {
+        "x": 5,
+        "y": 5
+      },
+      "body": [
+        {
+          "x": 5,
+          "y": 5
+        },
+        {
+          "x": 4,
+          "y": 5
+        },
+        {
+          "x": 3,
+          "y": 5
+        }
+      ],
+      "direction": "NONE",
+      "Ca": "RIGHT",
+      "Ga": "NONE",
+      "crawlFacing": null,
+      "hasCrawl": false,
+      "nj": false,
+      "localDead": false,
+      "playerMoved": false,
+      "tkPlaying": true,
+      "built": "2026-09-22T08:50:52.533Z"
+    }
+  },
+  "t3_afterBKey": {
+    "a": {
+      "hasGame": true,
+      "head": {
+        "x": 8,
+        "y": 3
+      },
+      "body": [
+        {
+          "x": 8,
+          "y": 3
+        },
+        {
+          "x": 7,
+          "y": 3
+        },
+        {
+          "x": 6,
+          "y": 3
+        }
+      ],
+      "direction": "RIGHT",
+      "Ca": "RIGHT",
+      "Ga": "NONE",
+      "crawlFacing": "RIGHT",
+      "hasCrawl": true,
+      "nj": true,
+      "localDead": false,
+      "playerMoved": false,
+      "tkPlaying": false,
+      "built": "2026-09-22T08:50:52.533Z"
+    },
+    "b": {
+      "hasGame": true,
+      "head": {
+        "x": 5,
+        "y": 5
+      },
+      "body": [
+        {
+          "x": 5,
+          "y": 5
+        },
+        {
+          "x": 4,
+          "y": 5
+        },
+        {
+          "x": 3,
+          "y": 5
+        }
+      ],
+      "direction": "LEFT",
+      "Ca": "LEFT",
+      "Ga": "NONE",
+      "crawlFacing": "LEFT",
+      "hasCrawl": true,
+      "nj": true,
+      "localDead": false,
+      "playerMoved": false,
+      "tkPlaying": false,
+      "built": "2026-09-22T08:50:52.533Z"
+    }
+  },
+  "errsA": [],
+  "errsB": [],
+  "ok": true
+}

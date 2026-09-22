@@ -1,12 +1,12 @@
 {
-  "built": "2026-09-22T01:41:48.956Z",
-  "wsUrl": "wss://127.0.0.1:54679/ws",
+  "built": "2026-09-22T08:50:52.533Z",
+  "wsUrl": "wss://127.0.0.1:53794/ws",
   "steps": [
     "mod_loaded",
     "joined",
     "session_start"
   ],
-  "roomCode": "M84V",
+  "roomCode": "P3H2",
   "wallTrophy": {
     "index": 6,
     "via": "cliMode",
@@ -56,10 +56,10 @@
   "unlocked": null,
   "baseline": {
     "fruitLen": 1,
-    "bodyLen": 4,
+    "bodyLen": 3,
     "head": {
-      "x": 3,
-      "y": 4
+      "x": 5,
+      "y": 3
     },
     "apple": {
       "x": 7,
@@ -82,10 +82,29 @@
   "hunt": [
     {
       "fruitLen": 1,
-      "bodyLen": 4,
+      "bodyLen": 3,
       "head": {
         "x": 6,
         "y": 4
+      },
+      "apple": {
+        "x": 7,
+        "y": 4
+      },
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": false,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
+      "fruitLen": 1,
+      "bodyLen": 3,
+      "head": {
+        "x": 5,
+        "y": 3
       },
       "apple": {
         "x": 7,
@@ -127,7 +146,7 @@
       },
       "apple": {
         "x": 3,
-        "y": 4
+        "y": 3
       },
       "wallCount": 0,
       "wallCoords": [],
@@ -139,14 +158,14 @@
     },
     {
       "fruitLen": 1,
-      "bodyLen": 5,
+      "bodyLen": 4,
       "head": {
-        "x": 4,
-        "y": 4
+        "x": 3,
+        "y": 3
       },
       "apple": {
-        "x": 1,
-        "y": 0
+        "x": 7,
+        "y": 4
       },
       "wallCount": 0,
       "wallCoords": [],
@@ -159,14 +178,14 @@
   ],
   "eatBreak": {
     "fruitLen": 1,
-    "bodyLen": 5,
+    "bodyLen": 4,
     "head": {
-      "x": 4,
-      "y": 4
+      "x": 3,
+      "y": 3
     },
     "apple": {
-      "x": 1,
-      "y": 0
+      "x": 7,
+      "y": 4
     },
     "wallCount": 0,
     "wallCoords": [],
@@ -181,18 +200,18 @@
     "modeKey": "winged",
     "wallCount": 0,
     "walls": [],
-    "fruitLen": 0,
+    "fruitLen": 1,
     "bodyLen": 5,
-    "nj": true,
+    "nj": false,
     "aaHasAdd": true,
     "aaSize": 0,
     "wallCoords": [],
-    "Sh": 0
+    "Sh": 2
   },
   "afterB": {
     "wallCount": 0,
     "walls": [],
-    "nj": true
+    "nj": false
   },
   "errsA": [],
   "errsB": []

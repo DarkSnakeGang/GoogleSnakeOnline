@@ -547,6 +547,17 @@
     } catch (eGrace) { /* ignore */ }
     if (game.nj || game.dead || game.isDead) return false;
     const snake = game.oa;
+    // Idle spawn: native parks with direction/Ga === "NONE". Face Ca may stay
+    // RIGHT — that is sprite angle, not crawl. Only kill once actually moving.
+    function hasCrawlFacing(snake) {
+      if (!snake) return false;
+      const d = snake.direction || snake.dir;
+      if (d && d !== "NONE" && d !== "none") return true;
+      const g = snake.Ga;
+      if (typeof g === "string" && g && g !== "NONE") return true;
+      return false;
+    }
+    if (!hasCrawlFacing(snake)) return false;
     const head = snake && snake.ka && snake.ka[0];
     const next = predictedHead(game);
     const hit =
@@ -3462,7 +3473,8 @@
       if (!game || !game.oa) return false;
       try {
         const dir = game.oa.direction || game.oa.dir;
-        if (dir) return true;
+        // NONE = parked idle; only skip reseat when actually crawling
+        if (dir && dir !== "NONE" && dir !== "none") return true;
         const body = game.oa.ka;
         const head = body && body[0];
         if (

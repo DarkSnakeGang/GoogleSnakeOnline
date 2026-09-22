@@ -1,12 +1,12 @@
 {
-  "built": "2026-09-22T01:41:48.956Z",
-  "wsUrl": "wss://127.0.0.1:51626/ws",
+  "built": "2026-09-22T08:50:52.533Z",
+  "wsUrl": "wss://127.0.0.1:53974/ws",
   "steps": [
     "mod_loaded",
     "joined",
     "session_start"
   ],
-  "roomCode": "KTP3",
+  "roomCode": "AA4M",
   "wallTrophy": {
     "index": 8,
     "via": "cliMode",
@@ -58,21 +58,21 @@
     "phase": "hunt_key",
     "key": {
       "x": 6,
-      "y": 2
+      "y": 6
     },
     "block": {
       "x": 6,
-      "y": 6
+      "y": 2
     },
     "fruitAfter": 1,
-    "method": "keys_empty_unlock_fruit_host"
+    "method": "force_clear_keys_unlock_fruit_host"
   },
   "baseline": {
     "fruitLen": 1,
     "bodyLen": 3,
     "head": {
-      "x": 5,
-      "y": 7
+      "x": 8,
+      "y": 3
     },
     "apple": {
       "x": 6,
@@ -84,16 +84,16 @@
     "Sh": 0,
     "keyCount": 0,
     "boxCount": 0,
-    "aaSize": 0
+    "aaSize": 1
   },
   "seated": false,
   "hunt": [
     {
       "fruitLen": 0,
-      "bodyLen": 4,
+      "bodyLen": 3,
       "head": {
         "x": 5,
-        "y": 2
+        "y": 6
       },
       "apple": null,
       "wallCount": 0,
@@ -124,8 +124,8 @@
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 8
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
@@ -140,8 +140,8 @@
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
@@ -156,225 +156,225 @@
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 0,
       "bodyLen": 3,
       "head": {
-        "x": 5,
-        "y": 7
+        "x": 8,
+        "y": 3
       },
       "apple": null,
       "wallCount": 0,
       "wallCoords": [],
       "nj": true,
       "Sh": 0,
-      "keyCount": 0,
+      "keyCount": 1,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
@@ -393,13 +393,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -412,13 +412,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -431,13 +431,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -446,17 +446,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -469,13 +469,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -488,13 +488,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -503,17 +503,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -526,13 +526,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -545,13 +545,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -560,17 +560,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -583,13 +583,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -602,13 +602,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -617,17 +617,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -640,13 +640,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -659,13 +659,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -674,17 +674,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -697,13 +697,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -716,13 +716,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -731,17 +731,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -754,13 +754,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -773,13 +773,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -788,17 +788,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -811,13 +811,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -830,13 +830,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -845,17 +845,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -868,13 +868,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -887,13 +887,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -902,17 +902,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -925,13 +925,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -944,13 +944,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -959,17 +959,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -982,13 +982,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1001,13 +1001,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1016,17 +1016,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -1039,13 +1039,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1058,13 +1058,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1077,13 +1077,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1096,13 +1096,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1111,17 +1111,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1134,13 +1134,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1153,13 +1153,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1168,17 +1168,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1191,13 +1191,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1210,13 +1210,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1225,17 +1225,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1248,13 +1248,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1267,13 +1267,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1282,17 +1282,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1305,13 +1305,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1324,13 +1324,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1339,17 +1339,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -1362,13 +1362,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1381,13 +1381,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1396,17 +1396,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1419,13 +1419,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1438,13 +1438,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1453,17 +1453,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1476,13 +1476,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1495,13 +1495,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1510,17 +1510,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1533,13 +1533,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1552,13 +1552,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1567,17 +1567,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -1590,13 +1590,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1609,13 +1609,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1624,17 +1624,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1647,13 +1647,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1666,13 +1666,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1681,17 +1681,17 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1704,13 +1704,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1723,13 +1723,13 @@
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     },
     {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1738,11 +1738,11 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
-      "aaSize": 0
+      "aaSize": 1
     }
   ],
   "eatAssist": [
@@ -1767,7 +1767,7 @@
     "Sh": 1,
     "keyCount": 0,
     "boxCount": 0,
-    "aaSize": 0
+    "aaSize": 1
   },
   "ateProof": true,
   "eatMethod": "force_eat",
@@ -1779,15 +1779,17 @@
     "bodyLen": 4,
     "nj": false,
     "aaHasAdd": true,
-    "aaSize": 0,
+    "aaSize": 1,
     "wallCoords": [],
     "Sh": 1
   },
   "afterB": {
     "wallCount": 0,
     "walls": [],
-    "nj": true
+    "nj": false
   },
-  "errsA": [],
+  "errsA": [
+    "ea.ka[0].clone is not a function"
+  ],
   "errsB": []
 }

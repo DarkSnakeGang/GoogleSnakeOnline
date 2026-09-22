@@ -1,12 +1,12 @@
 {
-  "built": "2026-09-22T01:41:48.956Z",
-  "wsUrl": "wss://127.0.0.1:59117/ws",
+  "built": "2026-09-22T08:50:52.533Z",
+  "wsUrl": "wss://127.0.0.1:51255/ws",
   "steps": [
     "mod_loaded",
     "joined",
     "session_start"
   ],
-  "roomCode": "F3QG",
+  "roomCode": "5ZH3",
   "wallTrophy": {
     "index": 9,
     "via": "cliMode",
@@ -82,22 +82,6 @@
   "hunt": [
     {
       "fruitLen": 0,
-      "bodyLen": 4,
-      "head": {
-        "x": 3,
-        "y": 4
-      },
-      "apple": null,
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": false,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 0,
       "bodyLen": 3,
       "head": {
         "x": 5,
@@ -369,6 +353,22 @@
       "aaSize": 0
     },
     {
+      "fruitLen": 0,
+      "bodyLen": 3,
+      "head": {
+        "x": 8,
+        "y": 3
+      },
+      "apple": null,
+      "wallCount": 0,
+      "wallCoords": [],
+      "nj": true,
+      "Sh": 0,
+      "keyCount": 0,
+      "boxCount": 0,
+      "aaSize": 0
+    },
+    {
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
@@ -391,7 +391,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -410,7 +410,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -429,7 +429,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -448,7 +448,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -467,7 +467,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -476,7 +476,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -486,7 +486,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -505,7 +505,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -524,7 +524,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -533,7 +533,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -543,7 +543,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -562,7 +562,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -581,7 +581,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -590,7 +590,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -600,7 +600,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -619,7 +619,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -638,7 +638,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -647,7 +647,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -657,7 +657,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -676,7 +676,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -695,7 +695,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -704,7 +704,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -714,7 +714,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -733,7 +733,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -752,7 +752,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -761,7 +761,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -771,7 +771,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -790,7 +790,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -809,7 +809,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -818,7 +818,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -828,7 +828,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -847,7 +847,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -866,7 +866,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -875,7 +875,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -885,7 +885,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -904,7 +904,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -923,7 +923,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -932,7 +932,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -942,7 +942,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -961,7 +961,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -980,7 +980,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -989,7 +989,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -999,7 +999,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -1018,7 +1018,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1037,7 +1037,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1046,7 +1046,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -1056,7 +1056,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -1075,7 +1075,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1094,7 +1094,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1103,7 +1103,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -1113,7 +1113,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -1132,7 +1132,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1151,7 +1151,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1160,7 +1160,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -1170,7 +1170,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -1189,7 +1189,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1208,7 +1208,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1217,7 +1217,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -1227,7 +1227,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -1246,7 +1246,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1265,7 +1265,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1274,7 +1274,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -1284,7 +1284,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -1303,7 +1303,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1322,7 +1322,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1331,7 +1331,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -1341,7 +1341,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -1360,7 +1360,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1379,7 +1379,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1388,7 +1388,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -1398,7 +1398,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -1417,7 +1417,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1436,7 +1436,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1455,7 +1455,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1474,7 +1474,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1493,7 +1493,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 7,
         "y": 4
       },
       "apple": {
@@ -1512,7 +1512,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1531,7 +1531,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1550,7 +1550,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1569,7 +1569,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1578,7 +1578,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -1588,7 +1588,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1607,7 +1607,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1626,7 +1626,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1635,7 +1635,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -1645,7 +1645,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1664,7 +1664,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1683,7 +1683,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 9,
         "y": 4
       },
       "apple": {
@@ -1692,7 +1692,7 @@
       },
       "wallCount": 0,
       "wallCoords": [],
-      "nj": false,
+      "nj": true,
       "Sh": 0,
       "keyCount": 0,
       "boxCount": 0,
@@ -1702,7 +1702,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 6,
         "y": 4
       },
       "apple": {
@@ -1721,7 +1721,7 @@
       "fruitLen": 1,
       "bodyLen": 3,
       "head": {
-        "x": 5,
+        "x": 8,
         "y": 4
       },
       "apple": {
@@ -1749,7 +1749,7 @@
     "fruitLen": 0,
     "bodyLen": 4,
     "head": {
-      "x": 6,
+      "x": 8,
       "y": 4
     },
     "apple": null,
@@ -1769,7 +1769,7 @@
     "walls": [],
     "fruitLen": 0,
     "bodyLen": 4,
-    "nj": false,
+    "nj": true,
     "aaHasAdd": true,
     "aaSize": 0,
     "wallCoords": [],
@@ -1778,7 +1778,7 @@
   "afterB": {
     "wallCount": 0,
     "walls": [],
-    "nj": true
+    "nj": false
   },
   "errsA": [],
   "errsB": []

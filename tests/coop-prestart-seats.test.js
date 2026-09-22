@@ -163,7 +163,7 @@ describe("coop pre-start visual seats", () => {
     assert.equal(win.__mpCoopVisualSeated, true);
     assert.equal(game.oa.ka[0].x, 5);
     assert.equal(game.oa.ka[0].y, 3);
-    assert.equal(game.oa.direction, null, "idle-until-key");
+    assert.equal(game.oa.direction, "NONE", "idle-until-key");
 
     const remotes = app.coopNative.remotes;
     assert.ok(remotes.peer, "peer seeded");

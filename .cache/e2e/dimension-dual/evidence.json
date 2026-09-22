@@ -1,12 +1,12 @@
 {
-  "built": "2026-09-22T01:41:48.956Z",
-  "wsUrl": "wss://127.0.0.1:52863/ws",
+  "built": "2026-09-22T08:50:52.533Z",
+  "wsUrl": "wss://127.0.0.1:65263/ws",
   "steps": [
     "mod_loaded",
     "joined",
     "session_start"
   ],
-  "roomCode": "VFJG",
+  "roomCode": "7PAN",
   "wallTrophy": {
     "index": 11,
     "via": "cliMode",
@@ -56,14 +56,14 @@
   "unlocked": null,
   "baseline": {
     "fruitLen": 2,
-    "bodyLen": 4,
+    "bodyLen": 3,
     "head": {
-      "x": 3,
-      "y": 4
+      "x": 5,
+      "y": 3
     },
     "apple": {
       "x": 7,
-      "y": 3
+      "y": 5
     },
     "wallCount": 0,
     "wallCoords": [],
@@ -75,21 +75,21 @@
   },
   "seated": {
     "hx": 6,
-    "hy": 3,
+    "hy": 5,
     "ax": 7,
-    "ay": 3
+    "ay": 5
   },
   "hunt": [
     {
       "fruitLen": 2,
-      "bodyLen": 4,
+      "bodyLen": 3,
       "head": {
         "x": 6,
-        "y": 3
+        "y": 5
       },
       "apple": {
         "x": 7,
-        "y": 3
+        "y": 5
       },
       "wallCount": 0,
       "wallCoords": [],
@@ -108,7 +108,7 @@
       },
       "apple": {
         "x": 7,
-        "y": 3
+        "y": 5
       },
       "wallCount": 0,
       "wallCoords": [],
@@ -123,11 +123,11 @@
       "bodyLen": 4,
       "head": {
         "x": 8,
-        "y": 3
+        "y": 5
       },
       "apple": {
-        "x": 7,
-        "y": 3
+        "x": 6,
+        "y": 1
       },
       "wallCount": 0,
       "wallCoords": [],
@@ -141,17 +141,17 @@
       "fruitLen": 2,
       "bodyLen": 4,
       "head": {
-        "x": 7,
-        "y": 3
+        "x": 6,
+        "y": 1
       },
       "apple": {
-        "x": 7,
-        "y": 5
+        "x": 6,
+        "y": 1
       },
       "wallCount": 0,
       "wallCoords": [],
       "nj": false,
-      "Sh": 2,
+      "Sh": 1,
       "keyCount": 0,
       "boxCount": 0,
       "aaSize": 0
@@ -161,17 +161,17 @@
     "fruitLen": 2,
     "bodyLen": 4,
     "head": {
-      "x": 7,
-      "y": 3
+      "x": 6,
+      "y": 1
     },
     "apple": {
-      "x": 7,
-      "y": 5
+      "x": 6,
+      "y": 1
     },
     "wallCount": 0,
     "wallCoords": [],
     "nj": false,
-    "Sh": 2,
+    "Sh": 1,
     "keyCount": 0,
     "boxCount": 0,
     "aaSize": 0
@@ -181,18 +181,18 @@
     "modeKey": "dimension",
     "wallCount": 0,
     "walls": [],
-    "fruitLen": 0,
-    "bodyLen": 5,
+    "fruitLen": 2,
+    "bodyLen": 4,
     "nj": true,
     "aaHasAdd": true,
     "aaSize": 0,
     "wallCoords": [],
-    "Sh": 0
+    "Sh": 1
   },
   "afterB": {
     "wallCount": 0,
     "walls": [],
-    "nj": true
+    "nj": false
   },
   "errsA": [],
   "errsB": []

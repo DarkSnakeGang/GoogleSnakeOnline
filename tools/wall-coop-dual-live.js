@@ -676,8 +676,27 @@ async function main() {
           const hy = kp.y | 0;
           g.oa.ka[0].x = Math.max(0, hx);
           g.oa.ka[0].y = hy;
-          g.oa.direction = "RIGHT";
-          g.oa.Ca = "RIGHT";
+          // Idle-until-input parks at NONE with clock off — engage crawl so
+          // the key hunt can tick (direction alone is not enough).
+          if (Gsm.applyCoopStartMoving) Gsm.applyCoopStartMoving("RIGHT");
+          else {
+            g.oa.direction = "RIGHT";
+            g.oa.Ca = "RIGHT";
+            g.oa.Ga = "NONE";
+          }
+          try {
+            const app = window.__multiplayerApp;
+            if (app) {
+              app._coopPlayerMoved = true;
+              app._coopIgnoreStartUntil = 0;
+            }
+            window.__mpCoopIgnoreStartUntil = 0;
+            if (window.timeKeeper) {
+              window.timeKeeper._dead = false;
+              window.timeKeeper.playing = true;
+            }
+            window.pauseGame = 0;
+          } catch (eEng) { /* ignore */ }
           out.steps.push("seat_at_key");
           return {
             ok: true,
@@ -699,8 +718,25 @@ async function main() {
           out.steps.push("seat_at_box");
           g.oa.ka[0].x = Math.max(0, (bp.x | 0) - 1);
           g.oa.ka[0].y = bp.y | 0;
-          g.oa.direction = "RIGHT";
-          g.oa.Ca = "RIGHT";
+          if (Gsm.applyCoopStartMoving) Gsm.applyCoopStartMoving("RIGHT");
+          else {
+            g.oa.direction = "RIGHT";
+            g.oa.Ca = "RIGHT";
+            g.oa.Ga = "NONE";
+          }
+          try {
+            const app = window.__multiplayerApp;
+            if (app) {
+              app._coopPlayerMoved = true;
+              app._coopIgnoreStartUntil = 0;
+            }
+            window.__mpCoopIgnoreStartUntil = 0;
+            if (window.timeKeeper) {
+              window.timeKeeper._dead = false;
+              window.timeKeeper.playing = true;
+            }
+            window.pauseGame = 0;
+          } catch (eEng2) { /* ignore */ }
           return {
             ok: true,
             phase: "push_box",
@@ -921,6 +957,17 @@ async function main() {
                 method: "keys_empty_unlock_fruit_host",
               };
             }
+            // Force-clear stubborn keys so eat evidence can proceed
+            try {
+              if (Array.isArray(g.Ba.keys)) g.Ba.keys.length = 0;
+              else if (g.Ba.keys && typeof g.Ba.keys.clear === "function") {
+                g.Ba.keys.clear();
+              }
+            } catch (eKey) { /* ignore */ }
+            return {
+              fruitAfter: plantUnlockFruitHost(),
+              method: "force_clear_keys_unlock_fruit_host",
+            };
           }
           if (modeId === "sokoban") {
             const goals = g.Aa && (g.Aa.d_ || g.Aa.da);
