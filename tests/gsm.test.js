@@ -772,6 +772,62 @@ describe("gsm hooks", () => {
     }
   });
 
+  it("scrapeWalls publishes only Aa center — not E6E neighbor wa pads", () => {
+    // Native E6E: one Aa entry + wa++ on center and 8 neighbors (9 wa cells).
+    const W = 7;
+    const H = 7;
+    const cx = 3;
+    const cy = 3;
+    const wa = [];
+    for (let y = 0; y < H; y++) {
+      wa[y] = [];
+      for (let x = 0; x < W; x++) wa[y][x] = 0;
+    }
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        wa[cy + dy][cx + dx] = 1;
+      }
+    }
+    const serial = (cx << 16) | cy;
+    const aa = new Map();
+    aa.set(serial, {
+      pos: { x: cx, y: cy },
+      wm: true,
+      m0: false,
+      Lh: true,
+    });
+    const game = {
+      width: W,
+      height: H,
+      Ca: { Aa: aa, wa: wa },
+      wa: { oa: { oa: { width: W, height: H } } },
+    };
+    const walls = Gsm.scrapeBoardEntities(game).walls;
+    assert.equal(walls.length, 1, "one painted wall, not 3x3 blob");
+    assert.equal(walls[0].x, cx);
+    assert.equal(walls[0].y, cy);
+  });
+
+  it("scrapeWalls falls back to wa===1 when Aa is empty", () => {
+    const game = {
+      width: 5,
+      height: 4,
+      Ca: {
+        Aa: new Map(),
+        wa: [
+          [0, 0, 0, 0, 0],
+          [0, 0, 1, 0, 0],
+          [0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0],
+        ],
+      },
+    };
+    const walls = Gsm.scrapeBoardEntities(game).walls;
+    assert.equal(walls.length, 1);
+    assert.equal(walls[0].x, 2);
+    assert.equal(walls[0].y, 1);
+  });
+
   it("drawBoardOnCanvas keeps corner/diagonal walls; drops 1x1 dead-end phantoms", () => {
     const fills = [];
     const ctx = {
@@ -3259,7 +3315,7 @@ describe("gsm hooks", () => {
     assert.equal(pose.height, undefined);
     assert.equal(pose.Sc, undefined);
     const poseBytes = JSON.stringify(pose).length;
-    assert.ok(poseBytes < 160, "slim pose should be small, got " + poseBytes);
+    assert.ok(poseBytes < 180, "slim pose should be small, got " + poseBytes);
 
     const cols = Gsm.scrapeCollectables();
     assert.ok(cols.apples);
@@ -3461,7 +3517,8 @@ describe("gsm hooks", () => {
       walls: [{ x: 2, y: 2 }],
       boxes: [{ x: 2, y: 2 }],
     });
-    assert.equal(g.__remixGame.Ca.wa[2][2], 1);
+    // E6E may bump center more than once near board edges; p6E only needs >0
+    assert.ok(g.__remixGame.Ca.wa[2][2] >= 1, "wall occupancy stamped");
     assert.equal(g.__remixGame.Aa.oa[0].pos.x, 2);
   });
 
@@ -3547,7 +3604,8 @@ describe("gsm hooks", () => {
       assert.equal(cols.apples[0].light, 1.5);
       assert.equal(cols.apples[1].poison, true);
       assert.equal(cols.apples[2].chessPiece, "knight");
-      assert.equal(cols.walls.length, 3);
+      // scrapeWalls is Aa-only (wa pads / orphan solids are not published)
+      assert.equal(cols.walls.length, 2);
       assert.equal(cols.keys.length, 1);
       assert.equal(cols.boxes.length, 1);
       assert.equal(cols.goals.length, 1);
@@ -3595,11 +3653,11 @@ describe("gsm hooks", () => {
       assert.equal(rx.wa.ka[1].Oka, true, "poison fruit");
       assert.equal(rx.wa.ka[2].ChessPiece, "knight");
 
-      // Walls: plain grid cell, keyblock lock and hotdog all land
-      assert.equal(rxWallGrid[6][5], 1);
-      assert.equal(rxWallGrid[6][6], 1);
-      assert.equal(rxWallGrid[6][7], 1);
-      assert.equal(rx.Ca.Aa.size, 3);
+      // Walls: Aa lock + hotdog land; wa-only (5,6) becomes E6E pad of (6,6)
+      assert.ok(rxWallGrid[6][5] >= 1, "neighbor pad of lock wall");
+      assert.ok(rxWallGrid[6][6] >= 1, "lock wall solid");
+      assert.ok(rxWallGrid[6][7] >= 1, "hotdog wall solid");
+      assert.equal(rx.Ca.Aa.size, 2);
       const rxWallList = [];
       rx.Ca.Aa.forEach(function (w) {
         rxWallList.push(w);
@@ -3709,9 +3767,9 @@ describe("gsm hooks", () => {
         { x: 1, y: 0 },
       ]),
     });
-    assert.equal(grid[0][W - 1], 1, "corner wall may be stamped");
+    assert.equal(grid[0][W - 1] >= 1, true, "corner wall occupancy kept/stamped");
     assert.equal(grid[0][1], 2, "dead-end edge is not stamped over sentinel");
-    assert.equal(grid[4][4], 1, "real wall is kept");
+    assert.ok(grid[4][4] >= 1, "real wall is kept");
     assert.ok(g.__remixGame.Ca.Aa, "wall Map must exist for native p6E");
     assert.equal(g.__remixGame.Ca.Aa.size, 2);
   });

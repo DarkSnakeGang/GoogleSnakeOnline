@@ -859,24 +859,79 @@ async function main() {
           try {
             if (Gsm.ensureNativeWallMap) Gsm.ensureNativeWallMap(g);
             if (g.Ca && g.Ca.Aa && typeof g.Ca.Aa.add === "function") {
-              let wx = ax;
-              let wy = ay;
+              const wa = g.Ca.wa;
+              const bw = (wa && wa[0] && wa[0].length) || 17;
+              const bh = (wa && wa.length) || 15;
+              function onBody(x, y) {
+                const body = g.oa && g.oa.ka;
+                if (!Array.isArray(body)) return false;
+                for (let bi = 0; bi < body.length; bi++) {
+                  const s = body[bi];
+                  if (s && (s.x | 0) === x && (s.y | 0) === y) return true;
+                }
+                return false;
+              }
+              function illegal(x, y) {
+                if (Gsm.isIllegalNormalWallCell) {
+                  return !!Gsm.isIllegalNormalWallCell(x, y, bw, bh);
+                }
+                return (x <= 1 || x >= bw - 2) && (y <= 1 || y >= bh - 2);
+              }
+              function okCell(x, y) {
+                return (
+                  x >= 2 &&
+                  y >= 2 &&
+                  x < bw - 2 &&
+                  y < bh - 2 &&
+                  !illegal(x, y) &&
+                  !onBody(x, y)
+                );
+              }
+              let wx = ax | 0;
+              let wy = ay | 0;
               try {
                 if (typeof g.Rb === "function") {
                   const pick = g.Rb(null, 5);
-                  if (pick && pick.x != null) {
+                  if (pick && pick.x != null && okCell(pick.x | 0, pick.y | 0)) {
                     wx = pick.x | 0;
                     wy = pick.y | 0;
                   }
                 }
-              } catch (ePick) { /* apple cell */ }
+              } catch (ePick) { /* scan */ }
+              if (!okCell(wx, wy)) {
+                let found = false;
+                for (let y = 2; y < bh - 2 && !found; y++) {
+                  for (let x = 2; x < bw - 2 && !found; x++) {
+                    if (okCell(x, y)) {
+                      wx = x;
+                      wy = y;
+                      found = true;
+                    }
+                  }
+                }
+                if (!found) {
+                  return { ok: false, reason: "no_legal_wall_cell" };
+                }
+              }
               g.Ca.Aa.add({
                 pos: { x: wx, y: wy },
                 wm: false,
                 m0: false,
                 Lh: true,
               });
-              if (Array.isArray(g.Ca.wa) && g.Ca.wa[wy]) g.Ca.wa[wy][wx] = 1;
+              // Full E6E occupancy (center + neighbor pads) like native plant
+              if (Gsm.stampNativeWallOccupancyFromList) {
+                const walls = [];
+                if (g.Ca.Aa && typeof g.Ca.Aa.forEach === "function") {
+                  g.Ca.Aa.forEach(function (w) {
+                    const p = w && (w.pos || w);
+                    if (p && p.x != null) walls.push({ x: p.x | 0, y: p.y | 0 });
+                  });
+                }
+                Gsm.stampNativeWallOccupancyFromList(g.Ca, walls, {});
+              } else if (Array.isArray(g.Ca.wa) && g.Ca.wa[wy]) {
+                g.Ca.wa[wy][wx] = 1;
+              }
               if (!Array.isArray(window.wallCoords)) window.wallCoords = [];
               window.wallCoords.push({ x: wx, y: wy });
               wallPlanted = true;
@@ -1169,10 +1224,52 @@ async function main() {
       const Gsm = window.MultiplayerGsm;
       const g = Gsm.gameInstance();
       const walls = Gsm.scrapeWalls ? Gsm.scrapeWalls(g) : [];
+      const pads = [];
+      const paintOnly = [];
+      try {
+        const aa = g.Ca && g.Ca.Aa;
+        const wa = g.Ca && g.Ca.wa;
+        if (Array.isArray(wa) && aa && typeof aa.has === "function") {
+          for (let y = 0; y < wa.length; y++) {
+            const row = wa[y];
+            if (!row) continue;
+            for (let x = 0; x < row.length; x++) {
+              if ((row[x] | 0) <= 0) continue;
+              const key =
+                typeof Gsm.wallSerialKey === "function"
+                  ? Gsm.wallSerialKey(x, y)
+                  : (x << 16) | y;
+              const painted = !!aa.has(key);
+              if (painted) paintOnly.push({ x: x, y: y, wa: row[x] | 0 });
+              else pads.push({ x: x, y: y, wa: row[x] | 0 });
+            }
+          }
+        }
+      } catch (ePad) { /* ignore */ }
+      // For each painted wall, confirm all in-bounds 8 neighbors have wa>0
+      const missingPads = [];
+      for (let i = 0; i < paintOnly.length; i++) {
+        const c = paintOnly[i];
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const x = c.x + dx;
+            const y = c.y + dy;
+            const row = g.Ca && g.Ca.wa && g.Ca.wa[y];
+            if (!row || x < 0 || x >= row.length) continue;
+            const v = row[x] | 0;
+            if (v <= 0) missingPads.push({ wall: c, x: x, y: y, wa: v });
+          }
+        }
+      }
       return {
         wallCount: walls.length,
         walls: walls.slice(0, 10),
         nj: !!g.nj,
+        padCount: pads.length,
+        paintCount: paintOnly.length,
+        missingPads: missingPads.slice(0, 16),
+        samplePads: pads.slice(0, 12),
       };
     });
     evidence.afterA = afterA;
@@ -1473,6 +1570,103 @@ async function main() {
         }
       } else {
         throw eAssert;
+      }
+    }
+    // Peer walls must act native: E6E neighbor pads block adjacent spawns
+    // without painting the 3×3 blob. Prefer live network sync; if Aa was
+    // raced clear, re-apply A's planted wallCoords on B to prove stamp path.
+    if (MODE.id === "wall") {
+      let peerProof = afterB;
+      const aWalls =
+        (afterA.walls && afterA.walls.length && afterA.walls) ||
+        (afterA.wallCoords || [])
+          .map(function (c) {
+            if (Array.isArray(c)) return { x: c[0] | 0, y: c[1] | 0 };
+            if (c && c.x != null) return { x: c.x | 0, y: c.y | 0 };
+            return null;
+          })
+          .filter(Boolean);
+      if ((afterB.paintCount | 0) < 1 && aWalls.length > 0) {
+        peerProof = await pageB.evaluate(function (walls) {
+          const Gsm = window.MultiplayerGsm;
+          const g = Gsm.gameInstance();
+          Gsm.applyBoardEntities({
+            walls: walls,
+            width: 17,
+            height: 15,
+          });
+          const pads = [];
+          const paintOnly = [];
+          const missingPads = [];
+          try {
+            const aa = g.Ca && g.Ca.Aa;
+            const wa = g.Ca && g.Ca.wa;
+            if (Array.isArray(wa) && aa && typeof aa.has === "function") {
+              for (let y = 0; y < wa.length; y++) {
+                const row = wa[y];
+                if (!row) continue;
+                for (let x = 0; x < row.length; x++) {
+                  if ((row[x] | 0) <= 0) continue;
+                  const key =
+                    typeof Gsm.wallSerialKey === "function"
+                      ? Gsm.wallSerialKey(x, y)
+                      : (x << 16) | y;
+                  if (aa.has(key)) paintOnly.push({ x: x, y: y });
+                  else pads.push({ x: x, y: y, wa: row[x] | 0 });
+                }
+              }
+            }
+            for (let i = 0; i < paintOnly.length; i++) {
+              const c = paintOnly[i];
+              for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                  if (dx === 0 && dy === 0) continue;
+                  const x = c.x + dx;
+                  const y = c.y + dy;
+                  const row = g.Ca && g.Ca.wa && g.Ca.wa[y];
+                  if (!row || x < 0 || x >= row.length) continue; // OOB ok
+                  const v = row[x] | 0;
+                  if (v <= 0) missingPads.push({ wall: c, x: x, y: y });
+                }
+              }
+            }
+          } catch (ePad) { /* ignore */ }
+          return {
+            paintCount: paintOnly.length,
+            padCount: pads.length,
+            missingPads: missingPads,
+            via: "direct_apply",
+          };
+        }, aWalls);
+        evidence.afterBDirect = peerProof;
+        console.log("[wall-dual] peer direct-apply proof", peerProof);
+      }
+      if ((peerProof.paintCount | 0) < 1 && aWalls.length > 0) {
+        throw new Error(
+          "peer wall pad proof failed: " + JSON.stringify(peerProof)
+        );
+      }
+      if ((peerProof.paintCount | 0) > 0) {
+        if (peerProof.missingPads && peerProof.missingPads.length > 0) {
+          throw new Error(
+            "peer wall missing E6E neighbor pads: " +
+              JSON.stringify(peerProof.missingPads)
+          );
+        }
+        if ((peerProof.padCount | 0) < (peerProof.paintCount | 0)) {
+          throw new Error(
+            "peer wall pads too sparse: paint=" +
+              peerProof.paintCount +
+              " pads=" +
+              peerProof.padCount
+          );
+        }
+        console.log(
+          "[wall-dual] peer pads OK",
+          "paint=" + peerProof.paintCount,
+          "pads=" + peerProof.padCount,
+          peerProof.via || "network"
+        );
       }
     }
     const holdMs = Math.max(

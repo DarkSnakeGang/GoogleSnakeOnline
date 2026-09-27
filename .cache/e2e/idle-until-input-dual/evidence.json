@@ -1,16 +1,17 @@
 {
-  "built": "2026-09-22T08:50:52.533Z",
-  "wsUrl": "wss://127.0.0.1:63483/ws",
-  "holdMs": 3500,
+  "built": "2026-09-22T10:50:53.453Z",
+  "wsUrl": "wss://127.0.0.1:59686/ws",
+  "holdMs": 2500,
   "steps": [
     "mod_loaded",
     "joined",
     "session_start",
     "idle_hold_ok",
     "a_key_peer_still_idle",
-    "b_key_ok"
+    "b_key_ok",
+    "no_false_peer_death"
   ],
-  "roomCode": "5URB",
+  "roomCode": "GFX8",
   "t0": {
     "a": {
       "hasGame": true,
@@ -41,7 +42,7 @@
       "localDead": false,
       "playerMoved": false,
       "tkPlaying": false,
-      "built": "2026-09-22T08:50:52.533Z"
+      "built": "2026-09-22T10:50:53.453Z"
     },
     "b": {
       "hasGame": true,
@@ -72,7 +73,7 @@
       "localDead": false,
       "playerMoved": false,
       "tkPlaying": false,
-      "built": "2026-09-22T08:50:52.533Z"
+      "built": "2026-09-22T10:50:53.453Z"
     }
   },
   "holdSamples": [
@@ -107,7 +108,7 @@
         "localDead": false,
         "playerMoved": false,
         "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
+        "built": "2026-09-22T10:50:53.453Z"
       },
       "b": {
         "hasGame": true,
@@ -138,7 +139,7 @@
         "localDead": false,
         "playerMoved": false,
         "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
+        "built": "2026-09-22T10:50:53.453Z"
       }
     },
     {
@@ -172,7 +173,7 @@
         "localDead": false,
         "playerMoved": false,
         "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
+        "built": "2026-09-22T10:50:53.453Z"
       },
       "b": {
         "hasGame": true,
@@ -203,7 +204,7 @@
         "localDead": false,
         "playerMoved": false,
         "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
+        "built": "2026-09-22T10:50:53.453Z"
       }
     },
     {
@@ -237,7 +238,7 @@
         "localDead": false,
         "playerMoved": false,
         "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
+        "built": "2026-09-22T10:50:53.453Z"
       },
       "b": {
         "hasGame": true,
@@ -268,7 +269,7 @@
         "localDead": false,
         "playerMoved": false,
         "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
+        "built": "2026-09-22T10:50:53.453Z"
       }
     },
     {
@@ -302,7 +303,7 @@
         "localDead": false,
         "playerMoved": false,
         "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
+        "built": "2026-09-22T10:50:53.453Z"
       },
       "b": {
         "hasGame": true,
@@ -333,7 +334,7 @@
         "localDead": false,
         "playerMoved": false,
         "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
+        "built": "2026-09-22T10:50:53.453Z"
       }
     },
     {
@@ -367,7 +368,7 @@
         "localDead": false,
         "playerMoved": false,
         "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
+        "built": "2026-09-22T10:50:53.453Z"
       },
       "b": {
         "hasGame": true,
@@ -398,137 +399,7 @@
         "localDead": false,
         "playerMoved": false,
         "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
-      }
-    },
-    {
-      "i": 5,
-      "a": {
-        "hasGame": true,
-        "head": {
-          "x": 5,
-          "y": 3
-        },
-        "body": [
-          {
-            "x": 5,
-            "y": 3
-          },
-          {
-            "x": 4,
-            "y": 3
-          },
-          {
-            "x": 3,
-            "y": 3
-          }
-        ],
-        "direction": "NONE",
-        "Ca": "RIGHT",
-        "Ga": "NONE",
-        "crawlFacing": null,
-        "hasCrawl": false,
-        "nj": false,
-        "localDead": false,
-        "playerMoved": false,
-        "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
-      },
-      "b": {
-        "hasGame": true,
-        "head": {
-          "x": 5,
-          "y": 5
-        },
-        "body": [
-          {
-            "x": 5,
-            "y": 5
-          },
-          {
-            "x": 4,
-            "y": 5
-          },
-          {
-            "x": 3,
-            "y": 5
-          }
-        ],
-        "direction": "NONE",
-        "Ca": "RIGHT",
-        "Ga": "NONE",
-        "crawlFacing": null,
-        "hasCrawl": false,
-        "nj": false,
-        "localDead": false,
-        "playerMoved": false,
-        "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
-      }
-    },
-    {
-      "i": 6,
-      "a": {
-        "hasGame": true,
-        "head": {
-          "x": 5,
-          "y": 3
-        },
-        "body": [
-          {
-            "x": 5,
-            "y": 3
-          },
-          {
-            "x": 4,
-            "y": 3
-          },
-          {
-            "x": 3,
-            "y": 3
-          }
-        ],
-        "direction": "NONE",
-        "Ca": "RIGHT",
-        "Ga": "NONE",
-        "crawlFacing": null,
-        "hasCrawl": false,
-        "nj": false,
-        "localDead": false,
-        "playerMoved": false,
-        "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
-      },
-      "b": {
-        "hasGame": true,
-        "head": {
-          "x": 5,
-          "y": 5
-        },
-        "body": [
-          {
-            "x": 5,
-            "y": 5
-          },
-          {
-            "x": 4,
-            "y": 5
-          },
-          {
-            "x": 3,
-            "y": 5
-          }
-        ],
-        "direction": "NONE",
-        "Ca": "RIGHT",
-        "Ga": "NONE",
-        "crawlFacing": null,
-        "hasCrawl": false,
-        "nj": false,
-        "localDead": false,
-        "playerMoved": false,
-        "tkPlaying": false,
-        "built": "2026-09-22T08:50:52.533Z"
+        "built": "2026-09-22T10:50:53.453Z"
       }
     }
   ],
@@ -562,7 +433,7 @@
       "localDead": false,
       "playerMoved": false,
       "tkPlaying": false,
-      "built": "2026-09-22T08:50:52.533Z"
+      "built": "2026-09-22T10:50:53.453Z"
     },
     "b": {
       "hasGame": true,
@@ -593,7 +464,7 @@
       "localDead": false,
       "playerMoved": false,
       "tkPlaying": false,
-      "built": "2026-09-22T08:50:52.533Z"
+      "built": "2026-09-22T10:50:53.453Z"
     }
   },
   "t2_afterAKey": {
@@ -626,7 +497,7 @@
       "localDead": false,
       "playerMoved": true,
       "tkPlaying": false,
-      "built": "2026-09-22T08:50:52.533Z"
+      "built": "2026-09-22T10:50:53.453Z"
     },
     "b": {
       "hasGame": true,
@@ -657,7 +528,7 @@
       "localDead": false,
       "playerMoved": false,
       "tkPlaying": true,
-      "built": "2026-09-22T08:50:52.533Z"
+      "built": "2026-09-22T10:50:53.453Z"
     }
   },
   "t3_afterBKey": {
@@ -690,7 +561,7 @@
       "localDead": false,
       "playerMoved": false,
       "tkPlaying": false,
-      "built": "2026-09-22T08:50:52.533Z"
+      "built": "2026-09-22T10:50:53.453Z"
     },
     "b": {
       "hasGame": true,
@@ -721,10 +592,24 @@
       "localDead": false,
       "playerMoved": false,
       "tkPlaying": false,
-      "built": "2026-09-22T08:50:52.533Z"
+      "built": "2026-09-22T10:50:53.453Z"
     }
   },
   "errsA": [],
   "errsB": [],
+  "deathSnap": {
+    "a": {
+      "nj": true,
+      "deadSent": false,
+      "paintDepth": 0,
+      "peers": []
+    },
+    "b": {
+      "nj": true,
+      "deadSent": false,
+      "paintDepth": 0,
+      "peers": []
+    }
+  },
   "ok": true
 }

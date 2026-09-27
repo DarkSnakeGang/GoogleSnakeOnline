@@ -4037,22 +4037,31 @@
     // Never send alive:false from a false scrape — peers would show a dead
     // native-peer while this player is still alive.
     if (delta.alive === false && !this._coopDeadSent) {
-      const g =
-        Gsm.gameInstance && typeof Gsm.gameInstance === "function"
-          ? Gsm.gameInstance()
-          : null;
-      const nativeDead = !!(
-        g &&
-        (g.nj === true ||
-          g.dead === true ||
-          g.isDead === true ||
-          (g.oa && (g.oa.nj === true || g.oa.dead === true)))
-      );
-      if (!nativeDead) {
+      // Peer paint temporarily sets game.nj for corpse die faces — never
+      // treat that as a local death announcement.
+      if (typeof window !== "undefined" && window.__mpPeerPaintDepth > 0) {
         if (typeof this._logCoopDeath === "function") {
           this._logCoopDeath("scrape_alive_false_ignored");
         }
         delta.alive = true;
+      } else {
+        const g =
+          Gsm.gameInstance && typeof Gsm.gameInstance === "function"
+            ? Gsm.gameInstance()
+            : null;
+        const nativeDead = !!(
+          g &&
+          (g.nj === true ||
+            g.dead === true ||
+            g.isDead === true ||
+            (g.oa && (g.oa.nj === true || g.oa.dead === true)))
+        );
+        if (!nativeDead) {
+          if (typeof this._logCoopDeath === "function") {
+            this._logCoopDeath("scrape_alive_false_ignored");
+          }
+          delta.alive = true;
+        }
       }
     }
 
@@ -4060,6 +4069,10 @@
     this.client.snakeDelta(delta);
     if (typeof this.refreshCoopScores === "function") this.refreshCoopScores();
     if (delta.alive === false && !this._coopDeadSent) {
+      if (typeof window !== "undefined" && window.__mpPeerPaintDepth > 0) {
+        this._logCoopDeath("scrape_alive_false_ignored");
+        return;
+      }
       // Confirmed native death — announce so peers sticky-kill this seat.
       const g =
         Gsm.gameInstance && typeof Gsm.gameInstance === "function"

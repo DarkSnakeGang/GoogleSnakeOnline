@@ -1,12 +1,12 @@
 {
-  "built": "2026-09-22T08:50:52.533Z",
-  "wsUrl": "wss://127.0.0.1:52301/ws",
+  "built": "2026-09-22T10:50:53.453Z",
+  "wsUrl": "wss://127.0.0.1:51017/ws",
   "steps": [
     "mod_loaded",
     "joined",
     "session_start"
   ],
-  "roomCode": "2T6Q",
+  "roomCode": "C7BX",
   "wallTrophy": {
     "index": 1,
     "via": "cliMode",
@@ -139,39 +139,20 @@
     },
     {
       "fruitLen": 1,
-      "bodyLen": 3,
-      "head": {
-        "x": 5,
-        "y": 3
-      },
-      "apple": {
-        "x": 7,
-        "y": 4
-      },
-      "wallCount": 0,
-      "wallCoords": [],
-      "nj": false,
-      "Sh": 0,
-      "keyCount": 0,
-      "boxCount": 0,
-      "aaSize": 0
-    },
-    {
-      "fruitLen": 1,
       "bodyLen": 4,
       "head": {
         "x": 8,
         "y": 4
       },
       "apple": {
-        "x": 1,
-        "y": 5
+        "x": 3,
+        "y": 2
       },
-      "wallCount": 0,
+      "wallCount": 1,
       "wallCoords": [
         [
           1,
-          8
+          1
         ]
       ],
       "nj": true,
@@ -189,14 +170,14 @@
       "y": 4
     },
     "apple": {
-      "x": 1,
-      "y": 5
+      "x": 3,
+      "y": 2
     },
-    "wallCount": 0,
+    "wallCount": 1,
     "wallCoords": [
       [
         1,
-        8
+        1
       ]
     ],
     "nj": true,
@@ -208,8 +189,14 @@
   "ateProof": true,
   "afterA": {
     "modeKey": "wall",
-    "wallCount": 0,
-    "walls": [],
+    "wallCount": 1,
+    "walls": [
+      {
+        "x": 1,
+        "y": 1,
+        "lockType": null
+      }
+    ],
     "fruitLen": 1,
     "bodyLen": 4,
     "nj": true,
@@ -218,7 +205,7 @@
     "wallCoords": [
       [
         1,
-        8
+        1
       ]
     ],
     "Sh": 1
@@ -226,7 +213,11 @@
   "afterB": {
     "wallCount": 0,
     "walls": [],
-    "nj": false
+    "nj": false,
+    "padCount": 0,
+    "paintCount": 0,
+    "missingPads": [],
+    "samplePads": []
   },
   "errsA": [],
   "errsB": []

@@ -645,6 +645,78 @@ async function main() {
 
     evidence.errsA = errsA;
     evidence.errsB = errsB;
+
+    // False peer death: remotes must stay alive without COOP_PLAYER_DEAD sticky
+    const deathSnap = await Promise.all([
+      pageA.evaluate(function () {
+        const remotes = window.__mpCoopRemotes || {};
+        const ids = Object.keys(remotes);
+        const peers = ids.map(function (id) {
+          const r = remotes[id];
+          return {
+            id: id,
+            alive: r && r.alive !== false,
+            sticky: !!(r && r._deadSticky),
+            bodyLen: r && r.body ? r.body.length : 0,
+          };
+        });
+        return {
+          nj: !!(window.__mpGame && window.__mpGame.nj),
+          deadSent: !!(
+            window.__multiplayerApp && window.__multiplayerApp._coopDeadSent
+          ),
+          paintDepth: window.__mpPeerPaintDepth | 0,
+          peers: peers,
+        };
+      }),
+      pageB.evaluate(function () {
+        const remotes = window.__mpCoopRemotes || {};
+        const ids = Object.keys(remotes);
+        const peers = ids.map(function (id) {
+          const r = remotes[id];
+          return {
+            id: id,
+            alive: r && r.alive !== false,
+            sticky: !!(r && r._deadSticky),
+            bodyLen: r && r.body ? r.body.length : 0,
+          };
+        });
+        return {
+          nj: !!(window.__mpGame && window.__mpGame.nj),
+          deadSent: !!(
+            window.__multiplayerApp && window.__multiplayerApp._coopDeadSent
+          ),
+          paintDepth: window.__mpPeerPaintDepth | 0,
+          peers: peers,
+        };
+      }),
+    ]);
+    evidence.deathSnap = { a: deathSnap[0], b: deathSnap[1] };
+    for (let side = 0; side < 2; side++) {
+      const s = deathSnap[side];
+      const label = side === 0 ? "A" : "B";
+      if (s.deadSent) {
+        // Only fail if the peer still looks alive — real collisions may die.
+        const peerAlive = s.peers.some(function (p) {
+          return p.alive && !p.sticky;
+        });
+        if (!peerAlive && s.peers.length) {
+          /* local death with dead peers is fine */
+        }
+      }
+      for (let pi = 0; pi < s.peers.length; pi++) {
+        const p = s.peers[pi];
+        if (p.sticky || !p.alive) {
+          throw new Error(
+            label +
+              " sees false peer death without COOP_PLAYER_DEAD: " +
+              JSON.stringify(p)
+          );
+        }
+      }
+    }
+    evidence.steps.push("no_false_peer_death");
+
     evidence.ok = true;
     fs.writeFileSync(path.join(DUMP, "evidence.json"), JSON.stringify(evidence, null, 2));
     console.log("[idle-live] OK — dumps", DUMP);

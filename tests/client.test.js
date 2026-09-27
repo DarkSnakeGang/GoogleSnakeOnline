@@ -1228,6 +1228,21 @@ describe("coop native inject bridge", () => {
     );
     assert.equal(cn.remotes.p2._deadSticky, undefined);
     assert.equal(cn.remotes.p2.body[0].x, 6);
+
+    // Orphan alive:false (no sticky) must heal on the next delta
+    cn.remotes.p2.alive = false;
+    cn.applySnakeDelta({
+      clientId: "p2",
+      body: [
+        { x: 7, y: 5 },
+        { x: 6, y: 5 },
+      ],
+    });
+    assert.equal(
+      cn.remotes.p2.alive,
+      true,
+      "orphan alive:false without sticky must heal"
+    );
   });
 
   it("sticky COOP_PLAYER_DEAD keeps peer dead across later live scrapes", () => {
@@ -1341,12 +1356,16 @@ describe("coop native inject bridge", () => {
     });
     cn.applySnakeDelta({
       clientId: "dead",
-      alive: false,
+      alive: true,
       body: [
         { x: 9, y: 9 },
         { x: 8, y: 9 },
       ],
     });
+    // Authoritative corpse (COOP_PLAYER_DEAD sticky) — SNAKE_DELTA alone
+    // must not invent death, but sticky corpses still block spawns.
+    cn.remotes.dead.alive = false;
+    cn.remotes.dead._deadSticky = true;
     assert.equal(cn.isOccupied(2, 2), true);
     assert.equal(cn.isOccupied(9, 9), true);
     assert.equal(cn.isOccupied(0, 0), false);
@@ -1368,16 +1387,23 @@ describe("coop native inject bridge", () => {
       oa: { ka: [{ x: 0, y: 0 }], oa: { width: 17, height: 15 } },
       Tb: function () {
         n++;
-        // First few picks land on live head, then free
+        // Wall-mode picks (arg===5) still call through; fruit picks use the pool.
         if (n < 3) return { x: 3, y: 2 };
-        return { x: 5, y: 5 };
+        return { x: 12, y: 4 };
       },
     };
     global.__mpCoopInject = true;
     global.__mpCoopSession = true;
     global.__mpCoopOnTick(game);
-    const pos = game.Tb();
-    assert.deepEqual(pos, { x: 5, y: 5 });
+    // Fruit freePos ignores the mock and rolls a pool cell off remotes.
+    const fruitPos = game.Tb();
+    assert.ok(fruitPos && fruitPos.x != null, "fruit freePos returns a cell");
+    assert.equal(cn.isOccupied(fruitPos.x, fruitPos.y), false);
+    // Wall pick still rejects remote-occupied cells from the mock.
+    const wallPos = game.Tb(null, 5);
+    assert.ok(wallPos && wallPos.x != null, "wall freePos returns a cell");
+    assert.equal(cn.isOccupied(wallPos.x, wallPos.y), false);
+    assert.notEqual(wallPos.x + "," + wallPos.y, "3,2");
 
     // Remix chess_occupied_keys merges co-op cells
     global.chess_occupied_keys = function () {
@@ -1718,6 +1744,7 @@ describe("versus instant death reset", () => {
   it("reasserts coop spawn after native overwrites body", () => {
     const MultiplayerApp = loadApp();
     const Gsm = global.MultiplayerGsm;
+    delete global.__mpCoopRemotes;
     const game = {
       oa: {
         ka: [
@@ -1727,6 +1754,7 @@ describe("versus instant death reset", () => {
         ],
       },
       wa: { oa: { oa: { width: 17, height: 15 } } },
+      Ca: { wa: null, Aa: null },
     };
     global.__remixGame = game;
     global.__mpGame = game;
@@ -1754,6 +1782,7 @@ describe("versus instant death reset", () => {
   it("trySeatCoopOnce seats once when live, skips without slot", () => {
     const MultiplayerApp = loadApp();
     const Gsm = global.MultiplayerGsm;
+    delete global.__mpCoopRemotes;
     const game = {
       oa: {
         ka: [
@@ -1763,6 +1792,7 @@ describe("versus instant death reset", () => {
         ],
       },
       wa: { oa: { oa: { width: 17, height: 15 } } },
+      Ca: { wa: null, Aa: null },
     };
     global.__remixGame = game;
     global.__mpGame = game;
@@ -1811,6 +1841,8 @@ describe("versus instant death reset", () => {
 
   it("publishCoopState skips unchanged pose and stops after SESSION_END", () => {
     const MultiplayerApp = loadApp();
+    delete global.__mpPeerPaintDepth;
+    delete global.__mpCoopRemotes;
     global.__remixGame = {
       oa: {
         ka: [
@@ -1819,6 +1851,7 @@ describe("versus instant death reset", () => {
         ],
         direction: "RIGHT",
       },
+      nj: false,
     };
     global.__mpGame = global.__remixGame;
     const sent = [];
@@ -1849,6 +1882,9 @@ describe("versus instant death reset", () => {
       coopPlayerDead: function () {},
     };
     app.coopNative = { applySnakeDelta: function () {} };
+    app._coopLocalHasMoved = function () {
+      return false;
+    };
     app.publishCoopState({ forceColors: true, seated: true });
     assert.equal(sent.length, 1);
     app.publishCoopState();

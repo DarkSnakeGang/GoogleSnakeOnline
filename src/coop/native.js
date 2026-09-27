@@ -109,9 +109,10 @@
       if (prev._deadSticky) {
         keep.alive = false;
         keep._deadSticky = true;
-      } else if (payload.alive === false) {
-        keep.alive = prev.alive !== false;
+      } else {
         delete keep._deadSticky;
+        // SNAKE_DELTA alone never kills — only COOP_PLAYER_DEAD sticks.
+        if (keep.alive === false) keep.alive = true;
       }
       this.remotes[payload.clientId] = keep;
       this.syncBridge();
@@ -159,12 +160,13 @@
     if (payload._lerpStepMs != null) next._lerpStepMs = payload._lerpStepMs;
     // Death is client-authoritative via COOP_PLAYER_DEAD (_deadSticky) only.
     // Transient SNAKE_DELTA alive:false must not kill a peer who is still playing.
+    // Also heal any orphan alive:false that arrived without sticky (old bug).
     if (prev && prev._deadSticky) {
       next.alive = false;
       next._deadSticky = true;
-    } else if (payload.alive === false) {
-      next.alive = prev && prev.alive === false ? false : true;
+    } else {
       delete next._deadSticky;
+      if (next.alive === false) next.alive = true;
     }
     // Never drop a corpse body when a dead/empty scrape arrives: a co-op corpse
     // stays exactly where it died and keeps colliding.
@@ -2645,6 +2647,30 @@
     const game = renderer.wb || root.__mpGame || root.__remixGame;
     const localSnake = game && game.oa;
     if (!game || !localSnake || !bodyIsRenderable(body)) return false;
+    // J5E die faces key off game.nj — we temporarily flip it during peer
+    // paint. Block scrape→COOP_PLAYER_DEAD from treating that as local death.
+    root.__mpPeerPaintDepth = (root.__mpPeerPaintDepth | 0) + 1;
+    try {
+      return renderPeerPassInner(
+        state,
+        renderer,
+        origRender,
+        args,
+        remote,
+        body,
+        seat,
+        suffix,
+        targetCtx,
+        passOpts,
+        game,
+        localSnake
+      );
+    } finally {
+      root.__mpPeerPaintDepth = Math.max(0, (root.__mpPeerPaintDepth | 0) - 1);
+    }
+  }
+
+  function renderPeerPassInner(state, renderer, origRender, args, remote, body, seat, suffix, targetCtx, passOpts, game, localSnake) {
     const peerAlive = remote.alive !== false;
     const built = buildPeerSnake(
       suffix ? seat.body2Cache : seat.bodyCache,

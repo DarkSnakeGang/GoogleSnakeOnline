@@ -442,8 +442,8 @@ describe("co-op wall eat: eater authority + no crash (evidence)", () => {
     });
 
     assert.equal(
-      peer.Ca.wa[eaterChosen.y][eaterChosen.x],
-      1,
+      peer.Ca.wa[eaterChosen.y][eaterChosen.x] >= 1,
+      true,
       "peer solid matches eater placement"
     );
     assert.equal(
@@ -452,20 +452,95 @@ describe("co-op wall eat: eater authority + no crash (evidence)", () => {
       "peer Aa has eater cell"
     );
     assert.equal(
-      peer.Ca.wa[2][2],
-      1,
+      peer.Ca.wa[2][2] >= 1,
+      true,
       "peer also has eater's earlier wall"
     );
-    // Stale peer-only wall cleared when eater's list replaced Aa/wa.
+    // Stale painted wall at 1,1 must leave Aa — but (1,1) is a neighbor pad of
+    // eater wall (2,2), so wa may stay >0 (native E6E occupancy).
     assert.equal(
-      peer.Ca.wa[1][1] | 0,
-      0,
-      "peer dropped wall the eater did not publish"
+      peer.Ca.Aa.has(Gsm.wallSerialKey(1, 1)),
+      false,
+      "peer dropped painted wall the eater did not publish"
+    );
+    assert.equal(
+      wallKeys(Gsm.scrapeBoardEntities(peer).walls).indexOf("1,1"),
+      -1,
+      "peer scrape must not republish pad/stale 1,1 as a wall"
     );
     assert.deepEqual(
       wallKeys(Gsm.scrapeBoardEntities(peer).walls),
       wallKeys(payload.walls),
       "peer scrape equals eater scrape after apply"
+    );
+  });
+
+  it("peer apply stamps E6E neighbor pads (block adjacent spawn, paint 1x1)", () => {
+    const eater = makeWallGame({ aa: null });
+    const peer = makeWallGame({ aa: null });
+    const cx = 8;
+    const cy = 7;
+
+    win.__remixGame = eater;
+    win.__mpGame = eater;
+    Gsm.ensureNativeWallMap(eater.Ca);
+    simulateNativeWallGrowP6E(eater, cx, cy);
+    // Full native E6E neighbor bumps (unit grow helper only sets center)
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const x = cx + dx;
+        const y = cy + dy;
+        if (y >= 0 && y < 15 && x >= 0 && x < 17) {
+          eater.Ca.wa[y][x] = (eater.Ca.wa[y][x] | 0) + 1;
+        }
+      }
+    }
+
+    const payload = Gsm.scrapeBoardEntities(eater);
+    assert.equal(payload.walls.length, 1, "scrape is paint-only (Aa)");
+    assert.equal(payload.walls[0].x, cx);
+    assert.equal(payload.walls[0].y, cy);
+
+    win.__remixGame = peer;
+    win.__mpGame = peer;
+    Gsm.applyBoardEntities({
+      walls: payload.walls,
+      width: 17,
+      height: 15,
+    });
+
+    assert.equal(peer.Ca.Aa.size, 1, "peer paints one wall");
+    assert.equal(peer.Ca.Aa.has(Gsm.wallSerialKey(cx, cy)), true);
+    assert.ok(peer.Ca.wa[cy][cx] >= 1, "center solid");
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const x = cx + dx;
+        const y = cy + dy;
+        assert.ok(
+          peer.Ca.wa[y][x] >= 1,
+          "pad at " + x + "," + y + " blocks adjacent wall spawn"
+        );
+        assert.equal(
+          peer.Ca.Aa.has(Gsm.wallSerialKey(x, y)),
+          false,
+          "pad " + x + "," + y + " must not be painted"
+        );
+      }
+    }
+    // p6E occupancy: wa>0 cells are rejected
+    const occ = new Set();
+    for (let y = 0; y < 15; y++) {
+      for (let x = 0; x < 17; x++) {
+        if ((peer.Ca.wa[y][x] | 0) > 0) occ.add((x << 16) | y);
+      }
+    }
+    assert.ok(occ.has(((cx + 1) << 16) | cy), "p6E would see east neighbor");
+    assert.equal(
+      wallKeys(Gsm.scrapeBoardEntities(peer).walls).length,
+      1,
+      "peer must not republish pads as walls"
     );
   });
 

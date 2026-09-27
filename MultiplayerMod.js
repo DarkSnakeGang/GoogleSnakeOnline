@@ -1,10 +1,10 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-22T08:50:52.533Z */
+/* Built: 2026-09-22T10:50:53.453Z */
 
 window.__MP_MOD_VERSION="13";
 
-window.__MP_MOD_BUILT="2026-09-22T08:50:52.533Z";
+window.__MP_MOD_BUILT="2026-09-22T10:50:53.453Z";
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -37477,9 +37477,10 @@ window.RemixMod.runCodeAfter = function () {
       if (prev._deadSticky) {
         keep.alive = false;
         keep._deadSticky = true;
-      } else if (payload.alive === false) {
-        keep.alive = prev.alive !== false;
+      } else {
         delete keep._deadSticky;
+        // SNAKE_DELTA alone never kills — only COOP_PLAYER_DEAD sticks.
+        if (keep.alive === false) keep.alive = true;
       }
       this.remotes[payload.clientId] = keep;
       this.syncBridge();
@@ -37527,12 +37528,13 @@ window.RemixMod.runCodeAfter = function () {
     if (payload._lerpStepMs != null) next._lerpStepMs = payload._lerpStepMs;
     // Death is client-authoritative via COOP_PLAYER_DEAD (_deadSticky) only.
     // Transient SNAKE_DELTA alive:false must not kill a peer who is still playing.
+    // Also heal any orphan alive:false that arrived without sticky (old bug).
     if (prev && prev._deadSticky) {
       next.alive = false;
       next._deadSticky = true;
-    } else if (payload.alive === false) {
-      next.alive = prev && prev.alive === false ? false : true;
+    } else {
       delete next._deadSticky;
+      if (next.alive === false) next.alive = true;
     }
     // Never drop a corpse body when a dead/empty scrape arrives: a co-op corpse
     // stays exactly where it died and keeps colliding.
@@ -40013,6 +40015,30 @@ window.RemixMod.runCodeAfter = function () {
     const game = renderer.wb || root.__mpGame || root.__remixGame;
     const localSnake = game && game.oa;
     if (!game || !localSnake || !bodyIsRenderable(body)) return false;
+    // J5E die faces key off game.nj — we temporarily flip it during peer
+    // paint. Block scrape→COOP_PLAYER_DEAD from treating that as local death.
+    root.__mpPeerPaintDepth = (root.__mpPeerPaintDepth | 0) + 1;
+    try {
+      return renderPeerPassInner(
+        state,
+        renderer,
+        origRender,
+        args,
+        remote,
+        body,
+        seat,
+        suffix,
+        targetCtx,
+        passOpts,
+        game,
+        localSnake
+      );
+    } finally {
+      root.__mpPeerPaintDepth = Math.max(0, (root.__mpPeerPaintDepth | 0) - 1);
+    }
+  }
+
+  function renderPeerPassInner(state, renderer, origRender, args, remote, body, seat, suffix, targetCtx, passOpts, game, localSnake) {
     const peerAlive = remote.alive !== false;
     const built = buildPeerSnake(
       suffix ? seat.body2Cache : seat.bodyCache,
@@ -44196,7 +44222,10 @@ window.RemixMod.runCodeAfter = function () {
     let timeMs = 0;
     if (g) {
       score = firstNumber(g.Sh, g.Oh, g.score, g.appleCount) | 0;
-      if (g.nj || g.dead || g.isDead) alive = false;
+      // Ignore nj/dead while peer paint temporarily flips game.nj for die faces
+      if (!(root.__mpPeerPaintDepth > 0) && (g.nj || g.dead || g.isDead)) {
+        alive = false;
+      }
     }
     if (root.timeKeeper) {
       // Co-op blocks TK gotApple sampling, so _lastScore can stick at 0 while
@@ -44905,6 +44934,113 @@ window.RemixMod.runCodeAfter = function () {
   }
 
   /**
+   * Mirror native E6E occupancy after a wall plant: bump center + 8 neighbors
+   * (and non-borderless edge extras). Pads make p6E refuse adjacent wall
+   * spawns. Callers must put painted walls in Aa separately — pads are wa-only.
+   *
+   * Full rebuild from `list` (zero non-sentinel cells first) so re-apply is
+   * idempotent and never double-counts pads.
+   */
+  function stampNativeWallOccupancyFromList(wallHost, list, opts) {
+    opts = opts || {};
+    if (!wallHost || !Array.isArray(list)) return false;
+    ensureWallGridDense(
+      wallHost,
+      wallHost.wa && wallHost.wa[0] && wallHost.wa[0].length,
+      wallHost.wa && wallHost.wa.length
+    );
+    const dense = wallHost.wa;
+    if (!Array.isArray(dense) || !dense.length || !Array.isArray(dense[0])) {
+      return false;
+    }
+    const h = dense.length;
+    const w = dense[0].length;
+    const borderless = !!opts.borderless;
+
+    for (let y = 0; y < h; y++) {
+      const row = dense[y];
+      if (!row) continue;
+      for (let x = 0; x < w; x++) {
+        if (typeof row[x] === "object" && row[x]) continue;
+        const v = row[x] | 0;
+        // Keep corner sentinels (2). Wipe plant pads / solids for rebuild.
+        if (v === 2) continue;
+        row[x] = 0;
+      }
+    }
+
+    function bump(x, y) {
+      let xx = x | 0;
+      let yy = y | 0;
+      if (borderless) {
+        if (xx < 0) xx += w;
+        else if (xx >= w) xx -= w;
+        if (yy < 0) yy += h;
+        else if (yy >= h) yy -= h;
+      }
+      if (yy < 0 || yy >= h || xx < 0 || xx >= w) return;
+      const row = dense[yy];
+      if (!row) return;
+      if (typeof row[xx] === "object" && row[xx]) return;
+      // Do not overwrite corner sentinels
+      if ((row[xx] | 0) === 2) return;
+      row[xx] = (row[xx] | 0) + 1;
+    }
+
+    const N8 = [
+      [-1, -1],
+      [0, -1],
+      [1, -1],
+      [-1, 0],
+      [1, 0],
+      [-1, 1],
+      [0, 1],
+      [1, 1],
+    ];
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      if (!p || p.x == null || p.y == null) continue;
+      const bx = p.x | 0;
+      const by = p.y | 0;
+      bump(bx, by);
+      for (let n = 0; n < N8.length; n++) {
+        bump(bx + N8[n][0], by + N8[n][1]);
+      }
+      if (!borderless) {
+        // E6E edge extras (non-wrap boards)
+        if (bx === 0 || bx === w - 1) {
+          if (by - 2 >= 0) bump(bx, by - 2);
+          if (by + 2 <= h - 1) bump(bx, by + 2);
+        }
+        if (by === 0 || by === h - 1) {
+          if (bx - 2 >= 0) bump(bx - 2, by);
+          if (bx + 2 <= w - 1) bump(bx + 2, by);
+        }
+        if ((bx === 0 && by === 2) || (bx === 2 && by === 0)) {
+          bump(0, 2);
+          bump(2, 0);
+        }
+        if ((bx === w - 3 && by === 0) || (bx === w - 1 && by === 2)) {
+          bump(w - 3, 0);
+          bump(w - 1, 2);
+        }
+        if ((bx === 0 && by === h - 3) || (bx === 2 && by === h - 1)) {
+          bump(0, h - 3);
+          bump(2, h - 1);
+        }
+        if (
+          (bx === w - 3 && by === h - 1) ||
+          (bx === w - 1 && by === h - 3)
+        ) {
+          bump(w - 3, h - 1);
+          bump(w - 1, h - 3);
+        }
+      }
+    }
+    return true;
+  }
+
+  /**
    * Dimension / segment flags (`snake.wa`) stay parallel to `snake.ka`.
    * After apple growth, a missing or short flags array → tick `wa[0]` crash.
    */
@@ -44972,9 +45108,9 @@ window.RemixMod.runCodeAfter = function () {
   }
 
   /**
-   * Real walls live on Ca.Aa (Map keyed by wallSerialKey). Ca.wa also holds
-   * corner sentinel markers (value 2) that must never ship as walls — merging
-   * them used to stamp huge wrong solids on every co-op client.
+   * Real walls live on Ca.Aa (Map keyed by wallSerialKey). Native E6E also
+   * wa++'s the 8 neighbors as occupancy pads — those must NOT ship as walls
+   * or peers paint a 3×3 block. Ca.wa corner sentinels (value 2) stay local.
    */
   function scrapeWalls(g) {
     const out = [];
@@ -45027,6 +45163,7 @@ window.RemixMod.runCodeAfter = function () {
           byKey[key] = p;
         }
       }
+      let aaCount = 0;
       try {
         const aa = wallHost.Aa;
         if (aa && typeof aa.forEach === "function") {
@@ -45042,6 +45179,7 @@ window.RemixMod.runCodeAfter = function () {
               pos = { x: key >> 16, y: key & 65535 };
             }
             if (!pos || pos.x == null || pos.y == null) return;
+            aaCount++;
             const lockType =
               w && w.yNa != null && Number(w.yNa) >= 0
                 ? Math.max(0, Math.min(23, Number(w.yNa) | 0))
@@ -45059,23 +45197,25 @@ window.RemixMod.runCodeAfter = function () {
           });
         }
       } catch (eAa) { /* ignore */ }
-      // Exact grid solids (value 1) only — never corner sentinels (value 2) or
-      // empty (0/3). Plain walls sometimes exist only on wa; locks live on Aa.
-      try {
-        const wa = wallHost.wa || wallHost.oa;
-        if (Array.isArray(wa) && wa.length && Array.isArray(wa[0])) {
-          for (let y = 0; y < wa.length; y++) {
-            const row = wa[y];
-            if (!row) continue;
-            for (let x = 0; x < row.length; x++) {
-              const cell = row[x];
-              if (typeof cell === "object" && cell) continue;
-              if ((cell | 0) !== 1) continue;
-              addWall({ x: x, y: y });
+      // wa===1 fallback ONLY when Aa is empty. Merging wa while Aa is live
+      // republishes E6E neighbor pads → peers paint a 3×3 (9-cell) blob.
+      if (aaCount === 0) {
+        try {
+          const wa = wallHost.wa || wallHost.oa;
+          if (Array.isArray(wa) && wa.length && Array.isArray(wa[0])) {
+            for (let y = 0; y < wa.length; y++) {
+              const row = wa[y];
+              if (!row) continue;
+              for (let x = 0; x < row.length; x++) {
+                const cell = row[x];
+                if (typeof cell === "object" && cell) continue;
+                if ((cell | 0) !== 1) continue;
+                addWall({ x: x, y: y });
+              }
             }
           }
-        }
-      } catch (eWa) { /* ignore */ }
+        } catch (eWa) { /* ignore */ }
+      }
       const merged = [];
       Object.keys(byKey).forEach(function (k) {
         merged.push(byKey[k]);
@@ -45823,8 +45963,8 @@ window.RemixMod.runCodeAfter = function () {
               });
             } catch (eC) { /* ignore */ }
           }
-          // Match Remix tempWalls / mexico defaults for a plain solid cell
-          if (obj.wm == null) obj.wm = false;
+          // Synced walls are settled solids — never inherit plant-anim wm
+          obj.wm = false;
           if (obj.m0 == null) obj.m0 = false;
           if (obj.Lh == null) obj.Lh = true;
           obj.pos = makeNativePoint(
@@ -45870,31 +46010,15 @@ window.RemixMod.runCodeAfter = function () {
         grid && grid[0] && grid[0].length,
         grid && grid.length
       );
-      const dense = wallHost.wa;
-      if (!Array.isArray(dense) || !dense.length) return;
-      const want = Object.create(null);
-      for (let i = 0; i < list.length; i++) {
-        const p = list[i];
-        if (!p || p.x == null || p.y == null) continue;
-        want[(p.x | 0) + "," + (p.y | 0)] = true;
-      }
-      for (let y = 0; y < dense.length; y++) {
-        const row = dense[y];
-        if (!row) continue;
-        for (let x = 0; x < row.length; x++) {
-          if (typeof row[x] === "object" && row[x]) continue;
-          const key = x + "," + y;
-          const v = row[x] | 0;
-          if (want[key]) {
-            // Plant a normal 1×1 solid; leave higher refcounts alone
-            if (v === 0 || v === 3 || v === 2) row[x] = 1;
-            else if (v < 1) row[x] = 1;
-            continue;
-          }
-          // Only clear our stamped 1s — keep corner sentinels (2) + temp counters
-          if (v === 1) row[x] = 0;
-        }
-      }
+      // Rebuild occupancy like native E6E: center + 8-neighbor pads (and edge
+      // extras). Pads block adjacent wall spawns via p6E but are NOT in Aa, so
+      // paint stays 1×1. Full rebuild so re-apply never double-counts pads.
+      stampNativeWallOccupancyFromList(wallHost, list, {
+        borderless: boardHasMode(
+          { modeKey: scrapeModeKey() },
+          "borderless"
+        ),
+      });
       applied = true;
     }
 
@@ -51507,12 +51631,14 @@ window.RemixMod.runCodeAfter = function () {
     scrapeCollectables: scrapeCollectables,
     collectablesFingerprint: collectablesFingerprint,
     scrapeBoardEntities: scrapeBoardEntities,
+    scrapeWalls: scrapeWalls,
     filterMosaicWalls: filterMosaicWalls,
     isIllegalNormalWallCell: isIllegalNormalWallCell,
     wallSerialKey: wallSerialKey,
     ensureNativeWallMap: ensureNativeWallMap,
     ensureFruitShieldSets: ensureFruitShieldSets,
     ensureWallGridDense: ensureWallGridDense,
+    stampNativeWallOccupancyFromList: stampNativeWallOccupancyFromList,
     ensureSnakeSegmentFlags: ensureSnakeSegmentFlags,
     ensureCoopTickHosts: ensureCoopTickHosts,
     applyCollectables: applyCollectables,
@@ -58635,22 +58761,31 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     // Never send alive:false from a false scrape — peers would show a dead
     // native-peer while this player is still alive.
     if (delta.alive === false && !this._coopDeadSent) {
-      const g =
-        Gsm.gameInstance && typeof Gsm.gameInstance === "function"
-          ? Gsm.gameInstance()
-          : null;
-      const nativeDead = !!(
-        g &&
-        (g.nj === true ||
-          g.dead === true ||
-          g.isDead === true ||
-          (g.oa && (g.oa.nj === true || g.oa.dead === true)))
-      );
-      if (!nativeDead) {
+      // Peer paint temporarily sets game.nj for corpse die faces — never
+      // treat that as a local death announcement.
+      if (typeof window !== "undefined" && window.__mpPeerPaintDepth > 0) {
         if (typeof this._logCoopDeath === "function") {
           this._logCoopDeath("scrape_alive_false_ignored");
         }
         delta.alive = true;
+      } else {
+        const g =
+          Gsm.gameInstance && typeof Gsm.gameInstance === "function"
+            ? Gsm.gameInstance()
+            : null;
+        const nativeDead = !!(
+          g &&
+          (g.nj === true ||
+            g.dead === true ||
+            g.isDead === true ||
+            (g.oa && (g.oa.nj === true || g.oa.dead === true)))
+        );
+        if (!nativeDead) {
+          if (typeof this._logCoopDeath === "function") {
+            this._logCoopDeath("scrape_alive_false_ignored");
+          }
+          delta.alive = true;
+        }
       }
     }
 
@@ -58658,6 +58793,10 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     this.client.snakeDelta(delta);
     if (typeof this.refreshCoopScores === "function") this.refreshCoopScores();
     if (delta.alive === false && !this._coopDeadSent) {
+      if (typeof window !== "undefined" && window.__mpPeerPaintDepth > 0) {
+        this._logCoopDeath("scrape_alive_false_ignored");
+        return;
+      }
       // Confirmed native death — announce so peers sticky-kill this seat.
       const g =
         Gsm.gameInstance && typeof Gsm.gameInstance === "function"
