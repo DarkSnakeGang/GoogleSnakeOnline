@@ -14,6 +14,15 @@
     return e;
   }
 
+  /** Browsers block ws:// from https pages (mixed content), except loopback. */
+  function needsSecureUrlHint(pageProtocol, url) {
+    if (pageProtocol !== "https:") return false;
+    const m = /^ws:\/\/(\[[^\]]*\]|[^/:?#]*)/i.exec(String(url || "").trim());
+    if (!m) return false;
+    const host = m[1].toLowerCase();
+    return !(host === "localhost" || host === "[::1]" || /^127\./.test(host));
+  }
+
   function escapeHtml(s) {
     return String(s == null ? "" : s)
       .replace(/&/g, "&amp;")
@@ -683,8 +692,25 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     const roomField = field("Room code", roomIn);
     roomField.id = "mp-room-code-field";
 
+    const urlHint = el(
+      "div",
+      "mp-url-hint",
+      "HTTPS pages need wss:// — ask the host for the wss:// address"
+    );
+    urlHint.id = "mp-server-url-hint";
+    urlHint.style.cssText = "font-size:0.8em;color:#f0b060;margin:-4px 0 8px;display:none";
+    function refreshUrlHint() {
+      urlHint.style.display = needsSecureUrlHint(root.location && root.location.protocol, urlIn.value)
+        ? ""
+        : "none";
+    }
+    urlIn.addEventListener("input", refreshUrlHint);
+    urlIn.addEventListener("change", refreshUrlHint);
+    refreshUrlHint();
+
     panelControl.appendChild(nameField);
     panelControl.appendChild(urlField);
+    panelControl.appendChild(urlHint);
     panelControl.appendChild(roomField);
 
     const connBtn = themedBtn("Connect", "mp-conn-toggle");
@@ -2052,5 +2078,6 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 
   root.MultiplayerUI = MultiplayerUI;
   root.MultiplayerUI.escapeHtml = escapeHtml;
+  root.MultiplayerUI.needsSecureUrlHint = needsSecureUrlHint;
   if (typeof module !== "undefined" && module.exports) module.exports = MultiplayerUI;
 })(typeof window !== "undefined" ? window : globalThis);

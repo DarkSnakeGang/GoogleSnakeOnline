@@ -6,16 +6,18 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Json;
 use axum::Router;
+use axum_server::tls_rustls::RustlsConfig;
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use multiplayer_server::protocol::{parse_envelope, Envelope};
 use multiplayer_server::room::{generate_room_code, Room, MAX_CONNECTIONS};
+use multiplayer_server::acme::{self, AcmeOptions};
 use multiplayer_server::upnp::UpnpMapping;
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -63,6 +65,45 @@ struct Args {
     /// Disable UPnP (pure LAN / CGNAT / double-NAT).
     #[arg(long = "no-upnp")]
     no_upnp: bool,
+
+    /// Serve wss:// with a Let's Encrypt certificate: for the DuckDNS name when
+    /// --duckdns-domain/--duckdns-token are set (DNS-01, no extra ports), else for
+    /// the public IP (needs inbound TCP 80 or 443 during issuance).
+    #[arg(
+        long,
+        env = "MULTIPLAYER_ACME",
+        default_value_t = false,
+        conflicts_with_all = ["tls_cert", "tls_key"]
+    )]
+    acme: bool,
+
+    /// Public IP to certify (default: router WAN IP via UPnP, else HTTPS lookup)
+    #[arg(long, env = "MULTIPLAYER_ACME_IP")]
+    acme_ip: Option<IpAddr>,
+
+    /// Account + certificate cache directory
+    #[arg(long, env = "MULTIPLAYER_ACME_DIR", default_value = "acme")]
+    acme_dir: PathBuf,
+
+    /// Local port that receives the forwarded HTTP-01 challenge (external 80)
+    #[arg(long, env = "MULTIPLAYER_ACME_CHALLENGE_PORT", default_value_t = 7780)]
+    acme_challenge_port: u16,
+
+    /// Use the Let's Encrypt staging CA (untrusted certs, generous rate limits)
+    #[arg(long, env = "MULTIPLAYER_ACME_STAGING", default_value_t = false)]
+    acme_staging: bool,
+
+    /// Optional contact e-mail for the ACME account
+    #[arg(long, env = "MULTIPLAYER_ACME_EMAIL")]
+    acme_email: Option<String>,
+
+    /// DuckDNS name for the certificate (`yarmiplay` or `yarmiplay.duckdns.org`)
+    #[arg(long, env = "MULTIPLAYER_DUCKDNS_DOMAIN", requires = "duckdns_token")]
+    duckdns_domain: Option<String>,
+
+    /// DuckDNS account token (prefer the env var so it stays off the command line)
+    #[arg(long, env = "MULTIPLAYER_DUCKDNS_TOKEN", hide_env_values = true, requires = "duckdns_domain")]
+    duckdns_token: Option<String>,
 }
 
 struct AppState {
@@ -300,10 +341,19 @@ async fn main() {
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
 
-    if let Some((cert, key)) = tls_mode {
-        let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key)
-            .await
-            .expect("failed to load TLS cert/key");
+    let tls_config = if args.acme {
+        acme_tls_config(&args).await
+    } else if let Some((cert, key)) = tls_mode {
+        Some(
+            RustlsConfig::from_pem_file(cert, key)
+                .await
+                .expect("failed to load TLS cert/key"),
+        )
+    } else {
+        None
+    };
+
+    if let Some(config) = tls_config {
         info!(
             bind = %args.bind,
             event = "listen_tls",
@@ -314,7 +364,8 @@ async fn main() {
             args.bind,
             args.bind.port()
         );
-        let mut upnp_mapping = try_open_upnp(upnp_enabled, args.bind.port(), true).await;
+        let mut upnp_mapping =
+            try_open_upnp(upnp_enabled, args.bind.port(), true, !args.acme).await;
         let handle = axum_server::Handle::new();
         let handle_shutdown = handle.clone();
         tokio::spawn(async move {
@@ -344,7 +395,7 @@ async fn main() {
             "Multiplayer server listening on http://{local}  ws://{local}/ws\nShare ws://<your-lan-ip>:{}/ws\n(Optional TLS: --tls-cert cert.pem --tls-key key.pem for wss://)",
             local.port()
         );
-        let mut upnp_mapping = try_open_upnp(upnp_enabled, local.port(), false).await;
+        let mut upnp_mapping = try_open_upnp(upnp_enabled, local.port(), false, true).await;
         axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -361,7 +412,69 @@ async fn main() {
     }
 }
 
-async fn try_open_upnp(enabled: bool, port: u16, tls: bool) -> Option<UpnpMapping> {
+/// Issue or reuse the Let's Encrypt certificate (DuckDNS name or public IP) and start
+/// background renewal. Returns `None` when no certificate can be obtained so the
+/// caller serves plain ws://.
+async fn acme_tls_config(args: &Args) -> Option<RustlsConfig> {
+    let mut opts = AcmeOptions {
+        ip: args.acme_ip,
+        dir: args.acme_dir.clone(),
+        challenge_port: args.acme_challenge_port,
+        staging: args.acme_staging,
+        email: args.acme_email.clone(),
+        use_upnp: !args.no_upnp,
+        directory: None,
+        directory_root_ca: None,
+        duckdns: None,
+        duckdns_api: None,
+    };
+    if let (Some(domain), Some(token)) = (&args.duckdns_domain, &args.duckdns_token) {
+        match acme::DuckDns::new(domain, token) {
+            Ok(duck) => opts.duckdns = Some(duck),
+            Err(e) => {
+                error!(error = %e, event = "acme_failed");
+                eprintln!("ACME certificate failed: {e}");
+                eprintln!("ACME fallback: serving plain ws:// (secure wss:// unavailable)");
+                return None;
+            }
+        }
+    }
+    let subject = match &opts.duckdns {
+        Some(duck) => format!("{} (DuckDNS, DNS-01)", duck.fqdn()),
+        None => "this public IP".to_string(),
+    };
+    eprintln!(
+        "ACME: requesting Let's Encrypt{} certificate for {subject}…",
+        if opts.staging { " (staging)" } else { "" }
+    );
+    let issued = match acme::load_or_issue(&opts).await {
+        Ok(issued) => issued,
+        Err(e) => {
+            error!(error = %e, event = "acme_failed");
+            eprintln!("ACME certificate failed: {e}");
+            eprintln!("ACME fallback: serving plain ws:// (secure wss:// unavailable)");
+            return None;
+        }
+    };
+    let config = RustlsConfig::from_pem(
+        issued.cert_pem.clone().into_bytes(),
+        issued.key_pem.clone().into_bytes(),
+    )
+    .await
+    .expect("ACME certificate/key rejected by rustls");
+    let port = args.bind.port();
+    let url = issued.wss_url(port);
+    let expires = chrono::DateTime::from_timestamp(issued.not_after, 0)
+        .map(|t| t.to_rfc3339())
+        .unwrap_or_default();
+    info!(%url, host = %issued.host, expires = %expires, staging = opts.staging, event = "acme_ready");
+    eprintln!("ACME certificate for {} valid until {expires} (auto-renews)", issued.host);
+    eprintln!("Public join URL: {url}");
+    acme::spawn_renewal(opts, config.clone(), issued, port);
+    Some(config)
+}
+
+async fn try_open_upnp(enabled: bool, port: u16, tls: bool, announce: bool) -> Option<UpnpMapping> {
     if !enabled {
         info!(event = "upnp_disabled");
         return None;
@@ -371,7 +484,12 @@ async fn try_open_upnp(enabled: bool, port: u16, tls: bool) -> Option<UpnpMappin
             let scheme = if tls { "wss" } else { "ws" };
             let public_ws = format!("{scheme}://{external_ip}:{port}/ws");
             info!(%public_ws, event = "upnp_ready");
-            eprintln!("UPnP mapped — internet friends join: {public_ws}");
+            if announce {
+                eprintln!("UPnP mapped — internet friends join: {public_ws}");
+                eprintln!("Public join URL: {public_ws}");
+            } else {
+                eprintln!("UPnP mapped — TCP {port} open on {external_ip}");
+            }
             Some(mapping)
         }
         Err(e) => {

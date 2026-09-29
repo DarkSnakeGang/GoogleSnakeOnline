@@ -2083,6 +2083,21 @@ describe("MultiplayerRuntime bridge", () => {
     assert.ok(out.indexOf("&lt;img") >= 0);
     assert.equal(esc('"&\'<>'), "&quot;&amp;&#39;&lt;&gt;");
   });
+
+  it("needsSecureUrlHint flags remote ws:// only on https pages", () => {
+    require(path.join(root, "src/ui/settingsTab.js"));
+    const hint = global.MultiplayerUI.needsSecureUrlHint;
+    assert.ok(typeof hint === "function");
+    assert.equal(hint("https:", "ws://203.0.113.10:7777/ws"), true);
+    assert.equal(hint("https:", "  WS://example.org/ws"), true);
+    assert.equal(hint("https:", "wss://203.0.113.10:7777/ws"), false);
+    assert.equal(hint("http:", "ws://203.0.113.10:7777/ws"), false);
+    // Loopback is exempt from mixed-content blocking.
+    assert.equal(hint("https:", "ws://127.0.0.1:7777/ws"), false);
+    assert.equal(hint("https:", "ws://localhost:7777/ws"), false);
+    assert.equal(hint("https:", "ws://[::1]:7777/ws"), false);
+    assert.equal(hint("https:", ""), false);
+  });
 });
 
 describe("coop body collision", () => {

@@ -161,9 +161,17 @@
           create: create,
         });
       };
-      self.ws.onerror = function (e) {
+      self.ws.onerror = function () {
         self.emit("ERROR", { code: "ws_error", message: "WebSocket error" });
-        if (!settled) settleFail(e);
+        if (!settled) {
+          // Browsers hide the cause (DNS, refused, TLS) from script on purpose.
+          settleFail({
+            code: "ws_unreachable",
+            message: self.connected
+              ? "Connection dropped before join"
+              : "Can't reach " + self.url + " — is the server running?",
+          });
+        }
       };
       self.ws.onclose = function (ev) {
         const wasJoined = self.joined;

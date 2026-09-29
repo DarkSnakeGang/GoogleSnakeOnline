@@ -13,13 +13,13 @@ use axum::Json;
 use axum::Router;
 use clap::Parser;
 use futures_util::stream::Stream;
-use multiplayer_server::upnp::UpnpMapping;
+use multiplayer_server::upnp::{Gateway, UpnpMapping};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -98,6 +98,117 @@ struct Status {
     site_bind: String,
     site_message: String,
     site_public_url: Option<String>,
+    secure_wss: bool,
+    acme_staging: bool,
+    public_ws: Option<String>,
+    duckdns_domain: String,
+    /// Whether a DuckDNS token is saved (the token itself is never sent to the page).
+    duckdns_token_set: bool,
+    game_port: u16,
+    game_upnp: bool,
+    /// `ip:port` while the console holds the game server's router forward.
+    game_upnp_open: Option<String>,
+    game_upnp_error: Option<String>,
+    site_port: u16,
+    site_upnp: bool,
+    site_upnp_error: Option<String>,
+}
+
+/// Persisted host toggles (`console-settings.json` in the repo root, git-ignored).
+#[derive(Clone, Serialize, Deserialize)]
+struct ConsoleSettings {
+    #[serde(default)]
+    secure_wss: bool,
+    #[serde(default)]
+    acme_staging: bool,
+    #[serde(default = "default_duckdns_domain")]
+    duckdns_domain: String,
+    #[serde(default)]
+    duckdns_token: String,
+    /// Overrides the port of `--server-bind` / `--site-bind` when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    game_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    site_port: Option<u16>,
+    #[serde(default = "default_true")]
+    game_upnp: bool,
+    #[serde(default = "default_true")]
+    site_upnp: bool,
+}
+
+impl Default for ConsoleSettings {
+    fn default() -> Self {
+        Self {
+            secure_wss: false,
+            acme_staging: false,
+            duckdns_domain: default_duckdns_domain(),
+            duckdns_token: String::new(),
+            game_port: None,
+            site_port: None,
+            game_upnp: true,
+            site_upnp: true,
+        }
+    }
+}
+
+fn default_duckdns_domain() -> String {
+    "yarmiplay".into()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Service {
+    Game,
+    Site,
+}
+
+/// `POST /api/upnp` body.
+#[derive(Deserialize)]
+struct UpnpRequest {
+    target: Service,
+    enabled: bool,
+}
+
+/// `POST /api/port` body.
+#[derive(Deserialize)]
+struct PortRequest {
+    target: Service,
+    port: u16,
+}
+
+/// `POST /api/secure` body; an absent or blank token keeps the saved one.
+#[derive(Deserialize)]
+struct SecureRequest {
+    secure_wss: bool,
+    acme_staging: bool,
+    #[serde(default)]
+    duckdns_domain: Option<String>,
+    #[serde(default)]
+    duckdns_token: Option<String>,
+}
+
+const SETTINGS_FILE: &str = "console-settings.json";
+const PUBLIC_URL_MARKER: &str = "Public join URL: ";
+const ACME_FALLBACK_MARKER: &str = "ACME fallback: serving plain ws://";
+
+fn load_settings(repo_root: &std::path::Path) -> ConsoleSettings {
+    std::fs::read_to_string(repo_root.join(SETTINGS_FILE))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn with_port(bind: SocketAddr, port: Option<u16>) -> SocketAddr {
+    SocketAddr::new(bind.ip(), port.filter(|p| *p != 0).unwrap_or(bind.port()))
+}
+
+fn save_settings(repo_root: &std::path::Path, settings: &ConsoleSettings) -> std::io::Result<()> {
+    let json = serde_json::to_string_pretty(settings).map_err(std::io::Error::other)?;
+    std::fs::write(repo_root.join(SETTINGS_FILE), json)
 }
 
 struct Shared {
@@ -108,12 +219,32 @@ struct Shared {
     log_lines: Mutex<Vec<String>>,
     log_tx: broadcast::Sender<String>,
     busy: AtomicBool,
-    server_bind: SocketAddr,
-    site_bind: SocketAddr,
+    server_bind: Mutex<SocketAddr>,
+    site_bind: Mutex<SocketAddr>,
+    /// CLI binds; a saved port is only written when it differs from these.
+    default_server_bind: SocketAddr,
+    default_site_bind: SocketAddr,
+    gui_port: u16,
+    game_upnp: AtomicBool,
+    game_upnp_gateway: Mutex<Option<Gateway>>,
+    game_upnp_ip: Mutex<Option<IpAddr>>,
+    game_upnp_error: Mutex<Option<String>>,
     site_phase: Mutex<SitePhase>,
     site_message: Mutex<String>,
     site_public_url: Mutex<Option<String>>,
+    site_upnp: Mutex<Option<Gateway>>,
+    site_upnp_enabled: AtomicBool,
+    site_upnp_error: Mutex<Option<String>>,
+    site_local: Mutex<Option<SocketAddr>>,
     site_busy: AtomicBool,
+    secure_wss: AtomicBool,
+    acme_staging: AtomicBool,
+    duckdns_domain: Mutex<String>,
+    duckdns_token: Mutex<String>,
+    /// Latest `Public join URL:` announced by the game server.
+    public_ws: Mutex<Option<String>>,
+    /// Whether the running child was started with --acme (serves https/wss).
+    running_tls: AtomicBool,
     site_shutdown: Mutex<Option<oneshot::Sender<()>>>,
     /// Signal to quit the console GUI process itself (ends start-server.bat / cargo).
     console_shutdown: Mutex<Option<oneshot::Sender<()>>>,
@@ -130,18 +261,68 @@ impl Shared {
     fn status(&self) -> Status {
         let phase = *self.phase.lock();
         let site_phase = *self.site_phase.lock();
+        let server_bind = self.server_bind();
+        let game_upnp_ip = *self.game_upnp_ip.lock();
+        // Plain ws:// servers announce nothing — the join URL is the console's forward.
+        let public_ws = self.public_ws.lock().clone().or_else(|| {
+            let plain = !self.running_tls.load(Ordering::SeqCst);
+            game_upnp_ip
+                .filter(|_| plain && matches!(phase, Phase::Running))
+                .map(|ip| format!("ws://{ip}:{}/ws", server_bind.port()))
+        });
         Status {
             phase,
             running: matches!(phase, Phase::Running | Phase::Starting),
             pid: *self.pid.lock(),
-            server_bind: self.server_bind.to_string(),
+            server_bind: server_bind.to_string(),
             message: self.message.lock().clone(),
             rebuilding: phase == Phase::Rebuilding,
             site_phase,
             site_running: matches!(site_phase, SitePhase::Running | SitePhase::Starting),
-            site_bind: self.site_bind.to_string(),
+            site_bind: self.site_bind().to_string(),
             site_message: self.site_message.lock().clone(),
             site_public_url: self.site_public_url.lock().clone(),
+            secure_wss: self.secure_wss.load(Ordering::SeqCst),
+            acme_staging: self.acme_staging.load(Ordering::SeqCst),
+            public_ws,
+            duckdns_domain: self.duckdns_domain.lock().clone(),
+            duckdns_token_set: !self.duckdns_token.lock().is_empty(),
+            game_port: server_bind.port(),
+            game_upnp: self.game_upnp.load(Ordering::SeqCst),
+            game_upnp_open: game_upnp_ip.map(|ip| format!("{ip}:{}", server_bind.port())),
+            game_upnp_error: self.game_upnp_error.lock().clone(),
+            site_port: self.site_bind().port(),
+            site_upnp: self.site_upnp_enabled.load(Ordering::SeqCst),
+            site_upnp_error: self.site_upnp_error.lock().clone(),
+        }
+    }
+
+    fn server_bind(&self) -> SocketAddr {
+        *self.server_bind.lock()
+    }
+
+    fn site_bind(&self) -> SocketAddr {
+        *self.site_bind.lock()
+    }
+
+    fn settings(&self) -> ConsoleSettings {
+        let game_port = self.server_bind().port();
+        let site_port = self.site_bind().port();
+        ConsoleSettings {
+            secure_wss: self.secure_wss.load(Ordering::SeqCst),
+            acme_staging: self.acme_staging.load(Ordering::SeqCst),
+            duckdns_domain: self.duckdns_domain.lock().clone(),
+            duckdns_token: self.duckdns_token.lock().clone(),
+            game_port: (game_port != self.default_server_bind.port()).then_some(game_port),
+            site_port: (site_port != self.default_site_bind.port()).then_some(site_port),
+            game_upnp: self.game_upnp.load(Ordering::SeqCst),
+            site_upnp: self.site_upnp_enabled.load(Ordering::SeqCst),
+        }
+    }
+
+    fn save(&self) {
+        if let Err(e) = save_settings(&self.repo_root, &self.settings()) {
+            self.push_log(format!("[console] could not save {SETTINGS_FILE}: {e}"));
         }
     }
 
@@ -253,6 +434,7 @@ async fn main() {
 
     let args = Args::parse();
     let (manifest, repo_root, server_bin) = resolve_paths(&args.manifest);
+    let settings = load_settings(&repo_root);
     let (log_tx, _) = broadcast::channel(512);
     let http_client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(10))
@@ -268,12 +450,29 @@ async fn main() {
         log_lines: Mutex::new(Vec::new()),
         log_tx,
         busy: AtomicBool::new(false),
-        server_bind: args.server_bind,
-        site_bind: args.site_bind,
+        server_bind: Mutex::new(with_port(args.server_bind, settings.game_port)),
+        site_bind: Mutex::new(with_port(args.site_bind, settings.site_port)),
+        default_server_bind: args.server_bind,
+        default_site_bind: args.site_bind,
+        gui_port: args.gui_bind.port(),
+        game_upnp: AtomicBool::new(settings.game_upnp),
+        game_upnp_gateway: Mutex::new(None),
+        game_upnp_ip: Mutex::new(None),
+        game_upnp_error: Mutex::new(None),
         site_phase: Mutex::new(SitePhase::Idle),
-        site_message: Mutex::new("Site host off (default)".into()),
+        site_message: Mutex::new("Site host off".into()),
         site_public_url: Mutex::new(None),
+        site_upnp: Mutex::new(None),
+        site_upnp_enabled: AtomicBool::new(settings.site_upnp),
+        site_upnp_error: Mutex::new(None),
+        site_local: Mutex::new(None),
         site_busy: AtomicBool::new(false),
+        secure_wss: AtomicBool::new(settings.secure_wss),
+        acme_staging: AtomicBool::new(settings.acme_staging),
+        duckdns_domain: Mutex::new(settings.duckdns_domain.clone()),
+        duckdns_token: Mutex::new(settings.duckdns_token.clone()),
+        public_ws: Mutex::new(None),
+        running_tls: AtomicBool::new(false),
         site_shutdown: Mutex::new(None),
         console_shutdown: Mutex::new(Some(console_shutdown_tx)),
         http_client,
@@ -286,7 +485,9 @@ async fn main() {
 
     shared.push_log(format!(
         "[console] GUI http://{}  ·  game server {}  ·  site host {} (off until Start site)",
-        args.gui_bind, args.server_bind, args.site_bind
+        args.gui_bind,
+        shared.server_bind(),
+        shared.site_bind()
     ));
     shared.push_log(format!(
         "[console] manifest {}  ·  bin {}",
@@ -316,6 +517,9 @@ async fn main() {
         .route("/api/shutdown", post(api_shutdown))
         .route("/api/site/start", post(api_site_start))
         .route("/api/site/stop", post(api_site_stop))
+        .route("/api/secure", post(api_secure))
+        .route("/api/upnp", post(api_upnp))
+        .route("/api/port", post(api_port))
         .route("/api/logs", get(api_logs))
         .route("/api/rooms", get(api_rooms_proxy))
         .route("/api/spectate", get(api_spectate_proxy))
@@ -332,7 +536,8 @@ async fn main() {
     let local = listener.local_addr().unwrap();
     eprintln!(
         "Multiplayer console (True Dark)  http://{local}\nGame server target  {}\nSite host (off)     {}\n",
-        args.server_bind, args.site_bind
+        shared.server_bind(),
+        shared.site_bind()
     );
     let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
         tokio::select! {
@@ -433,13 +638,266 @@ async fn api_site_stop(State(s): State<Arc<Shared>>) -> (axum::http::StatusCode,
     }
 }
 
-fn game_http_base(bind: SocketAddr) -> String {
+/// Persist Secure WSS / staging / DuckDNS settings; restart a running server so they apply.
+async fn api_secure(
+    State(s): State<Arc<Shared>>,
+    Json(req): Json<SecureRequest>,
+) -> (axum::http::StatusCode, Json<Status>) {
+    let secure_changed = s.secure_wss.swap(req.secure_wss, Ordering::SeqCst) != req.secure_wss;
+    let staging_changed = s.acme_staging.swap(req.acme_staging, Ordering::SeqCst) != req.acme_staging;
+    let mut changed = secure_changed || staging_changed;
+    if let Some(domain) = req.duckdns_domain.map(|d| d.trim().to_string()) {
+        let mut cur = s.duckdns_domain.lock();
+        if *cur != domain {
+            *cur = domain;
+            changed = true;
+        }
+    }
+    if let Some(token) = req.duckdns_token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+        let mut cur = s.duckdns_token.lock();
+        if *cur != token {
+            *cur = token;
+            changed = true;
+        }
+    }
+    s.save();
+    let duck = duckdns_label(&s);
+    s.push_log(format!(
+        "[console] Secure WSS {}{}",
+        if req.secure_wss { format!("on (Let's Encrypt, {duck})") } else { "off (plain ws://)".into() },
+        if req.secure_wss && req.acme_staging { " · staging CA" } else { "" }
+    ));
+    if !changed || s.child.lock().is_none() {
+        return (axum::http::StatusCode::OK, Json(s.status()));
+    }
+    if s
+        .busy
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        s.push_log("[console] busy — Secure WSS applies on next Start".into());
+        return (axum::http::StatusCode::OK, Json(s.status()));
+    }
+    s.push_log("[console] restarting game server to apply Secure WSS…".into());
+    let _ = stop_server_inner(s.clone()).await;
+    let result = start_server_inner(s.clone()).await;
+    s.busy.store(false, Ordering::SeqCst);
+    match result {
+        Ok(st) => (axum::http::StatusCode::OK, Json(st)),
+        Err((code, st)) => (code, Json(st)),
+    }
+}
+
+/// Start/stop one service's router forward without restarting the service.
+async fn api_upnp(
+    State(s): State<Arc<Shared>>,
+    Json(req): Json<UpnpRequest>,
+) -> (StatusCode, Json<Status>) {
+    let label = if req.enabled { "on" } else { "off" };
+    match req.target {
+        Service::Game => {
+            s.game_upnp.store(req.enabled, Ordering::SeqCst);
+            s.save();
+            if matches!(*s.phase.lock(), Phase::Running | Phase::Starting) {
+                if req.enabled {
+                    open_game_upnp(&s).await;
+                } else {
+                    close_game_upnp(&s, s.server_bind().port()).await;
+                }
+            } else {
+                s.push_log(format!("[console] game UPnP {label} — applies when the server starts"));
+            }
+        }
+        Service::Site => {
+            s.site_upnp_enabled.store(req.enabled, Ordering::SeqCst);
+            s.save();
+            if s.site_local.lock().is_some() {
+                if req.enabled {
+                    open_site_upnp(&s).await;
+                } else {
+                    close_site_upnp(&s, s.site_bind().port()).await;
+                }
+                refresh_site_message(&s);
+            } else {
+                s.push_log(format!("[console] site UPnP {label} — applies when the site host starts"));
+            }
+        }
+    }
+    (StatusCode::OK, Json(s.status()))
+}
+
+/// Change one service's port; a running service restarts on the new port.
+async fn api_port(
+    State(s): State<Arc<Shared>>,
+    Json(req): Json<PortRequest>,
+) -> (StatusCode, Json<Status>) {
+    let port = req.port;
+    let (name, current, other) = match req.target {
+        Service::Game => ("game server", s.server_bind().port(), s.site_bind().port()),
+        Service::Site => ("site host", s.site_bind().port(), s.server_bind().port()),
+    };
+    let clash = if port == 0 {
+        Some("port 0 is not allowed".to_string())
+    } else if port == s.gui_port {
+        Some(format!("{port} is the console's own port"))
+    } else if port == other {
+        Some(format!("{port} is already used by the {}", if req.target == Service::Game { "site host" } else { "game server" }))
+    } else {
+        None
+    };
+    if let Some(reason) = clash {
+        s.push_log(format!("[console] {name} port not changed — {reason}"));
+        return (StatusCode::BAD_REQUEST, Json(s.status()));
+    }
+    if port == current {
+        return (StatusCode::OK, Json(s.status()));
+    }
+    let busy = match req.target {
+        Service::Game => &s.busy,
+        Service::Site => &s.site_busy,
+    };
+    if busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        s.push_log(format!("[console] {name} busy — try the port change again in a moment"));
+        return (StatusCode::CONFLICT, Json(s.status()));
+    }
+    let result = match req.target {
+        Service::Game => {
+            let running = s.child.lock().is_some();
+            if running {
+                let _ = stop_server_inner(s.clone()).await;
+            }
+            let bind = s.server_bind();
+            *s.server_bind.lock() = SocketAddr::new(bind.ip(), port);
+            s.save();
+            s.push_log(format!("[console] game server port {current} → {port}"));
+            if running { start_server_inner(s.clone()).await } else { Ok(s.status()) }
+        }
+        Service::Site => {
+            let running = s.site_local.lock().is_some();
+            if running {
+                let _ = stop_site_inner(s.clone()).await;
+            }
+            let bind = s.site_bind();
+            *s.site_bind.lock() = SocketAddr::new(bind.ip(), port);
+            s.save();
+            s.push_log(format!("[console] site host port {current} → {port}"));
+            if running { start_site_inner(s.clone()).await } else { Ok(s.status()) }
+        }
+    };
+    busy.store(false, Ordering::SeqCst);
+    match result {
+        Ok(st) => (StatusCode::OK, Json(st)),
+        Err((code, st)) => (code, Json(st)),
+    }
+}
+
+async fn open_game_upnp(s: &Arc<Shared>) {
+    if s.game_upnp_gateway.lock().is_some() {
+        return;
+    }
+    let port = s.server_bind().port();
+    s.push_log(format!("[console] UPnP: opening game TCP {port}…"));
+    match UpnpMapping::open(port).await {
+        Ok((mapping, ip)) => {
+            *s.game_upnp_gateway.lock() = mapping.release();
+            *s.game_upnp_ip.lock() = Some(ip);
+            *s.game_upnp_error.lock() = None;
+            s.push_log(format!("[console] UPnP: game TCP {port} open on {ip}"));
+        }
+        Err(e) => {
+            *s.game_upnp_ip.lock() = None;
+            *s.game_upnp_error.lock() = Some(e.clone());
+            s.push_log(format!("[console] UPnP: game TCP {port} not opened ({e}) — LAN only"));
+        }
+    }
+}
+
+async fn close_game_upnp(s: &Arc<Shared>, port: u16) {
+    let gateway = s.game_upnp_gateway.lock().take();
+    *s.game_upnp_ip.lock() = None;
+    *s.game_upnp_error.lock() = None;
+    close_forward(s, "game", gateway, port).await;
+}
+
+async fn open_site_upnp(s: &Arc<Shared>) {
+    if s.site_upnp.lock().is_some() {
+        return;
+    }
+    let port = s.site_bind().port();
+    s.push_log(format!("[console] site UPnP: opening TCP {port}…"));
+    match UpnpMapping::open(port).await {
+        Ok((mapping, external_ip)) => {
+            let url = format!("http://{external_ip}:{port}");
+            *s.site_public_url.lock() = Some(url.clone());
+            *s.site_upnp.lock() = mapping.release();
+            *s.site_upnp_error.lock() = None;
+            s.push_log(format!("[console] site UPnP: TCP {port} open — friends open {url}"));
+        }
+        Err(e) => {
+            *s.site_public_url.lock() = None;
+            *s.site_upnp_error.lock() = Some(e.clone());
+            s.push_log(format!("[console] site UPnP: TCP {port} not opened ({e}) — LAN only"));
+        }
+    }
+}
+
+async fn close_site_upnp(s: &Arc<Shared>, port: u16) {
+    let gateway = s.site_upnp.lock().take();
+    *s.site_public_url.lock() = None;
+    *s.site_upnp_error.lock() = None;
+    close_forward(s, "site", gateway, port).await;
+}
+
+/// Delete a forward via the gateway that created it; without one, only remove
+/// a forward that carries our description (never a hand-made router rule).
+async fn close_forward(s: &Arc<Shared>, what: &str, gateway: Option<Gateway>, port: u16) {
+    let result = match &gateway {
+        Some(gw) => multiplayer_server::upnp::delete_mapping_on(gw, port).await.map(|()| true),
+        None => multiplayer_server::upnp::delete_tcp_mapping_if_ours(port).await,
+    };
+    match result {
+        Ok(true) => s.push_log(format!("[console] UPnP: {what} TCP {port} closed")),
+        Ok(false) => {}
+        Err(e) => s.push_log(format!(
+            "[console] UPnP: {what} TCP {port} close skipped ({e}) — router may already be clear"
+        )),
+    }
+}
+
+fn refresh_site_message(s: &Shared) {
+    let Some(local) = *s.site_local.lock() else { return };
+    let message = match (s.site_public_url.lock().clone(), s.site_upnp_error.lock().is_some()) {
+        (Some(url), _) => format!("Hosting on http://{local} · public {url}"),
+        (None, true) => format!("Hosting on http://{local} (UPnP unavailable)"),
+        (None, false) => format!("Hosting on http://{local} (LAN only)"),
+    };
+    if *s.site_phase.lock() == SitePhase::Running {
+        *s.site_message.lock() = message;
+    }
+}
+
+/// DuckDNS domain + token when both are configured.
+fn duckdns_config(s: &Shared) -> Option<(String, String)> {
+    let domain = s.duckdns_domain.lock().trim().to_string();
+    let token = s.duckdns_token.lock().clone();
+    (!domain.is_empty() && !token.is_empty()).then_some((domain, token))
+}
+
+fn duckdns_label(s: &Shared) -> String {
+    match duckdns_config(s) {
+        Some((domain, _)) => format!("DuckDNS {domain}"),
+        None => "public IP — no DuckDNS token saved".into(),
+    }
+}
+
+fn game_http_base(bind: SocketAddr, tls: bool) -> String {
     let host = if bind.ip().is_unspecified() {
         "127.0.0.1".to_string()
     } else {
         bind.ip().to_string()
     };
-    format!("http://{host}:{}", bind.port())
+    let scheme = if tls { "https" } else { "http" };
+    format!("{scheme}://{host}:{}", bind.port())
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -457,8 +915,23 @@ async fn proxy_game_json(
             Json(json_offline("Game server is not running")),
         );
     }
-    let url = format!("{}{path}", game_http_base(s.server_bind));
-    match reqwest::Client::new()
+    let tls = s.running_tls.load(Ordering::SeqCst);
+    let url = format!("{}{path}", game_http_base(s.server_bind(), tls));
+    // Loopback only: the ACME cert names the public IP, not 127.0.0.1.
+    let client = match reqwest::Client::builder()
+        .danger_accept_invalid_certs(tls)
+        .no_proxy()
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                axum::http::StatusCode::BAD_GATEWAY,
+                Json(json_offline(&format!("client: {e}"))),
+            )
+        }
+    };
+    match client
         .get(&url)
         .timeout(Duration::from_secs(2))
         .send()
@@ -646,16 +1119,39 @@ async fn start_server_inner(
         ));
         return Err((axum::http::StatusCode::FAILED_DEPENDENCY, s.status()));
     }
-    s.set_phase(Phase::Starting, "Starting server…".to_string());
+    let secure = s.secure_wss.load(Ordering::SeqCst);
+    let duckdns = if secure { duckdns_config(&s) } else { None };
+    let mut secure_args: Vec<String> = Vec::new();
+    if secure {
+        secure_args.push("--acme".into());
+        if s.acme_staging.load(Ordering::SeqCst) {
+            secure_args.push("--acme-staging".into());
+        }
+        if let Some((domain, _)) = &duckdns {
+            secure_args.push("--duckdns-domain".into());
+            secure_args.push(domain.clone());
+        }
+    }
+    s.set_phase(
+        Phase::Starting,
+        if secure {
+            "Starting server (requesting Let's Encrypt certificate)…".to_string()
+        } else {
+            "Starting server…".to_string()
+        },
+    );
+    let bind = s.server_bind();
     s.push_log(format!(
-        "[console] spawning {} --bind {} --upnp",
+        "[console] spawning {} --bind {bind} {}",
         s.server_bin.display(),
-        s.server_bind
+        secure_args.join(" ")
     ));
+    *s.public_ws.lock() = None;
+    s.running_tls.store(secure, Ordering::SeqCst);
     let mut cmd = Command::new(&s.server_bin);
     cmd.arg("--bind")
-        .arg(s.server_bind.to_string())
-        .arg("--upnp")
+        .arg(bind.to_string())
+        .args(&secure_args)
         .args(&s.extra_args)
         .current_dir(&s.repo_root)
         .stdout(Stdio::piped())
@@ -663,7 +1159,13 @@ async fn start_server_inner(
         // Piped into the HTML log — never emit ANSI (also covers older bins).
         .env("NO_COLOR", "1")
         .env("RUST_LOG_STYLE", "never")
+        .env_remove("MULTIPLAYER_DUCKDNS_TOKEN")
+        .env_remove("MULTIPLAYER_DUCKDNS_DOMAIN")
         .kill_on_drop(true);
+    // Env only: keeps the token off the command line and out of the spawn log line.
+    if let Some((_, token)) = &duckdns {
+        cmd.env("MULTIPLAYER_DUCKDNS_TOKEN", token);
+    }
 
     match cmd.spawn() {
         Ok(mut child) => {
@@ -681,6 +1183,10 @@ async fn start_server_inner(
                 .unwrap_or_else(|| "?".into());
             s.set_phase(Phase::Running, format!("Running (pid {pid_label})"));
             s.push_log(format!("[console] server up pid={pid_label}"));
+            if s.game_upnp.load(Ordering::SeqCst) {
+                let upnp_s = s.clone();
+                tokio::spawn(async move { open_game_upnp(&upnp_s).await });
+            }
             Ok(s.status())
         }
         Err(e) => {
@@ -698,6 +1204,15 @@ where
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            if let Some(idx) = line.find(PUBLIC_URL_MARKER) {
+                let url = line[idx + PUBLIC_URL_MARKER.len()..].trim().to_string();
+                if !url.is_empty() {
+                    *s.public_ws.lock() = Some(url);
+                }
+            }
+            if line.contains(ACME_FALLBACK_MARKER) {
+                s.running_tls.store(false, Ordering::SeqCst);
+            }
             s.push_log(format!("[{tag}] {line}"));
         }
     });
@@ -724,18 +1239,16 @@ async fn stop_server_inner(
     s: Arc<Shared>,
 ) -> Result<Status, (axum::http::StatusCode, Status)> {
     s.set_phase(Phase::Stopping, "Stopping…".to_string());
-    // Child kill on Windows is TerminateProcess — Drop/unmap never runs there.
-    // Clear the IGD forward first so a stopped host does not leave TCP open.
-    let port = s.server_bind.port();
-    s.push_log(format!(
-        "[console] UPnP: deleting TCP {port} mapping (best-effort)…"
-    ));
-    match multiplayer_server::upnp::delete_tcp_mapping(port).await {
-        Ok(()) => s.push_log(format!("[console] UPnP: TCP {port} unmapped")),
-        Err(e) => s.push_log(format!(
-            "[console] UPnP: unmap skipped ({e}) — router may already be clear"
-        )),
+    close_game_upnp(&s, s.server_bind().port()).await;
+    if s.running_tls.load(Ordering::SeqCst) {
+        // A kill mid-issuance can strand the temporary ACME port-80/443 forward.
+        for port in [80, 443] {
+            if let Ok(true) = multiplayer_server::upnp::delete_tcp_mapping_if_ours(port).await {
+                s.push_log(format!("[console] UPnP: removed leftover ACME TCP {port} forward"));
+            }
+        }
     }
+    *s.public_ws.lock() = None;
     let child = s.child.lock().take();
     if let Some(mut c) = child {
         let pid = c.id();
@@ -780,12 +1293,10 @@ async fn start_site_inner(s: Arc<Shared>) -> Result<Status, (axum::http::StatusC
     }
 
     s.set_site_phase(SitePhase::Starting, "Starting site host…".into());
-    s.push_log(format!(
-        "[console] site host binding http://{}",
-        s.site_bind
-    ));
+    let bind = s.site_bind();
+    s.push_log(format!("[console] site host binding http://{bind}"));
 
-    let listener = match tokio::net::TcpListener::bind(s.site_bind).await {
+    let listener = match tokio::net::TcpListener::bind(bind).await {
         Ok(l) => l,
         Err(e) => {
             s.set_site_phase(SitePhase::Error, format!("Site bind failed: {e}"));
@@ -793,7 +1304,7 @@ async fn start_site_inner(s: Arc<Shared>) -> Result<Status, (axum::http::StatusC
             return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, s.status()));
         }
     };
-    let local = listener.local_addr().unwrap_or(s.site_bind);
+    let local = listener.local_addr().unwrap_or(bind);
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     *s.site_shutdown.lock() = Some(shutdown_tx);
@@ -815,36 +1326,12 @@ async fn start_site_inner(s: Arc<Shared>) -> Result<Status, (axum::http::StatusC
         }
     });
 
-    let port = s.site_bind.port();
-    s.push_log(format!(
-        "[console] site UPnP: mapping TCP {port}…"
-    ));
-    match UpnpMapping::open(port).await {
-        Ok((mapping, external_ip)) => {
-            let url = format!("http://{external_ip}:{port}");
-            *s.site_public_url.lock() = Some(url.clone());
-            // Keep the IGD forward until Stop: forget RAII guard so Drop does not
-            // unmap; stop uses delete_tcp_mapping. Avoids storing !Send gateway in Shared.
-            std::mem::forget(mapping);
-            s.push_log(format!(
-                "[console] site UPnP: mapped — friends open {url}"
-            ));
-            s.set_site_phase(
-                SitePhase::Running,
-                format!("Hosting on http://{local} · public {url}"),
-            );
-        }
-        Err(e) => {
-            *s.site_public_url.lock() = None;
-            s.push_log(format!(
-                "[console] site UPnP: skipped ({e}) — LAN still http://{local}"
-            ));
-            s.set_site_phase(
-                SitePhase::Running,
-                format!("Hosting on http://{local} (UPnP unavailable)"),
-            );
-        }
+    *s.site_local.lock() = Some(local);
+    s.set_site_phase(SitePhase::Running, format!("Hosting on http://{local}"));
+    if s.site_upnp_enabled.load(Ordering::SeqCst) {
+        open_site_upnp(&s).await;
     }
+    refresh_site_message(&s);
     s.push_log(format!("[console] site host up on http://{local}"));
     Ok(s.status())
 }
@@ -879,17 +1366,8 @@ async fn stop_site_inner(s: Arc<Shared>) -> Result<Status, (axum::http::StatusCo
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
 
-    let port = s.site_bind.port();
-    s.push_log(format!(
-        "[console] site UPnP: deleting TCP {port} mapping (best-effort)…"
-    ));
-    match multiplayer_server::upnp::delete_tcp_mapping(port).await {
-        Ok(()) => s.push_log(format!("[console] site UPnP: TCP {port} unmapped")),
-        Err(e) => s.push_log(format!(
-            "[console] site UPnP: unmap skipped ({e}) — router may already be clear"
-        )),
-    }
-    *s.site_public_url.lock() = None;
+    *s.site_local.lock() = None;
+    close_site_upnp(&s, s.site_bind().port()).await;
     s.set_site_phase(SitePhase::Idle, "Site host off".into());
     Ok(s.status())
 }
@@ -1196,9 +1674,108 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     margin: 0 0 12px; font-size: 0.78rem; font-weight: 600;
     letter-spacing: 0.12em; text-transform: uppercase; color: var(--td-muted);
   }
-  .actions {
-    display: flex; flex-wrap: wrap; gap: 10px;
+  .top-actions {
+    display: flex; align-items: center; gap: 10px;
   }
+  .join {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    flex-wrap: wrap; padding: 16px 18px;
+  }
+  .join-main { min-width: 0; flex: 1 1 320px; }
+  .eyebrow {
+    color: var(--td-muted); font-size: 0.72rem; font-weight: 600;
+    letter-spacing: 0.12em; text-transform: uppercase;
+  }
+  .join-url {
+    margin-top: 6px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 1.25rem; color: #fff; cursor: pointer; word-break: break-all;
+  }
+  .join-url.empty { color: var(--td-muted); font-size: 1rem; cursor: default; }
+  .join-side { display: flex; align-items: center; gap: 10px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 10px; border-radius: 999px; font-size: 0.76rem; font-weight: 600;
+    background: var(--td-chip); border: 1px solid var(--td-sep); color: var(--td-muted);
+    white-space: nowrap;
+  }
+  .badge.ok { color: #bfeecb; border-color: #35553a; background: #14231a; }
+  .badge.warn { color: #f0d99a; border-color: #5c4a14; background: #231d0c; }
+  .cards {
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  }
+  .card { display: flex; flex-direction: column; gap: 12px; }
+  .card-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .card-head h2 { margin: 0; }
+  .kv {
+    margin: 0; display: grid; grid-template-columns: auto 1fr;
+    gap: 8px 16px; font-size: 0.86rem;
+  }
+  .kv dt { color: var(--td-muted); }
+  .kv dd {
+    margin: 0; font-family: ui-monospace, Consolas, monospace;
+    text-align: right; word-break: break-all;
+  }
+  .card-actions { display: flex; gap: 10px; margin-top: auto; }
+  .card-actions button { flex: 1; }
+  .hint { margin: 0; color: var(--td-muted); font-size: 0.8rem; line-height: 1.4; }
+  .net-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: end; }
+  .port-field input { font-family: ui-monospace, Consolas, monospace; -moz-appearance: textfield; }
+  .port-field input::-webkit-outer-spin-button,
+  .port-field input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .upnp-field button { padding: 9px 12px; font-size: 0.85rem; }
+  .upnp-field button.on { color: #bfeecb; border-color: #35553a; background: #14231a; }
+  .upnp-state { margin-top: -4px; }
+  .upnp-state.ok { color: #8fd9a1; }
+  .upnp-state.warn { color: #e6c46a; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field-label { color: var(--td-muted); font-size: 0.74rem; letter-spacing: 0.06em; text-transform: uppercase; }
+  .input-group {
+    display: flex; align-items: stretch;
+    background: rgba(0,0,0,0.35); border: 1px solid var(--td-sep); border-radius: 8px;
+    overflow: hidden; transition: border-color .15s;
+  }
+  .input-group:focus-within { border-color: #4a4a4a; }
+  .input-group input {
+    flex: 1; min-width: 0; background: transparent; color: var(--td-text);
+    border: 0; outline: none; padding: 9px 10px; font: inherit; font-size: 0.9rem;
+  }
+  .input-group .suffix {
+    display: flex; align-items: center; padding: 0 10px;
+    color: var(--td-muted); font-size: 0.85rem; background: rgba(255,255,255,0.03);
+    border-left: 1px solid var(--td-sep);
+  }
+  .input-group button {
+    border: 0; border-left: 1px solid var(--td-sep); border-radius: 0;
+    padding: 0 16px; font-size: 0.85rem;
+  }
+  .switch-row {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 0.86rem; cursor: pointer; user-select: none;
+  }
+  .switch-row .muted { color: var(--td-muted); font-size: 0.8rem; }
+  input.switch {
+    appearance: none; margin: 0; flex: 0 0 auto; position: relative; cursor: pointer;
+    width: 38px; height: 22px; border-radius: 999px;
+    background: #2a2a2a; border: 1px solid #3a3a3a;
+    transition: background .15s, border-color .15s;
+  }
+  input.switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 16px; height: 16px; border-radius: 50%; background: #8a8a8a;
+    transition: transform .15s, background .15s;
+  }
+  input.switch:checked { background: #1f3a25; border-color: #35553a; }
+  input.switch:checked::after { transform: translateX(16px); background: var(--td-ok); }
+  input.switch.warn:checked { background: #3a3014; border-color: #5c4a14; }
+  input.switch.warn:checked::after { background: var(--td-warn); }
+  input.switch:disabled { opacity: 0.4; cursor: not-allowed; }
+  .secure-body { display: flex; flex-direction: column; gap: 12px; transition: opacity .15s; }
+  .secure-body.off { opacity: 0.55; }
+  .duck-state { font-size: 0.8rem; color: var(--td-muted); }
+  .duck-state strong { color: var(--td-text); font-weight: 600; }
   button {
     appearance: none; cursor: pointer;
     border: 1px solid var(--td-sep);
@@ -1238,27 +1815,21 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   button.shutdown {
     border-color: #6a2a2a;
     color: #ffb0b0;
-    margin-left: auto;
+    padding: 8px 14px; font-size: 0.82rem;
   }
   button.shutdown:hover:not(:disabled) {
     background: #3a1212; border-color: #c04040;
   }
-  .meta {
-    margin-top: 14px;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 10px;
-    font-size: 0.86rem;
+  .lower {
+    display: grid; gap: 14px; align-items: stretch;
+    grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr);
   }
-  .meta .cell {
-    background: var(--td-shadow);
-    border: 1px solid var(--td-border);
-    border-radius: 8px;
-    padding: 10px 12px;
+  .log-panel { display: flex; flex-direction: column; min-height: 140px; min-width: 0; }
+  .lower #log { max-height: none; height: 0; flex: 1 1 auto; }
+  @media (max-width: 980px) {
+    .lower { grid-template-columns: 1fr; }
+    .lower #log { height: auto; max-height: 40vh; }
   }
-  .meta .label { color: var(--td-muted); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; }
-  .meta .value { margin-top: 4px; font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
-  .log-panel { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 140px; }
   .log-toolbar {
     display: flex; justify-content: space-between; align-items: center;
     margin-bottom: 10px; gap: 8px;
@@ -1398,32 +1969,119 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     <header class="top">
       <div class="brand">
         <h1>Multiplayer Server</h1>
-        <div class="sub">True Dark console · stop / rebuild / shut down</div>
+        <div class="sub">Google Snake host console</div>
       </div>
-      <div class="status-pill" id="pill">
-        <span class="dot" id="dot"></span>
-        <span id="phaseLabel">idle</span>
+      <div class="top-actions">
+        <div class="status-pill" id="pill">
+          <span class="dot" id="dot"></span>
+          <span id="phaseLabel">idle</span>
+        </div>
+        <button class="shutdown" id="btnShutdown" type="button" title="Stop everything and exit the console (ends start-server.bat)">Shutdown</button>
       </div>
     </header>
 
-    <section class="panel">
-      <h2>Controls</h2>
-      <div class="actions">
-        <button class="primary" id="btnPower" type="button">Start</button>
-        <button class="primary" id="btnSite" type="button">Start site</button>
-        <button class="restart" id="btnRestart" type="button">Restart</button>
-        <button class="shutdown" id="btnShutdown" type="button" title="Stop everything and exit the console (ends start-server.bat)">Shutdown</button>
+    <section class="panel join">
+      <div class="join-main">
+        <div class="eyebrow">Public join URL</div>
+        <div class="join-url empty" id="publicWs" title="Click to copy">Start the game server to get a join URL</div>
       </div>
-      <div class="meta">
-        <div class="cell"><div class="label">Message</div><div class="value" id="msg">—</div></div>
-        <div class="cell"><div class="label">PID</div><div class="value" id="pid">—</div></div>
-        <div class="cell"><div class="label">Game bind</div><div class="value" id="bind">—</div></div>
-        <div class="cell"><div class="label">Site</div><div class="value" id="siteMsg">—</div></div>
-        <div class="cell"><div class="label">Site bind</div><div class="value" id="siteBind">—</div></div>
-        <div class="cell"><div class="label">Site public</div><div class="value" id="sitePublic">—</div></div>
+      <div class="join-side">
+        <span class="badge" id="certBadge">—</span>
+        <button type="button" id="btnCopyWs" disabled>Copy</button>
       </div>
     </section>
 
+    <div class="cards">
+      <section class="panel card">
+        <div class="card-head">
+          <h2>Game server</h2>
+          <span class="dot" id="gameDot"></span>
+        </div>
+        <dl class="kv">
+          <dt>Status</dt><dd id="msg">—</dd>
+          <dt>PID</dt><dd id="pid">—</dd>
+          <dt>Bind</dt><dd id="bind">—</dd>
+        </dl>
+        <div class="net-row">
+          <div class="field port-field">
+            <label class="field-label" for="gamePort">Port</label>
+            <div class="input-group">
+              <input type="number" id="gamePort" min="1" max="65535" inputmode="numeric">
+              <button type="button" id="btnGamePort">Apply</button>
+            </div>
+          </div>
+          <div class="field upnp-field">
+            <span class="field-label">Router (UPnP)</span>
+            <button type="button" id="btnGameUpnp">Start UPnP</button>
+          </div>
+        </div>
+        <p class="hint upnp-state" id="gameUpnpState">—</p>
+        <div class="card-actions">
+          <button class="primary" id="btnPower" type="button">Start</button>
+          <button class="restart" id="btnRestart" type="button">Restart</button>
+        </div>
+      </section>
+
+      <section class="panel card">
+        <div class="card-head">
+          <h2>Secure WSS</h2>
+          <input type="checkbox" class="switch" id="chkSecure" title="Get a free Let's Encrypt certificate so https://googlesnakemods.com can join via wss://">
+        </div>
+        <div class="secure-body" id="secureBody">
+          <p class="hint">Free Let's Encrypt certificate so players on googlesnakemods.com can join.</p>
+          <div class="field">
+            <label class="field-label" for="duckDomain">DuckDNS domain</label>
+            <div class="input-group">
+              <input type="text" id="duckDomain" placeholder="yarmiplay" spellcheck="false" autocomplete="off">
+              <span class="suffix">.duckdns.org</span>
+            </div>
+          </div>
+          <div class="field">
+            <label class="field-label" for="duckToken">DuckDNS token</label>
+            <div class="input-group">
+              <input type="password" id="duckToken" placeholder="token" autocomplete="off">
+              <button type="button" id="btnDuckSave">Save</button>
+            </div>
+          </div>
+          <label class="switch-row" title="Browsers will NOT trust staging certificates — testing only">
+            <input type="checkbox" class="switch warn" id="chkStaging">
+            Staging CA <span class="muted">testing only, not trusted</span>
+          </label>
+          <div class="duck-state" id="duckState">—</div>
+        </div>
+      </section>
+
+      <section class="panel card">
+        <div class="card-head">
+          <h2>Site host</h2>
+          <span class="dot" id="siteDot"></span>
+        </div>
+        <dl class="kv">
+          <dt>Status</dt><dd id="siteMsg">—</dd>
+          <dt>Bind</dt><dd id="siteBind">—</dd>
+          <dt>Public</dt><dd id="sitePublic">—</dd>
+        </dl>
+        <div class="net-row">
+          <div class="field port-field">
+            <label class="field-label" for="sitePort">Port</label>
+            <div class="input-group">
+              <input type="number" id="sitePort" min="1" max="65535" inputmode="numeric">
+              <button type="button" id="btnSitePort">Apply</button>
+            </div>
+          </div>
+          <div class="field upnp-field">
+            <span class="field-label">Router (UPnP)</span>
+            <button type="button" id="btnSiteUpnp">Start UPnP</button>
+          </div>
+        </div>
+        <p class="hint upnp-state" id="siteUpnpState">—</p>
+        <div class="card-actions">
+          <button class="primary" id="btnSite" type="button">Start site</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="lower">
     <section class="panel spec-panel">
       <h2>Spectate</h2>
       <div class="spec-toolbar">
@@ -1461,8 +2119,9 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
       </div>
       <div id="log" aria-live="polite"></div>
     </section>
+    </div>
 
-    <footer>Host controls on :7778 · site host off until Start site (:7779 + UPnP) · friends open http://&lt;ip&gt;:7779 · game ws://&lt;ip&gt;:7777</footer>
+    <footer id="footer">Console :7778 · game :7777 · site host :7779 (off until Start site)</footer>
   </div>
 <script>
 (function () {
@@ -1475,10 +2134,31 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   const siteMsg = document.getElementById("siteMsg");
   const siteBind = document.getElementById("siteBind");
   const sitePublic = document.getElementById("sitePublic");
+  const publicWs = document.getElementById("publicWs");
+  const chkSecure = document.getElementById("chkSecure");
+  const chkStaging = document.getElementById("chkStaging");
+  const duckDomain = document.getElementById("duckDomain");
+  const duckToken = document.getElementById("duckToken");
+  const btnDuckSave = document.getElementById("btnDuckSave");
+  const duckState = document.getElementById("duckState");
+  const secureBody = document.getElementById("secureBody");
+  const certBadge = document.getElementById("certBadge");
+  const btnCopyWs = document.getElementById("btnCopyWs");
+  const gameDot = document.getElementById("gameDot");
+  const siteDot = document.getElementById("siteDot");
   const btnPower = document.getElementById("btnPower");
   const btnSite = document.getElementById("btnSite");
   const btnRestart = document.getElementById("btnRestart");
   const btnShutdown = document.getElementById("btnShutdown");
+  const gamePort = document.getElementById("gamePort");
+  const sitePort = document.getElementById("sitePort");
+  const btnGamePort = document.getElementById("btnGamePort");
+  const btnSitePort = document.getElementById("btnSitePort");
+  const btnGameUpnp = document.getElementById("btnGameUpnp");
+  const btnSiteUpnp = document.getElementById("btnSiteUpnp");
+  const gameUpnpState = document.getElementById("gameUpnpState");
+  const siteUpnpState = document.getElementById("siteUpnpState");
+  const footer = document.getElementById("footer");
   const roomPick = document.getElementById("roomPick");
   const viewSeg = document.getElementById("viewSeg");
   const btnBackMosaic = document.getElementById("btnBackMosaic");
@@ -1520,17 +2200,56 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   function paintStatus(st) {
     if (!st) return;
     phaseLabel.textContent = st.phase || "idle";
-    msg.textContent = st.message || "—";
+    msg.textContent = (st.message || "—").replace(/\s*\(pid \d+\)/, "");
     pid.textContent = st.pid != null ? String(st.pid) : "—";
     bind.textContent = st.server_bind || "—";
-    siteMsg.textContent = st.site_message || "—";
+    siteMsg.textContent = (st.site_message || "—").replace(/\s*\(default\)/, "");
     siteBind.textContent = st.site_bind || "—";
     sitePublic.textContent = st.site_public_url || "—";
-    dot.className = "dot";
-    if (st.phase === "running") dot.classList.add("on");
-    else if (st.phase === "error") dot.classList.add("err");
-    else if (st.phase === "rebuilding" || st.phase === "starting" || st.phase === "stopping")
-      dot.classList.add("busy");
+    const url = st.public_ws || "";
+    publicWs.textContent = url || "Start the game server to get a join URL";
+    publicWs.classList.toggle("empty", !url);
+    btnCopyWs.disabled = !url;
+    certBadge.className = "badge";
+    if (!url) {
+      certBadge.textContent = "offline";
+    } else if (url.indexOf("wss://") !== 0) {
+      certBadge.textContent = "plain ws://";
+    } else if (st.acme_staging) {
+      certBadge.textContent = "staging cert · untrusted";
+      certBadge.classList.add("warn");
+    } else {
+      certBadge.textContent = "trusted · Let's Encrypt";
+      certBadge.classList.add("ok");
+    }
+    chkSecure.checked = !!st.secure_wss;
+    chkStaging.checked = !!st.acme_staging;
+    chkStaging.disabled = !st.secure_wss;
+    secureBody.classList.toggle("off", !st.secure_wss);
+    if (document.activeElement !== duckDomain) {
+      duckDomain.value = (st.duckdns_domain || "").replace(/\.duckdns\.org$/i, "");
+    }
+    duckToken.placeholder = st.duckdns_token_set ? "saved — type to replace" : "paste token";
+    duckState.innerHTML = "";
+    const strong = document.createElement("strong");
+    if (st.duckdns_token_set) {
+      duckState.append("Certificate for ");
+      strong.textContent = (duckDomain.value || "?") + ".duckdns.org";
+      duckState.append(strong);
+    } else {
+      duckState.append("No token — certificate for your ");
+      strong.textContent = "public IP";
+      duckState.append(strong, " (needs inbound TCP 80/443)");
+    }
+    function paintDot(el, phase, running) {
+      el.className = "dot";
+      if (phase === "error") el.classList.add("err");
+      else if (phase === "rebuilding" || phase === "starting" || phase === "stopping") el.classList.add("busy");
+      else if (running) el.classList.add("on");
+    }
+    paintDot(dot, st.phase, st.phase === "running");
+    paintDot(gameDot, st.phase, !!st.running);
+    paintDot(siteDot, st.site_phase, !!st.site_running);
     const busy = st.phase === "rebuilding" || st.phase === "starting" || st.phase === "stopping";
     const siteBusy = st.site_phase === "starting" || st.site_phase === "stopping";
     const gameOn = !!st.running;
@@ -1543,6 +2262,46 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     btnSite.disabled = siteBusy || shuttingDown;
     btnRestart.disabled = busy || shuttingDown;
     btnShutdown.disabled = shuttingDown;
+
+    paintPort(gamePort, btnGamePort, st.game_port, busy);
+    paintPort(sitePort, btnSitePort, st.site_port, siteBusy);
+    paintUpnp(btnGameUpnp, gameUpnpState, st.game_upnp, gameOn && st.phase === "running",
+      st.game_upnp_open, st.game_upnp_error, "server");
+    const siteHosting = st.site_phase === "running";
+    const siteOpen = st.site_public_url ? st.site_public_url.replace(/^https?:\/\//, "") : null;
+    paintUpnp(btnSiteUpnp, siteUpnpState, st.site_upnp, siteHosting,
+      siteOpen, st.site_upnp_error, "site host");
+    footer.textContent = "Console :" + (location.port || "7778") + " · game :" + (st.game_port || "—") +
+      " · site host :" + (st.site_port || "—") + (siteOn ? "" : " (off until Start site)");
+  }
+
+  function paintPort(input, btn, port, svcBusy) {
+    const editing = document.activeElement === input || input.dataset.dirty === "1";
+    if (!editing) input.value = port ? String(port) : "";
+    const wanted = parseInt(input.value, 10);
+    btn.disabled = svcBusy || shuttingDown || !(wanted >= 1 && wanted <= 65535) || wanted === port;
+  }
+
+  function paintUpnp(btn, stateEl, enabled, live, openAt, error, what) {
+    btn.textContent = enabled ? "Stop UPnP" : "Start UPnP";
+    btn.classList.toggle("on", !!enabled);
+    btn.disabled = shuttingDown;
+    stateEl.className = "hint upnp-state";
+    stateEl.title = "";
+    if (!enabled) {
+      stateEl.textContent = "Port forward off, LAN only";
+    } else if (!live) {
+      stateEl.textContent = "Port forward opens when the " + what + " starts";
+    } else if (openAt) {
+      stateEl.textContent = "Port forward open on " + openAt;
+      stateEl.classList.add("ok");
+    } else if (error) {
+      stateEl.textContent = "Router refused the port forward (hover for details)";
+      stateEl.title = error;
+      stateEl.classList.add("warn");
+    } else {
+      stateEl.textContent = "Opening port forward…";
+    }
   }
 
   function appendLog(line) {
@@ -1577,6 +2336,82 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     post(btnSite.textContent === "Stop site" ? "/api/site/stop" : "/api/site/start");
   });
   btnRestart.addEventListener("click", function () { post("/api/restart"); });
+  async function postJson(path, body) {
+    try {
+      const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const st = await res.json().catch(function () { return null; });
+      if (st) paintStatus(st);
+      return res.ok;
+    } catch (e) {
+      appendLog("[console] request failed: " + e);
+      return false;
+    }
+  }
+  function wirePort(target, input, btn) {
+    async function apply() {
+      if (btn.disabled) return;
+      btn.disabled = true;
+      await postJson("/api/port", { target: target, port: parseInt(input.value, 10) });
+      input.dataset.dirty = "";
+      input.blur();
+      refresh();
+    }
+    input.addEventListener("input", function () { input.dataset.dirty = "1"; });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") apply();
+      if (e.key === "Escape") { input.dataset.dirty = ""; input.blur(); refresh(); }
+    });
+    btn.addEventListener("click", apply);
+  }
+  wirePort("game", gamePort, btnGamePort);
+  wirePort("site", sitePort, btnSitePort);
+  btnGameUpnp.addEventListener("click", function () {
+    btnGameUpnp.disabled = true;
+    postJson("/api/upnp", { target: "game", enabled: btnGameUpnp.textContent === "Start UPnP" });
+  });
+  btnSiteUpnp.addEventListener("click", function () {
+    btnSiteUpnp.disabled = true;
+    postJson("/api/upnp", { target: "site", enabled: btnSiteUpnp.textContent === "Start UPnP" });
+  });
+  async function postSecure() {
+    const body = {
+      secure_wss: chkSecure.checked,
+      acme_staging: chkStaging.checked,
+      duckdns_domain: duckDomain.value.trim()
+    };
+    if (duckToken.value.trim()) body.duckdns_token = duckToken.value.trim();
+    try {
+      const res = await fetch("/api/secure", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      duckToken.value = "";
+      const st = await res.json().catch(function () { return null; });
+      if (st) paintStatus(st);
+    } catch (e) {
+      appendLog("[console] request failed: " + e);
+    }
+  }
+  chkSecure.addEventListener("change", postSecure);
+  chkStaging.addEventListener("change", postSecure);
+  btnDuckSave.addEventListener("click", postSecure);
+  function copyJoinUrl() {
+    if (publicWs.classList.contains("empty") || !navigator.clipboard) return;
+    const url = publicWs.textContent;
+    navigator.clipboard.writeText(url).then(function () {
+      btnCopyWs.textContent = "Copied";
+      setTimeout(function () { btnCopyWs.textContent = "Copy"; }, 1400);
+    }).catch(function () {});
+  }
+  publicWs.addEventListener("click", copyJoinUrl);
+  btnCopyWs.addEventListener("click", copyJoinUrl);
+  duckDomain.addEventListener("keydown", function (e) { if (e.key === "Enter") postSecure(); });
+  duckToken.addEventListener("keydown", function (e) { if (e.key === "Enter") postSecure(); });
   btnShutdown.addEventListener("click", async function () {
     if (shuttingDown) return;
     if (!window.confirm("Shut down the console completely?\n\nThis stops the game server, site host, and exits start-server.bat.")) {

@@ -67,6 +67,19 @@ if (remixSrc) {
     /localStorage\.getItem\('snakeChosenMod'\) === "PuddingMod" \|\| window\.NepDebug/g,
     'localStorage.getItem(\'snakeChosenMod\') === "PuddingMod" || localStorage.getItem(\'snakeChosenMod\') === "MultiplayerMod" || window.NepDebug || window.MultiplayerMod'
   );
+  // Pudding turns on NepDebug for every "Load from url" mod, which pulls CSS/libraries
+  // from its author's Live Server (http://127.0.0.1:5500) and triggers Chrome's
+  // Local Network Access prompt. That is how players load MultiplayerMod, so debug
+  // mode is opt-in only (localStorage.NepDebug = "true").
+  const nepDebugCustomUrl =
+    /if \(localStorage\.getItem\('snakeChosenMod'\) === "customUrl"\) \{\s*console\.log\("Detect customUrl - enabling debug mode and printing initial code"\)\s*window\.NepDebug = true;\s*\}/;
+  if (!nepDebugCustomUrl.test(remixCode)) {
+    throw new Error("build: Pudding customUrl→NepDebug block not found — update the patch in tools/build.mjs");
+  }
+  remixCode = remixCode.replace(
+    nepDebugCustomUrl,
+    'if (localStorage.getItem("NepDebug") === "true") {\n    window.NepDebug = true;\n  }'
+  );
   // DiceCounts inject failures are soft (engine string drift) — don't red-console on Classic
   remixCode = remixCode.replace(
     /console\.error\("DiceCounts: failed to ([^"]+)"\)/g,
