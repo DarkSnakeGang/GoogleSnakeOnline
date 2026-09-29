@@ -182,6 +182,8 @@ async function connect(page, wsUrl, displayName, roomCode) {
     window.__multiplayerApp.ui.openPuddingSettings("control");
   });
   await page.waitForSelector("#mp-server-url", { state: "attached", timeout: 15000 });
+  const shown = await page.$eval("#mp-server-url", function (e) { return e.value; });
+  console.log("[duckdns-connect] server URL shown before typing:", shown);
   await typeInto(page, "#mp-server-url", wsUrl);
   await typeInto(page, "#mp-display-name", displayName);
   await typeInto(page, "#mp-room-code", roomCode);

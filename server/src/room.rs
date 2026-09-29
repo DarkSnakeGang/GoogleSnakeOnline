@@ -871,6 +871,7 @@ impl Room {
         }
         self.join_seq += 1;
         let is_first = self.clients.is_empty();
+        let name = display_name.clone().unwrap_or_default();
         let client = ClientState {
             client_id: client_id.clone(),
             display_name,
@@ -886,7 +887,7 @@ impl Room {
             self.admin_id = Some(client_id.clone());
             info!(roomId = %self.code, clientId = %client_id, event = "admin_assign");
         }
-        info!(roomId = %self.code, clientId = %client_id, event = "join");
+        info!(roomId = %self.code, clientId = %client_id, name = ?name, event = "join");
         self.push_to(
             &client_id,
             Envelope::new(

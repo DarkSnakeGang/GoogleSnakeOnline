@@ -216,8 +216,8 @@ struct Shared {
     message: Mutex<String>,
     child: Mutex<Option<Child>>,
     pid: Mutex<Option<u32>>,
-    log_lines: Mutex<Vec<String>>,
-    log_tx: broadcast::Sender<String>,
+    log_lines: Mutex<Vec<LogEntry>>,
+    log_tx: broadcast::Sender<LogEntry>,
     busy: AtomicBool,
     server_bind: Mutex<SocketAddr>,
     site_bind: Mutex<SocketAddr>,
@@ -337,16 +337,34 @@ impl Shared {
     }
 
     fn push_log(&self, line: String) {
-        let line = strip_ansi(&line);
+        let entry = LogEntry {
+            t: chrono::Utc::now().timestamp_millis(),
+            line: strip_ansi(&line),
+        };
         {
             let mut lines = self.log_lines.lock();
-            lines.push(line.clone());
+            lines.push(entry.clone());
             if lines.len() > LOG_CAP {
                 let drain = lines.len() - LOG_CAP;
                 lines.drain(0..drain);
             }
         }
-        let _ = self.log_tx.send(line);
+        let _ = self.log_tx.send(entry);
+    }
+}
+
+/// One console log line with the time it arrived (Unix ms), sent to the page as JSON.
+#[derive(Clone, Serialize)]
+struct LogEntry {
+    t: i64,
+    line: String,
+}
+
+impl LogEntry {
+    fn event(&self) -> Event {
+        Event::default()
+            .event("log")
+            .data(serde_json::to_string(self).unwrap_or_default())
     }
 }
 
@@ -796,18 +814,18 @@ async fn open_game_upnp(s: &Arc<Shared>) {
         return;
     }
     let port = s.server_bind().port();
-    s.push_log(format!("[console] UPnP: opening game TCP {port}…"));
+    s.push_log(format!("[console] UPnP: opening router forward for game port {port}…"));
     match UpnpMapping::open(port).await {
         Ok((mapping, ip)) => {
             *s.game_upnp_gateway.lock() = mapping.release();
             *s.game_upnp_ip.lock() = Some(ip);
             *s.game_upnp_error.lock() = None;
-            s.push_log(format!("[console] UPnP: game TCP {port} open on {ip}"));
+            s.push_log(format!("[console] UPnP: game port {port} forwarded — open on {ip}:{port}"));
         }
         Err(e) => {
             *s.game_upnp_ip.lock() = None;
             *s.game_upnp_error.lock() = Some(e.clone());
-            s.push_log(format!("[console] UPnP: game TCP {port} not opened ({e}) — LAN only"));
+            s.push_log(format!("[console] UPnP: game port {port} not opened ({e}) — LAN only"));
         }
     }
 }
@@ -1068,15 +1086,16 @@ async fn api_logs(
     let history = s.log_lines.lock().clone();
     let mut rx = s.log_tx.subscribe();
     let stream = async_stream::stream! {
-        for line in history {
-            yield Ok(Event::default().event("log").data(line));
+        yield Ok(Event::default().event("reset").data(""));
+        for entry in history {
+            yield Ok(entry.event());
         }
         yield Ok(Event::default().event("status").data(
             serde_json::to_string(&s.status()).unwrap_or_else(|_| "{}".into())
         ));
         loop {
             match rx.recv().await {
-                Ok(line) => yield Ok(Event::default().event("log").data(line)),
+                Ok(entry) => yield Ok(entry.event()),
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => break,
             }
@@ -1825,36 +1844,87 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr);
   }
   .log-panel { display: flex; flex-direction: column; min-height: 140px; min-width: 0; }
-  .lower #log { max-height: none; height: 0; flex: 1 1 auto; }
+  .lower .log-wrap { height: 0; flex: 1 1 auto; max-height: none; }
   @media (max-width: 980px) {
     .lower { grid-template-columns: 1fr; }
-    .lower #log { height: auto; max-height: 40vh; }
+    .lower .log-wrap { height: 44vh; flex: none; }
   }
   .log-toolbar {
     display: flex; justify-content: space-between; align-items: center;
     margin-bottom: 10px; gap: 8px;
   }
-  .log-toolbar button { padding: 7px 12px; font-size: 0.8rem; }
-  #log {
-    flex: 1;
-    background: #0a0a0a;
-    border: 1px solid var(--td-border);
-    border-radius: 8px;
-    padding: 12px 14px;
-    overflow: auto;
-    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-    font-size: 12.5px;
-    line-height: 1.45;
-    color: #c9c9c9;
-    white-space: pre-wrap;
-    word-break: break-word;
-    min-height: 120px;
-    max-height: 22vh;
+  .log-tools { display: flex; gap: 8px; align-items: center; min-width: 0; }
+  .log-tools button { padding: 7px 12px; font-size: 0.8rem; }
+  #logSearch {
+    width: 150px; min-width: 0; background: rgba(0,0,0,0.35); color: var(--td-text);
+    border: 1px solid var(--td-sep); border-radius: 8px; padding: 7px 10px;
+    font: inherit; font-size: 0.8rem; outline: none;
   }
-  #log .dim { color: #666; }
-  #log .cargo { color: #9aa7b8; }
-  #log .err { color: #e09090; }
-  #log .ok { color: #8fd49a; }
+  #logSearch:focus { border-color: #4a4a4a; }
+  .log-filters {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 8px; margin-bottom: 10px;
+  }
+  .log-filters .seg button { padding: 6px 10px; font-size: 0.78rem; }
+  .log-filters .count:not(:empty) {
+    display: inline-block; min-width: 16px; margin-left: 4px; padding: 0 5px;
+    border-radius: 999px; background: #5a2323; color: #ffd0d0; font-size: 0.7rem; line-height: 16px;
+  }
+  .log-wrap { position: relative; min-height: 160px; max-height: 60vh; display: flex; }
+  #log {
+    flex: 1; min-height: 0; overflow: auto;
+    background: #0a0a0a; border: 1px solid var(--td-border); border-radius: 8px;
+    padding: 4px 0; font-size: 0.84rem; line-height: 1.4; color: #d4d4d4;
+    color-scheme: dark; scrollbar-color: #3a3a3a transparent; scrollbar-width: thin;
+  }
+  #log .empty { padding: 18px; color: var(--td-muted); text-align: center; font-size: 0.82rem; }
+  .le {
+    display: grid; grid-template-columns: 58px 20px minmax(0, 1fr); gap: 0 8px;
+    align-items: baseline; padding: 5px 12px 5px 10px;
+    border-left: 2px solid transparent; cursor: pointer;
+  }
+  .le:hover { background: rgba(255,255,255,0.035); }
+  .le + .le { border-top: 1px solid rgba(255,255,255,0.03); }
+  .le .t { color: #6f6f6f; font-family: ui-monospace, Consolas, monospace; font-size: 0.72rem; }
+  .le .ic { text-align: center; font-size: 0.8rem; color: #7d7d7d; }
+  .le .m { min-width: 0; overflow-wrap: anywhere; }
+  .le .src {
+    display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 4px;
+    font-size: 0.64rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+    vertical-align: 1px; background: #1c1c1c; color: #8a8a8a; border: 1px solid #262626;
+  }
+  .le .src.room { color: #9cc3ff; border-color: #22344f; background: #111a26; }
+  .le .src.net { color: #b6a2f5; border-color: #33294f; background: #17131f; }
+  .le .src.tls { color: #8fd9a1; border-color: #25442d; background: #111c14; }
+  .le .src.build { color: #9aa7b8; }
+  .le .chip {
+    font-family: ui-monospace, Consolas, monospace; font-size: 0.78rem;
+    padding: 0 5px; border-radius: 4px; background: #1b1b1b; color: #ececec;
+    border: 1px solid #2a2a2a; white-space: nowrap;
+  }
+  .le .chip.who { color: #ffe6a8; border-color: #3d3419; background: #1d190d; }
+  .le .chip.url { white-space: normal; overflow-wrap: anywhere; }
+  .le .raw {
+    display: none; grid-column: 3; margin-top: 4px; padding: 6px 8px; border-radius: 6px;
+    background: #111; color: #8c8c8c; font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.72rem; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .le.open .raw { display: block; }
+  .le.ok .ic { color: #6fd08a; }
+  .le.warn { border-left-color: #b8902c; background: rgba(184,144,44,0.05); }
+  .le.warn .ic { color: #e6c46a; }
+  .le.err { border-left-color: #c04848; background: rgba(192,72,72,0.07); }
+  .le.err .ic { color: #ff8a8a; }
+  .le.verbose .m { color: #8d8d8d; }
+  .le.hidden { display: none; }
+  .le .rep { color: #8a8a8a; font-size: 0.74rem; font-weight: 600; }
+  .log-latest {
+    position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+    padding: 6px 14px; font-size: 0.78rem; border-radius: 999px;
+    background: #1f2d45; border-color: #34507a; color: #d6e6ff;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.5); display: none;
+  }
+  .log-latest.show { display: block; }
   footer {
     color: var(--td-muted); font-size: 0.75rem; text-align: center;
     padding-top: 4px;
@@ -2115,9 +2185,26 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     <section class="panel log-panel">
       <div class="log-toolbar">
         <h2 style="margin:0">Log</h2>
-        <button type="button" id="btnClear">Clear view</button>
+        <div class="log-tools">
+          <input type="search" id="logSearch" placeholder="Search" spellcheck="false" autocomplete="off">
+          <button type="button" id="btnClear" title="Clear the view (the server keeps its history)">Clear</button>
+        </div>
       </div>
-      <div id="log" aria-live="polite"></div>
+      <div class="log-filters">
+        <div class="seg" id="logSeg">
+          <button type="button" data-cat="all" class="active">All</button>
+          <button type="button" data-cat="room">Rooms</button>
+          <button type="button" data-cat="net">Network</button>
+          <button type="button" data-cat="problem">Problems <span class="count" id="problemCount"></span></button>
+        </div>
+        <label class="switch-row" title="Show low-level lines (network adapters, internal config, build output)">
+          <input type="checkbox" class="switch" id="logVerbose"> Details
+        </label>
+      </div>
+      <div class="log-wrap">
+        <div id="log" aria-live="polite"></div>
+        <button type="button" id="btnLogLatest" class="log-latest">↓ New messages</button>
+      </div>
     </section>
     </div>
 
@@ -2195,6 +2282,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   logEl.addEventListener("scroll", function () {
     const gap = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight;
     stickBottom = gap < 40;
+    if (stickBottom) btnLogLatest.classList.remove("show");
   });
 
   function paintStatus(st) {
@@ -2304,19 +2392,392 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     }
   }
 
-  function appendLog(line) {
-    const span = document.createElement("div");
-    let cls = "";
-    if (line.indexOf("[cargo]") === 0) cls = "cargo";
-    else if (line.indexOf("[err]") === 0) cls = "err";
-    else if (/rebuild ok|server up|Listening/i.test(line)) cls = "ok";
-    else if (line.indexOf("[console]") === 0) cls = "dim";
-    if (cls) span.className = cls;
-    span.textContent = line;
-    logEl.appendChild(span);
-    while (logEl.childNodes.length > 2500) logEl.removeChild(logEl.firstChild);
-    if (stickBottom) logEl.scrollTop = logEl.scrollHeight;
+  // ---- Log view: raw lines → readable entries ----
+  const TRACE_RE = /^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s+([\w:]+):\s?(.*)$/;
+  const KV_RE = /([A-Za-z_][\w.]*)=("(?:[^"\\]|\\.)*"|[^\s]+(?:\s+(?![A-Za-z_][\w.]*=)[^\s]+)*)/g;
+  const URL_RE = /((?:wss?|https?):\/\/[^\s)]+)/;
+  const PATH_RE = /[A-Za-z]:\\(?:[^\\\n]+\\)*([^\\\n]+?\.(?:exe|toml|json))/g;
+  const LOG_MAX = 2500;
+  const names = {};
+  let problemCount = 0;
+  let lastEntry = null;
+  const logSearch = document.getElementById("logSearch");
+  const logSeg = document.getElementById("logSeg");
+  const logVerbose = document.getElementById("logVerbose");
+  const problemCountEl = document.getElementById("problemCount");
+  const btnLogLatest = document.getElementById("btnLogLatest");
+  const logFilter = {
+    cat: localStorage.getItem("mpLogCat") || "all",
+    verbose: localStorage.getItem("mpLogVerbose") === "1",
+    q: ""
+  };
+  const logEmpty = document.createElement("div");
+  logEmpty.className = "empty";
+  logEl.appendChild(logEmpty);
+
+  function c(text, cls) { return { chip: String(text), cls: cls || "" }; }
+  function who(id) { return id ? { who: String(id) } : "someone"; }
+  function room(kv) { return c(kv.roomId || "?"); }
+  function words(s) { return String(s || "").replace(/_/g, " ").toLowerCase(); }
+  function sentence(s) { s = words(s); return s.charAt(0).toUpperCase() + s.slice(1); }
+  function untilDate(sec) {
+    const n = Number(sec);
+    return n ? new Date(n * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "?";
   }
+  function problem(text, kv) { return kv.error ? [text + ": " + kv.error] : [text]; }
+
+  const EVENTS = {
+    room_create: function (kv) { return { ic: "+", parts: ["Room ", room(kv), " created"] }; },
+    join: function (kv) { return { ic: "→", parts: [who(kv.clientId), " joined room ", room(kv)] }; },
+    leave: function (kv) { return { ic: "←", parts: [who(kv.clientId), " left room ", room(kv)] }; },
+    disconnect: function (kv) {
+      return { verbose: kv.code === "ws_closed", parts: [who(kv.clientId), " disconnected", kv.code && kv.code !== "ws_closed" ? " (" + words(kv.code) + ")" : ""] };
+    },
+    admin_assign: function (kv) { return { ic: "★", parts: [who(kv.clientId), " is the host of room ", room(kv)] }; },
+    admin_succession: function (kv) { return { ic: "★", parts: ["Host left — ", who(kv.clientId), " now hosts room ", room(kv)] }; },
+    admin_transfer: function (kv) { return { ic: "★", parts: ["Host handed to ", who(kv.clientId), " in room ", room(kv)] }; },
+    kick: function (kv) { return { level: "warn", parts: [who(kv.clientId), " was kicked from room ", room(kv)] }; },
+    auto_demote: function (kv) { return { parts: [who(kv.clientId), " moved to spectators in room ", room(kv)] }; },
+    set_role: function (kv) { return { parts: [who(kv.clientId), " is now a ", words(kv.role || "player"), " in room ", room(kv)] }; },
+    set_duration: function (kv) { return { parts: ["Room ", room(kv), ": round length set to ", c(kv.minutes + " min")] }; },
+    set_race_goal: function (kv) { return { parts: ["Room ", room(kv), ": race goal set to ", c(words(kv.goal))] }; },
+    mode_change: function (kv) { return { parts: ["Room ", room(kv), " switched to ", c(words(kv.mode))] }; },
+    session_start: function (kv) { return { level: "ok", ic: "▶", parts: ["Room ", room(kv), ": ", words(kv.mode || ""), " round started"] }; },
+    session_end_admin: function (kv) { return { ic: "■", parts: ["Host ended the round in room ", room(kv)] }; },
+    attempt_expired: function (kv) { return { ic: "■", parts: ["Room ", room(kv), ": time's up"] }; },
+    attempt_expired_grace: function (kv) { return { ic: "■", parts: ["Room ", room(kv), ": time's up — letting runs in progress finish"] }; },
+    attempt_grace_complete: function (kv) { return { ic: "■", parts: ["Room ", room(kv), ": all runs finished"] }; },
+    coop_session_end: function (kv) { return { ic: "■", parts: ["Room ", room(kv), ": co-op run ended", kv.reason ? " (" + words(kv.reason) + ")" : ""] }; },
+    coop_all_dead: function (kv) { return { parts: ["Room ", room(kv), ": everyone died"] }; },
+    coop_no_players: function (kv) { return { parts: ["Room ", room(kv), ": co-op run has no players left"] }; },
+    orphan_reaped: function (kv) { return { verbose: true, parts: ["Cleaned up ", who(kv.clientId), "'s leftover seat in room ", room(kv)] }; },
+    room_gc: function (kv) { return { verbose: true, parts: ["Removed ", String(kv.removed), " empty room" + (kv.removed === "1" ? "" : "s")] }; },
+    play_sync: function (kv) { return { verbose: true, parts: [who(kv.clientId), " synced play state in room ", room(kv)] }; },
+    settings_sync: function (kv) { return { verbose: true, parts: [who(kv.clientId), " synced game settings in room ", room(kv)] }; },
+    spectate_focus: function (kv) { return { verbose: true, parts: [who(kv.clientId), " is spectating ", kv.focus ? who(kv.focus) : "the mosaic", " in room ", room(kv)] }; },
+    resync_request: function (kv) { return { verbose: true, parts: [who(kv.clientId), " asked for a resync in room ", room(kv)] }; },
+    client_error: function (kv) { return { level: "warn", parts: [who(kv.clientId), " hit an error in room ", room(kv), ": ", kv.message || words(kv.code)] }; },
+    unknown_type: function (kv) { return { level: "warn", parts: [who(kv.clientId), " sent an unknown message type ", c(kv.msg_type || "?")] }; },
+    malformed: function (kv) { return { level: "warn", parts: [who(kv.clientId), " sent a malformed message", kv.error ? ": " + kv.error : ""] }; },
+    binary_ignored: function (kv) { return { level: "warn", parts: [who(kv.clientId), " sent binary data (ignored)"] }; },
+    ws_rate_limited: function (kv) { return { level: "warn", parts: [who(kv.clientId), " is sending too fast (rate limited)"] }; },
+    ws_text_too_large: function (kv) { return { level: "warn", parts: [who(kv.clientId), " sent an oversized message"] }; },
+    coop_authority_config: function (kv) { return { verbose: true, parts: ["Co-op engine: ", c(kv.coopAuthority || "?")] }; },
+    listen: function (kv) { return { verbose: true, parts: ["Listening on ", c(kv.bind)] }; },
+    listen_tls: function (kv) { return { verbose: true, parts: ["Listening (TLS) on ", c(kv.bind)] }; },
+    shutdown_signal: function () { return { parts: ["Server shutting down"] }; },
+    upnp_ssdp_iface: function (kv) { return { verbose: true, parts: ["Looking for the router via ", kv.adapter || "?", " ", c(kv.ip)] }; },
+    upnp_ssdp_iface_failed: function (kv) { return { verbose: true, level: "info", parts: problem("Router search failed on " + (kv.adapter || "?"), kv) }; },
+    upnp_ssdp_send_failed: function (kv) { return { verbose: true, level: "info", parts: problem("Router search failed on " + (kv.adapter || "?"), kv) }; },
+    upnp_gateway_found: function (kv) { return { verbose: true, parts: ["Router found via ", kv.adapter || "?", " (this PC is ", c(kv.local_ip), ")"] }; },
+    upnp_gateway_rejected: function (kv) { return { verbose: true, level: "info", parts: problem("Ignored a UPnP device", kv) }; },
+    upnp_mapped: function (kv) { return { level: "ok", parts: ["Router forward open: TCP ", c(kv.port || kv.external_port || "?"), " on ", c(kv.external_ip || "?")] }; },
+    upnp_ready: function (kv) { return { level: "ok", parts: ["Public join URL ", kv.public_ws || ""] }; },
+    upnp_unmapped: function (kv) { return { parts: ["Router forward closed: TCP ", c(kv.port || kv.external_port || "?")] }; },
+    upnp_unmap_failed: function (kv) { return { level: "warn", parts: problem("Couldn't close router forward TCP " + (kv.port || "?"), kv) }; },
+    upnp_skipped: function (kv) { return { level: "warn", parts: problem("UPnP unavailable", kv) }; },
+    upnp_disabled: function () { return { verbose: true, parts: ["Server-side UPnP off — the console manages the router forward"] }; },
+    upnp_existing_mapping_replaced: function (kv) { return { parts: ["Replaced an old router forward", kv.port ? " on TCP " + kv.port : ""] }; },
+    upnp_external_ip_private: function (kv) {
+      return { level: "warn", parts: ["Router reports a private internet address ", c(kv.external_ip || kv.ip || "?"), " — likely double NAT / CGNAT, friends outside can't reach you"] };
+    },
+    upnp_get_mapping_failed: function (kv) { return { verbose: true, parts: problem("Router forward lookup failed", kv) }; },
+    acme_order_started: function (kv) {
+      return { parts: ["Requesting a certificate for ", c(kv.host), kv.staging === "true" ? " (staging, untrusted)" : ""] };
+    },
+    duckdns_txt_set: function (kv) { return { parts: ["DuckDNS verification record set for ", c(kv.host)] }; },
+    acme_dns_txt_visible: function () { return { parts: ["Verification record is visible on the internet"] }; },
+    acme_cert_issued: function (kv) { return { level: "ok", parts: ["Certificate issued for ", c(kv.host), ", valid until ", untilDate(kv.not_after)] }; },
+    acme_cert_cached: function (kv) { return { level: "ok", parts: ["Using saved certificate for ", c(kv.host), ", valid until ", untilDate(kv.not_after)] }; },
+    acme_ready: function (kv) { return { verbose: true, parts: ["Secure server ready at ", kv.url || ""] }; },
+    acme_renewed: function (kv) { return { level: "ok", parts: ["Certificate renewed, valid until ", untilDate(kv.not_after)] }; },
+    acme_failed: function (kv) { return { level: "err", parts: problem("Certificate request failed", kv) }; },
+    acme_renew_failed: function (kv) { return { level: "warn", parts: problem("Certificate renewal failed", kv) }; },
+    acme_renew_failed_keeping_cached: function (kv) { return { level: "warn", parts: problem("Renewal failed — keeping the current certificate", kv) }; },
+    acme_host_changed: function (kv) { return { level: "warn", parts: ["Certificate name changed from ", c(kv.old), " to ", c(kv.new)] }; },
+    duckdns_ip_updated: function (kv) { return { level: "ok", parts: [c(kv.domain), " now points to ", c(String(kv.ip || "this PC").replace(/^Some\("?|"?\)$/g, ""))] }; },
+    duckdns_retry: function (kv) { return { level: "warn", parts: ["DuckDNS didn't answer, retrying", kv.attempt ? " (attempt " + kv.attempt + ")" : "", kv.error ? ": " + kv.error : ""] }; },
+    duckdns_ip_update_failed: function (kv) { return { level: "warn", parts: problem("DuckDNS address update failed (keeping the old one)", kv) }; }
+  };
+
+  function srcFor(target, event, kv) {
+    const e = event || "";
+    if (/^(acme|duckdns)/.test(e) || /acme/.test(target)) return { label: "TLS", cls: "tls", cat: "net" };
+    if (/^upnp/.test(e) || /upnp/.test(target)) return { label: "Router", cls: "net", cat: "net" };
+    if (/::room$/.test(target) || kv.roomId || kv.clientId || e === "room_gc") return { label: "Room", cls: "room", cat: "room" };
+    return { label: "Server", cls: "", cat: "system" };
+  }
+
+  function levelFromText(text) {
+    if (/spawn error|start failed|panicked|exited with|fatal|\berror:/i.test(text)) return "err";
+    if (/fail|refused|not opened|rejected|unavailable|could not|couldn't|skipped|busy|timed out|warning/i.test(text)) return "warn";
+    if (/server up|site host up|\bopen on\b|\bopen —|rebuild ok|valid until|listening on|public join url|closed$/i.test(text)) return "ok";
+    return "info";
+  }
+
+  function describePlain(origin, body) {
+    const text = body.replace(PATH_RE, "$1");
+    if (origin === "cargo") {
+      const lvl = /^error|\berror\[/i.test(text) ? "err" : /^warning/i.test(text) ? "warn" : /Finished/.test(text) ? "ok" : "info";
+      return { src: { label: "Build", cls: "build", cat: "build" }, level: lvl, verbose: lvl === "info", parts: [text] };
+    }
+    if (origin === "console") {
+      let src = { label: "Console", cls: "", cat: "system" };
+      if (/^(spawning|server up|stopping pid|kill )/i.test(text)) {
+        src = { label: "Console", cls: "", cat: "system" };
+      } else if (/^site /i.test(text)) {
+        src = { label: "Site", cls: "net", cat: "net" };
+      } else if (/UPnP|forward|port /i.test(text)) {
+        src = { label: "Router", cls: "net", cat: "net" };
+      } else if (/ACME|certificate|DuckDNS|secure/i.test(text)) {
+        src = { label: "TLS", cls: "tls", cat: "net" };
+      } else if (/rebuild|cargo/i.test(text)) {
+        src = { label: "Build", cls: "build", cat: "build" };
+      }
+      const verbose = /^manifest |^GUI http|^site host binding/.test(text);
+      let clean = text
+        .replace(/^(site )?UPnP:\s*/i, "")
+        .replace(/^spawning (\S+)/, "Starting game server: $1")
+        .replace(/^server up pid=(\d+)/, "Game server started (pid $1)");
+      clean = clean.charAt(0).toUpperCase() + clean.slice(1);
+      return { src: src, level: levelFromText(text), verbose: verbose, parts: [clean] };
+    }
+    let src = { label: "Server", cls: "", cat: "system" };
+    if (/ACME|certificate|DuckDNS/i.test(text)) src = { label: "TLS", cls: "tls", cat: "net" };
+    else if (/UPnP|router|forward/i.test(text)) src = { label: "Router", cls: "net", cat: "net" };
+    const verbose = /^Share wss?:\/\/<host>|^\(LAN friends|^ACME certificate for .* valid until/.test(text);
+    let clean = text.replace(/^ACME:\s*/, "");
+    clean = clean.charAt(0).toUpperCase() + clean.slice(1);
+    return { src: src, level: levelFromText(text), verbose: verbose, parts: [clean] };
+  }
+
+  function describe(line) {
+    let origin = "out";
+    let body = line;
+    const pm = /^\[(console|err|out|cargo)\]\s?/.exec(line);
+    if (pm) { origin = pm[1]; body = line.slice(pm[0].length); }
+    const tm = origin !== "console" && origin !== "cargo" ? TRACE_RE.exec(body) : null;
+    if (!tm) return describePlain(origin, body);
+    const kv = {};
+    let m;
+    KV_RE.lastIndex = 0;
+    while ((m = KV_RE.exec(tm[4]))) {
+      let v = m[2];
+      if (v.charAt(0) === '"') { try { v = JSON.parse(v); } catch (_) { v = v.slice(1, -1); } }
+      kv[m[1]] = v;
+    }
+    const message = tm[4].replace(KV_RE, "").trim();
+    if (kv.clientId && kv.name && !names[kv.clientId]) setName(kv.clientId, kv.name);
+    const traceLevel = { ERROR: "err", WARN: "warn", INFO: "info", DEBUG: "info", TRACE: "info" }[tm[2]];
+    const ev = kv.event || "";
+    const rule = EVENTS[ev] ? EVENTS[ev](kv) : null;
+    const d = {
+      at: Date.parse(tm[1]),
+      src: srcFor(tm[3], ev, kv),
+      level: (rule && rule.level) || traceLevel,
+      verbose: rule ? !!rule.verbose : tm[2] === "DEBUG" || tm[2] === "TRACE",
+      ic: rule && rule.ic,
+      parts: null
+    };
+    if (rule) {
+      d.parts = rule.parts;
+    } else {
+      d.parts = [message || sentence(ev || "server event")];
+      Object.keys(kv).forEach(function (k) {
+        if (k === "event") return;
+        d.parts.push(" ");
+        if (k === "clientId") d.parts.push(who(kv[k]));
+        else if (k === "roomId") d.parts.push("room ", c(kv[k]));
+        else if (k === "error") d.parts.push("— " + kv[k]);
+        else d.parts.push(c(words(k) + " " + kv[k]));
+      });
+    }
+    return d;
+  }
+
+  function nameFor(id) { return names[id] || "player " + id.slice(0, 4); }
+
+  function setName(id, n) {
+    names[id] = n;
+    logEl.querySelectorAll('.chip.who[data-client="' + CSS.escape(id) + '"]').forEach(function (el) {
+      el.textContent = n;
+      const le = el.closest(".le");
+      if (le) le.dataset.search = (le.querySelector(".m").textContent + " " + le.querySelector(".raw").textContent).toLowerCase();
+    });
+  }
+
+  function learnNames(snap) {
+    const players = (snap && snap.players) || [];
+    players.forEach(function (p) {
+      const n = p && p.clientId && (p.resolvedName || p.displayName);
+      if (n && names[p.clientId] !== n) setName(p.clientId, n);
+    });
+  }
+
+  function renderParts(target, parts) {
+    parts.forEach(function (p) {
+      if (p == null || p === "") return;
+      if (typeof p === "string") {
+        p.split(URL_RE).forEach(function (piece, i) {
+          if (!piece) return;
+          if (i % 2) {
+            const u = document.createElement("span");
+            u.className = "chip url";
+            u.textContent = piece;
+            target.appendChild(u);
+          } else {
+            target.appendChild(document.createTextNode(piece));
+          }
+        });
+        return;
+      }
+      const span = document.createElement("span");
+      if (p.who) {
+        span.className = "chip who";
+        span.dataset.client = p.who;
+        span.title = p.who;
+        span.textContent = nameFor(p.who);
+      } else {
+        span.className = "chip" + (p.cls ? " " + p.cls : "");
+        span.textContent = p.chip;
+      }
+      target.appendChild(span);
+    });
+  }
+
+  function clock(ms) {
+    const d = new Date(ms);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  }
+
+  function entryVisible(el) {
+    if (el.classList.contains("verbose") && !logFilter.verbose && logFilter.cat !== "problem") return false;
+    if (logFilter.cat === "problem") {
+      if (!(el.classList.contains("warn") || el.classList.contains("err"))) return false;
+    } else if (logFilter.cat !== "all" && el.dataset.cat !== logFilter.cat) {
+      return false;
+    }
+    if (logFilter.q && el.dataset.search.indexOf(logFilter.q) === -1) return false;
+    return true;
+  }
+
+  function paintEmpty() {
+    const any = logEl.querySelector(".le:not(.hidden)");
+    logEmpty.style.display = any ? "none" : "";
+    const total = logEl.querySelectorAll(".le").length;
+    logEmpty.textContent = total ? "Nothing matches this filter." : "Waiting for log messages…";
+  }
+
+  function applyLogFilter() {
+    logEl.querySelectorAll(".le").forEach(function (el) {
+      el.classList.toggle("hidden", !entryVisible(el));
+    });
+    Array.prototype.forEach.call(logSeg.querySelectorAll("button"), function (b) {
+      b.classList.toggle("active", b.getAttribute("data-cat") === logFilter.cat);
+    });
+    logVerbose.checked = logFilter.verbose;
+    paintEmpty();
+    logEl.scrollTop = logEl.scrollHeight;
+    stickBottom = true;
+    btnLogLatest.classList.remove("show");
+  }
+
+  function paintProblemCount() {
+    problemCountEl.textContent = problemCount ? String(problemCount > 99 ? "99+" : problemCount) : "";
+  }
+
+  function clearLog() {
+    logEl.querySelectorAll(".le").forEach(function (el) { el.remove(); });
+    lastEntry = null;
+    problemCount = 0;
+    paintProblemCount();
+    paintEmpty();
+    btnLogLatest.classList.remove("show");
+  }
+
+  function appendLog(line, at) {
+    const d = describe(line);
+    const when = d.at || at || Date.now();
+    const level = d.level || "info";
+    const probe = document.createElement("span");
+    renderParts(probe, d.parts);
+    const key = d.src.label + "|" + level + "|" + probe.textContent;
+    if (lastEntry && lastEntry.key === key && when - lastEntry.at < 60000) {
+      lastEntry.count += 1;
+      lastEntry.at = when;
+      lastEntry.rep.textContent = " ×" + lastEntry.count;
+      lastEntry.el.querySelector(".t").textContent = clock(when);
+      lastEntry.el.querySelector(".raw").textContent += "\n" + line;
+      return;
+    }
+    const el = document.createElement("div");
+    el.className = "le " + level + (d.verbose ? " verbose" : "");
+    el.dataset.cat = d.src.cat;
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = clock(when);
+    t.title = new Date(when).toLocaleString();
+    const ic = document.createElement("span");
+    ic.className = "ic";
+    ic.textContent = d.ic || { ok: "✓", warn: "!", err: "✕", info: "•" }[level];
+    const m = document.createElement("span");
+    m.className = "m";
+    const src = document.createElement("span");
+    src.className = "src" + (d.src.cls ? " " + d.src.cls : "");
+    src.textContent = d.src.label;
+    m.appendChild(src);
+    while (probe.firstChild) m.appendChild(probe.firstChild);
+    const rep = document.createElement("span");
+    rep.className = "rep";
+    m.appendChild(rep);
+    const raw = document.createElement("div");
+    raw.className = "raw";
+    raw.textContent = line;
+    el.append(t, ic, m, raw);
+    el.dataset.search = (m.textContent + " " + line).toLowerCase();
+    if (!entryVisible(el)) el.classList.add("hidden");
+    logEl.appendChild(el);
+    lastEntry = { key: key, el: el, rep: rep, count: 1, at: when };
+    if (level === "warn" || level === "err") {
+      problemCount += 1;
+      paintProblemCount();
+    }
+    const entries = logEl.querySelectorAll(".le");
+    for (let i = 0; i < entries.length - LOG_MAX; i++) entries[i].remove();
+    if (!el.classList.contains("hidden")) {
+      logEmpty.style.display = "none";
+      if (stickBottom) logEl.scrollTop = logEl.scrollHeight;
+      else btnLogLatest.classList.add("show");
+    }
+  }
+
+  logEl.addEventListener("click", function (ev) {
+    const el = ev.target.closest(".le");
+    if (!el || (window.getSelection && String(window.getSelection()))) return;
+    el.classList.toggle("open");
+  });
+  logSeg.addEventListener("click", function (ev) {
+    const b = ev.target.closest("button[data-cat]");
+    if (!b) return;
+    logFilter.cat = b.getAttribute("data-cat");
+    localStorage.setItem("mpLogCat", logFilter.cat);
+    applyLogFilter();
+  });
+  logVerbose.addEventListener("change", function () {
+    logFilter.verbose = logVerbose.checked;
+    localStorage.setItem("mpLogVerbose", logFilter.verbose ? "1" : "0");
+    applyLogFilter();
+  });
+  logSearch.addEventListener("input", function () {
+    logFilter.q = logSearch.value.trim().toLowerCase();
+    applyLogFilter();
+  });
+  btnLogLatest.addEventListener("click", function () {
+    logEl.scrollTop = logEl.scrollHeight;
+    stickBottom = true;
+    btnLogLatest.classList.remove("show");
+  });
+  applyLogFilter();
 
   async function post(path) {
     try {
@@ -2433,9 +2894,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     }
     appendLog("[console] Console process exiting — bat window should close");
   });
-  document.getElementById("btnClear").addEventListener("click", function () {
-    logEl.innerHTML = "";
-  });
+  document.getElementById("btnClear").addEventListener("click", clearLog);
 
   viewSeg.addEventListener("click", function (ev) {
     const btn = ev.target.closest("button[data-view]");
@@ -2862,6 +3321,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
 
   function renderSpectate(snap) {
     lastSnap = snap;
+    learnNames(snap);
     updateRoomPick(snap);
     hideAllSpec();
     if (!snap || snap.offline || (!snap.mode && !(snap.rooms && snap.rooms.length))) {
@@ -3012,7 +3472,12 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   window.addEventListener("resize", function () { renderSpectate(lastSnap); });
 
   const es = new EventSource("/api/logs");
-  es.addEventListener("log", function (ev) { appendLog(ev.data); });
+  es.addEventListener("reset", clearLog);
+  es.addEventListener("log", function (ev) {
+    let entry;
+    try { entry = JSON.parse(ev.data); } catch (_) { entry = { line: ev.data }; }
+    appendLog(entry.line || "", entry.t);
+  });
   es.addEventListener("status", function (ev) {
     try { paintStatus(JSON.parse(ev.data)); } catch (_) {}
   });

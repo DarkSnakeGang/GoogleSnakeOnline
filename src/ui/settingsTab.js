@@ -14,6 +14,9 @@
     return e;
   }
 
+  const DEFAULT_SERVER_URL = "wss://yarmiplay.duckdns.org:7777/ws";
+  const LEGACY_DEFAULT_SERVER_URL = "ws://127.0.0.1:7777/ws";
+
   /** Browsers block ws:// from https pages (mixed content), except loopback. */
   function needsSecureUrlHint(pageProtocol, url) {
     if (pageProtocol !== "https:") return false;
@@ -646,7 +649,14 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 
     const urlIn = el("input");
     urlIn.type = "text";
-    urlIn.value = lsGet("MULTIPLAYER_SERVER_URL", "ws://127.0.0.1:7777/ws");
+    // One-time move off the old auto-saved loopback default; a URL typed later is kept.
+    if (lsGet("MULTIPLAYER_SERVER_URL_DEFAULT_V2", "") !== "1") {
+      if (lsGet("MULTIPLAYER_SERVER_URL", "") === LEGACY_DEFAULT_SERVER_URL) {
+        lsSet("MULTIPLAYER_SERVER_URL", DEFAULT_SERVER_URL);
+      }
+      lsSet("MULTIPLAYER_SERVER_URL_DEFAULT_V2", "1");
+    }
+    urlIn.value = lsGet("MULTIPLAYER_SERVER_URL", DEFAULT_SERVER_URL);
     urlIn.id = "mp-server-url";
 
     const roomIn = el("input");
@@ -657,7 +667,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 
     function persistConnectFields() {
       lsSet("MULTIPLAYER_DISPLAY_NAME", nameIn.value.trim());
-      lsSet("MULTIPLAYER_SERVER_URL", urlIn.value.trim() || "ws://127.0.0.1:7777/ws");
+      lsSet("MULTIPLAYER_SERVER_URL", urlIn.value.trim() || DEFAULT_SERVER_URL);
       lsSet("MULTIPLAYER_ROOM_CODE", roomIn.value.trim());
     }
     ["change", "blur"].forEach(function (ev) {
@@ -973,7 +983,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
         status.textContent = "Connecting…";
         self.app
           .connect({
-            url: urlIn.value.trim() || "ws://127.0.0.1:7777/ws",
+            url: urlIn.value.trim() || DEFAULT_SERVER_URL,
             displayName: nameIn.value.trim(),
             // Codes are uppercase on the wire; an unused one opens a new room
             roomCode: roomIn.value.trim().toUpperCase(),
