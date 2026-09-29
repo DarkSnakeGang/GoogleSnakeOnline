@@ -1,10 +1,10 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-29T13:51:55.707Z */
+/* Built: 2026-09-29T13:58:03.271Z */
 
 window.__MP_MOD_VERSION="13";
 
-window.__MP_MOD_BUILT="2026-09-29T13:51:55.707Z";
+window.__MP_MOD_BUILT="2026-09-29T13:58:03.271Z";
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -51891,8 +51891,7 @@ window.RemixMod.runCodeAfter = function () {
     return e;
   }
 
-  const DEFAULT_SERVER_URL = "wss://yarmiplay.duckdns.org:7777/ws";
-  const LEGACY_DEFAULT_SERVER_URL = "ws://127.0.0.1:7777/ws";
+  const DEFAULT_SERVER_URL = "ws://127.0.0.1:7777/ws";
 
   /** Browsers block ws:// from https pages (mixed content), except loopback. */
   function needsSecureUrlHint(pageProtocol, url) {
@@ -52526,13 +52525,6 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
 
     const urlIn = el("input");
     urlIn.type = "text";
-    // One-time move off the old auto-saved loopback default; a URL typed later is kept.
-    if (lsGet("MULTIPLAYER_SERVER_URL_DEFAULT_V2", "") !== "1") {
-      if (lsGet("MULTIPLAYER_SERVER_URL", "") === LEGACY_DEFAULT_SERVER_URL) {
-        lsSet("MULTIPLAYER_SERVER_URL", DEFAULT_SERVER_URL);
-      }
-      lsSet("MULTIPLAYER_SERVER_URL_DEFAULT_V2", "1");
-    }
     urlIn.value = lsGet("MULTIPLAYER_SERVER_URL", DEFAULT_SERVER_URL);
     urlIn.id = "mp-server-url";
 
