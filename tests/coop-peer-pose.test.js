@@ -206,7 +206,7 @@ describe("Plan 2 peer pose contract", () => {
     global.MultiplayerRuntime = {};
     global.MultiplayerGsm = {
       effectiveModeKey: () => "slot_machine+yin_yang",
-      scrapeCollectables: () => ({ apples: [] }),
+      scrapeCollectables: () => ({ apples: [{ x: 4, y: 4, type: 0 }] }),
       scrapeCoopSnakeDelta: () => ({
         body: [{ x: 2, y: 2 }],
         dir: "RIGHT",

@@ -1,10 +1,10 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-30T00:31:18.796Z */
+/* Built: 2026-09-30T11:25:43.153Z */
 
 window.__MP_MOD_VERSION="13";
 
-window.__MP_MOD_BUILT="2026-09-30T00:31:18.796Z";
+window.__MP_MOD_BUILT="2026-09-30T11:25:43.153Z";
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -1564,12 +1564,14 @@ window.TimeKeeper.make = function () {
         window.timeKeeper.playing = false;
     };
 
+    // tick() calls this on every tick after a win or death until reset; only the
+    // first call (while playing) may save. runStarted stays true until reset.
     window.timeKeeper.death = function (time, score) {
         if (!window.timeKeeper.shouldTrack(window.timeKeeper.getSaveContext())) {
             window.timeKeeper.playing = false;
             return;
         }
-        if (window.timeKeeper.playing || window.timeKeeper.runStarted) {
+        if (window.timeKeeper.playing) {
             window.timeKeeper.saveScore(time, score);
         }
         window.timeKeeper.playing = false;

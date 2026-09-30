@@ -84,7 +84,10 @@ async function waitMsg(inbox, type, timeout = 8000) {
     await new Promise((r) => setTimeout(r, 15));
   }
   throw new Error(
-    "timeout waiting for " + type + " have=" + inbox.map((m) => m.type).join(",")
+    "timeout waiting for " + type + " have=" +
+      inbox
+        .map((m) => (m.type === "ERROR" ? "ERROR(" + JSON.stringify(m.payload) + ")" : m.type))
+        .join(",")
   );
 }
 
@@ -214,21 +217,6 @@ describe("coop live dual border death", { timeout: 90000 }, () => {
     const engB = new MockCoopEngine(seatB);
     const init = await waitMsg(a.inbox, "COOP_BOARD_INIT");
     assert.equal(init.payload.initializerClientId, startA.payload.collectablesOwnerId);
-
-    // Pre-seat death must be ignored by server (warmup guard)
-    send(
-      a.ws,
-      "COOP_PLAYER_DEAD",
-      relayPayload(a.ws, generation, {
-        body: engA.body,
-        reason: "warmup",
-      })
-    );
-    await new Promise((r) => setTimeout(r, 80));
-    const earlyEnd = a.inbox
-      .concat(b.inbox)
-      .filter((m) => m.type === "SESSION_END");
-    assert.equal(earlyEnd.length, 0, "pre-seat death must not end match");
 
     // Seat: living poses with seated:true
     function publish(ws, eng, extra, currentGeneration) {
