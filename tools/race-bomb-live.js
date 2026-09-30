@@ -10,6 +10,7 @@
  *   node tools/race-bomb-live.js --seconds=20 --count=5
  *   node tools/race-bomb-live.js --players=3        # one window per bot, fills the mosaic
  *   node tools/race-bomb-live.js --minutes=1 --seconds=62 --linger=20   # short round: time-up, then winner
+ *   node tools/race-bomb-live.js --trace-ws         # per-second sent-message report + SCORE_PULSE call sites
  *   MP_WS_URL=wss://host:7777/ws node tools/race-bomb-live.js
  */
 const path = require("path");
@@ -28,6 +29,40 @@ const COUNT = Number(argValue("--count", String(COUNT_BOMB)));
 const PLAYERS = Math.max(1, Math.min(8, Number(argValue("--players", "1")) || 1));
 const MINUTES = Math.max(0, Number(argValue("--minutes", "0")) || 0);
 const LINGER = Math.max(0, Number(argValue("--linger", "2")) || 0);
+const TRACE_WS = process.argv.includes("--trace-ws");
+
+/** Outgoing WS messages per page: [{t, type}] for the rate-limit report. */
+function traceSent(page, sink) {
+  page.on("websocket", function (ws) {
+    ws.on("framesent", function (f) {
+      let type = "?";
+      try { type = JSON.parse(String(f.payload)).type || "?"; } catch (e) { /* binary / non-JSON */ }
+      sink.push({ t: Date.now(), type: type });
+    });
+  });
+}
+
+/** Busiest one-second windows, broken down by message type. */
+function reportSent(name, sent, t0) {
+  const bySec = new Map();
+  for (const m of sent) {
+    const s = Math.floor((m.t - t0) / 1000);
+    if (!bySec.has(s)) bySec.set(s, {});
+    const row = bySec.get(s);
+    row[m.type] = (row[m.type] || 0) + 1;
+  }
+  const secs = Array.from(bySec.entries()).map(function (e) {
+    const total = Object.values(e[1]).reduce(function (a, b) { return a + b; }, 0);
+    return { sec: e[0], total: total, types: e[1] };
+  });
+  secs.sort(function (a, b) { return b.total - a.total; });
+  const totals = {};
+  for (const m of sent) totals[m.type] = (totals[m.type] || 0) + 1;
+  log(name, "sent", sent.length, "msgs:", JSON.stringify(totals));
+  secs.slice(0, 5).forEach(function (s) {
+    log("  ", name, "t+" + s.sec + "s:", s.total, "msgs", JSON.stringify(s.types));
+  });
+}
 
 const DIRS = {
   UP: { dx: 0, dy: -1, key: "ArrowUp", back: "DOWN" },
@@ -306,7 +341,9 @@ async function main() {
       const ctx = await browser.newContext({ viewport: { width: 900, height: 820 } });
       const page = await ctx.newPage();
       page.on("pageerror", function (e) { log(names[i], "pageerror", e && e.message); });
-      pages.push({ ctx, page });
+      const sent = [];
+      if (TRACE_WS) traceSent(page, sent);
+      pages.push({ ctx, page, sent });
     }
     await Promise.all(pages.map(function (p) {
       return loadModFromUrl(p.ctx, p.page, modUrl, built, modSource);
@@ -327,6 +364,23 @@ async function main() {
     await setupRace(admin, ids);
     for (const p of pages) await readyUp(p.page);
     await startRace(admin, pages.map(function (p) { return p.page; }));
+    if (TRACE_WS) {
+      await Promise.all(pages.map(function (p) {
+        return p.page.evaluate(function () {
+          const client = window.__multiplayerApp.client;
+          const counts = (window.__mpPulseCallers = {});
+          const orig = client.scorePulse;
+          client.scorePulse = function () {
+            const frames = String(new Error().stack).split("\n").slice(2, 7);
+            const key = frames.map(function (f) {
+              return f.trim().replace(/^at /, "").replace(/\s*\(.*\)$/, "");
+            }).join(" < ");
+            counts[key] = (counts[key] || 0) + 1;
+            return orig.apply(this, arguments);
+          };
+        });
+      }));
+    }
     log("race live in", first.code, "—", PLAYERS, "bot(s) driving for", SECONDS + "s");
     const results = await Promise.all(pages.map(function (p, i) { return drive(p.page, names[i]); }));
     results.forEach(function (r, i) {
@@ -334,6 +388,16 @@ async function main() {
     });
     if (LINGER > 2) log("bots stopped steering — keeping the room open", LINGER + "s");
     await admin.waitForTimeout(LINGER * 1000);
+    if (TRACE_WS) {
+      const t0 = Math.min.apply(null, pages.map(function (p) { return p.sent.length ? p.sent[0].t : Date.now(); }));
+      pages.forEach(function (p, i) { reportSent(names[i], p.sent, t0); });
+      for (let i = 0; i < pages.length; i++) {
+        const callers = await pages[i].page.evaluate(function () { return window.__mpPulseCallers || {}; })
+          .catch(function () { return {}; });
+        const top = Object.entries(callers).sort(function (a, b) { return b[1] - a[1]; }).slice(0, 4);
+        top.forEach(function (e) { log("  ", names[i], "scorePulse", e[1] + "x via", e[0]); });
+      }
+    }
   } finally {
     await browser.close();
   }

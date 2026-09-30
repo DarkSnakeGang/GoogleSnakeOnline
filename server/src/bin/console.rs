@@ -2004,9 +2004,14 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     flex-direction: column; align-items: center; justify-content: center; gap: 8px;
   }
   #specFocus.show { display: flex; }
-  #specFocus .focus-label {
-    font-size: 0.85rem; color: var(--td-muted); letter-spacing: 0.06em; text-transform: uppercase;
+  /* Sits on the board's theme colour (often bright green) — needs its own backing. */
+  #specFocus .focus-label, #specCoop .focus-label {
+    font-size: 0.85rem; color: #fff; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
     flex: 0 0 auto;
+    background: rgba(0, 0, 0, 0.62);
+    padding: 5px 14px; border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
   }
   #specFocus .canvas-wrap {
     width: 100%; flex: 1 1 auto; min-height: 0;
@@ -3212,7 +3217,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     if (!stage) return { w: 720, h: 520 };
     // Fill the stage; leave a little padding for the label row.
     const padX = 36;
-    const padY = 48;
+    const padY = 62;
     return {
       w: Math.max(240, stage.clientWidth - padX),
       h: Math.max(220, stage.clientHeight - padY),

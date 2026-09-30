@@ -1665,6 +1665,28 @@ describe("GSM hook harness", () => {
     overlay.remove();
   });
 
+  it("quitNativeRunForMenus reports a death once and never re-enters it", () => {
+    let deaths = 0;
+    win.__remixGame.nj = false;
+    win.__remixGame.dead = false;
+    win.timeKeeper = {
+      _dead: false,
+      playing: true,
+      // App onDeath after a race ends → returnToMenus → showDeathScreen → quit again
+      death: function () {
+        deaths++;
+        if (deaths > 50) throw new Error("death recursion");
+        Gsm.quitNativeRunForMenus({ skipEscapeDispatch: true });
+      },
+    };
+    Gsm.quitNativeRunForMenus({ skipEscapeDispatch: true });
+    assert.equal(deaths, 1, "live run: one death, no recursion");
+    Gsm.quitNativeRunForMenus({ skipEscapeDispatch: true });
+    assert.equal(deaths, 1, "already dead: quit must not re-announce the death");
+    assert.equal(win.timeKeeper._dead, true);
+    assert.equal(!!win.pauseGame, true);
+  });
+
   it("showDeathScreen pauses run and reveals overlay", () => {
     const overlay = win.document.createElement("div");
     overlay.className = "wjOYOd";

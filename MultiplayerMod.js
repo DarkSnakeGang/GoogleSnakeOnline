@@ -1,10 +1,10 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-29T14:13:18.242Z */
+/* Built: 2026-09-30T00:31:18.796Z */
 
 window.__MP_MOD_VERSION="13";
 
-window.__MP_MOD_BUILT="2026-09-29T14:13:18.242Z";
+window.__MP_MOD_BUILT="2026-09-30T00:31:18.796Z";
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -51156,8 +51156,42 @@ window.RemixMod.runCodeAfter = function () {
     return true;
   }
 
-  /** Force local death so cross-snake collision ends the native run. */
+  /**
+   * Force local death so cross-snake collision ends the native run.
+   * An already-dead run only gets its dead flags re-pinned: re-firing
+   * timeKeeper.death re-enters onDeath → returnToMenus → quitNativeRunForMenus
+   * → here, a recursion that sent thousands of SCORE_PULSEs after a race ended.
+   */
   function forceLocalDeath() {
+    if (root.__mpForcingLocalDeath) return false;
+    let alreadyDead = false;
+    try {
+      const g0 = gameInstance();
+      alreadyDead =
+        !!(g0 && (g0.nj || g0.dead === true || g0.isDead === true)) ||
+        !!(root.timeKeeper && root.timeKeeper._dead);
+    } catch (eDead) { /* treat as alive */ }
+    if (alreadyDead) {
+      try {
+        const g1 = gameInstance();
+        if (g1) g1.nj = true;
+        if (root.timeKeeper) {
+          root.timeKeeper._dead = true;
+          root.timeKeeper.playing = false;
+        }
+      } catch (ePin) { /* ignore */ }
+      root.pauseGame = 1;
+      return false;
+    }
+    root.__mpForcingLocalDeath = true;
+    try {
+      return forceLocalDeathNow();
+    } finally {
+      root.__mpForcingLocalDeath = false;
+    }
+  }
+
+  function forceLocalDeathNow() {
     let killed = false;
     try {
       const g = gameInstance();
