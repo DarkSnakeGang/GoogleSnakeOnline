@@ -1904,6 +1904,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   }
   .le .chip.who { color: #ffe6a8; border-color: #3d3419; background: #1d190d; }
   .le .chip.url { white-space: normal; overflow-wrap: anywhere; }
+  .le .chip.ip { color: #a8d8ff; border-color: #1f3a52; background: #0e1a24; }
   .le .raw {
     display: none; grid-column: 3; margin-top: 4px; padding: 6px 8px; border-radius: 6px;
     background: #111; color: #8c8c8c; font-family: ui-monospace, Consolas, monospace;
@@ -2032,6 +2033,55 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     display: flex; flex-wrap: wrap; gap: 12px;
   }
   .spec-meta strong { color: var(--td-text); font-weight: 600; }
+  .spec-hud {
+    display: none; flex-wrap: wrap; gap: 8px; align-items: stretch; margin-bottom: 10px;
+  }
+  .spec-hud.show { display: flex; }
+  .hud-chip {
+    display: inline-flex; flex-direction: column; justify-content: center; gap: 2px;
+    background: var(--td-chip); border: 1px solid var(--td-sep); border-radius: 8px;
+    padding: 6px 12px; min-width: 64px;
+  }
+  .hud-chip .k {
+    font-size: 0.66rem; color: var(--td-muted); text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .hud-chip .v { font-size: 0.9rem; color: var(--td-text); font-weight: 600; white-space: nowrap; }
+  .hud-chip.timer .v { font-family: ui-monospace, Consolas, monospace; font-size: 1.15rem; }
+  .hud-chip.timer.low .v { color: var(--td-danger); }
+  .hud-chip.timer.over .v { color: var(--td-warn); }
+  .hud-chip.live .v { color: var(--td-ok); }
+  .hud-chip.leader { border-color: #8a6d1f; }
+  .hud-chip.leader .v { color: #f2c14e; }
+  .spec-standings { display: none; margin-top: 10px; }
+  .spec-standings.show { display: block; }
+  .spec-standings table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  .spec-standings th {
+    text-align: left; font-weight: 500; color: var(--td-muted); font-size: 0.68rem;
+    text-transform: uppercase; letter-spacing: 0.05em; padding: 4px 8px;
+    border-bottom: 1px solid var(--td-sep);
+  }
+  .spec-standings td { padding: 5px 8px; border-bottom: 1px solid var(--td-sep); color: var(--td-text); }
+  .spec-standings td.num { font-family: ui-monospace, Consolas, monospace; text-align: right; }
+  .spec-standings th.num { text-align: right; }
+  .spec-standings tr.clickable { cursor: pointer; }
+  .spec-standings tr.clickable:hover td { background: #1a1a1a; }
+  .spec-standings tr.dead td { color: var(--td-muted); }
+  .spec-standings tr.leader td.name { color: #f2c14e; }
+  .spec-standings .swatch {
+    display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px;
+    vertical-align: -1px;
+  }
+  .spec-standings .tag {
+    font-size: 0.68rem; padding: 1px 6px; border-radius: 6px; background: var(--td-chip);
+    color: var(--td-muted); margin-left: 6px;
+  }
+  .spec-standings .tag.ok { color: var(--td-ok); }
+  .spec-standings .tag.bad { color: var(--td-danger); }
+  .spec-cell.leader { border-color: #8a6d1f; }
+  .spec-cell.dead canvas { opacity: 0.55; filter: grayscale(0.5); }
+  .spec-cell .label .right { display: inline-flex; gap: 8px; }
+  .spec-cell .label .time { font-family: ui-monospace, Consolas, monospace; }
+  .spec-cell.leader .label .name { color: #f2c14e; }
 </style>
 </head>
 <body>
@@ -2167,6 +2217,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
           <span id="specModeTag" class="status-pill" style="text-transform:none;letter-spacing:0.02em">—</span>
         </div>
       </div>
+      <div class="spec-hud" id="specHud"></div>
       <div id="specStage">
         <div id="specEmpty">Start the game server, then open a room — boards appear here live.</div>
         <div id="specMosaic"></div>
@@ -2180,6 +2231,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
         </div>
       </div>
       <div class="spec-meta" id="specMeta"></div>
+      <div class="spec-standings" id="specStandings"></div>
     </section>
 
     <section class="panel log-panel">
@@ -2258,9 +2310,12 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   const focusLabel = document.getElementById("focusLabel");
   const specModeTag = document.getElementById("specModeTag");
   const specMeta = document.getElementById("specMeta");
+  const specHud = document.getElementById("specHud");
+  const specStandings = document.getElementById("specStandings");
   let stickBottom = true;
   let raceView = "mosaic";
   let focusId = null;
+  let mosaicKey = "";
   let lastSnap = null;
   let shuttingDown = false;
 
@@ -2399,6 +2454,8 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   const PATH_RE = /[A-Za-z]:\\(?:[^\\\n]+\\)*([^\\\n]+?\.(?:exe|toml|json))/g;
   const LOG_MAX = 2500;
   const names = {};
+  const ips = {};
+  let routerIp = "";
   let problemCount = 0;
   let lastEntry = null;
   const logSearch = document.getElementById("logSearch");
@@ -2425,13 +2482,27 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     return n ? new Date(n * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "?";
   }
   function problem(text, kv) { return kv.error ? [text + ": " + kv.error] : [text]; }
+  function ipText(ip) {
+    if (!ip) return "?";
+    if (/^(127\.|::1$)/.test(ip)) return ip + " · this PC";
+    if (ip === routerIp) return ip + " · your router (local player via public address)";
+    if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|fe80:|f[cd][0-9a-f]{2}:)/i.test(ip)) {
+      return ip + " · LAN";
+    }
+    return ip;
+  }
+  function fromIp(id) { return ips[id] ? [" from ", c(ipText(ips[id]), "ip")] : ""; }
 
   const EVENTS = {
     room_create: function (kv) { return { ic: "+", parts: ["Room ", room(kv), " created"] }; },
-    join: function (kv) { return { ic: "→", parts: [who(kv.clientId), " joined room ", room(kv)] }; },
+    connect: function (kv) { return { ic: "⇢", parts: ["New connection from ", c(ipText(kv.ip), "ip")] }; },
+    join: function (kv) { return { ic: "→", parts: [who(kv.clientId), " joined room ", room(kv), fromIp(kv.clientId)] }; },
     leave: function (kv) { return { ic: "←", parts: [who(kv.clientId), " left room ", room(kv)] }; },
     disconnect: function (kv) {
-      return { verbose: kv.code === "ws_closed", parts: [who(kv.clientId), " disconnected", kv.code && kv.code !== "ws_closed" ? " (" + words(kv.code) + ")" : ""] };
+      return {
+        verbose: kv.code === "ws_closed",
+        parts: [who(kv.clientId), " disconnected", fromIp(kv.clientId), kv.code && kv.code !== "ws_closed" ? " (" + words(kv.code) + ")" : ""]
+      };
     },
     admin_assign: function (kv) { return { ic: "★", parts: [who(kv.clientId), " is the host of room ", room(kv)] }; },
     admin_succession: function (kv) { return { ic: "★", parts: ["Host left — ", who(kv.clientId), " now hosts room ", room(kv)] }; },
@@ -2568,6 +2639,11 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     }
     const message = tm[4].replace(KV_RE, "").trim();
     if (kv.clientId && kv.name && !names[kv.clientId]) setName(kv.clientId, kv.name);
+    if (kv.clientId && kv.ip) ips[kv.clientId] = kv.ip;
+    if (kv.event === "upnp_gateway_found" && kv.location) {
+      const gw = /^https?:\/\/([^/:]+)/.exec(kv.location);
+      if (gw) routerIp = gw[1];
+    }
     const traceLevel = { ERROR: "err", WARN: "warn", INFO: "info", DEBUG: "info", TRACE: "info" }[tm[2]];
     const ev = kv.event || "";
     const rule = EVENTS[ev] ? EVENTS[ev](kv) : null;
@@ -2617,6 +2693,7 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   function renderParts(target, parts) {
     parts.forEach(function (p) {
       if (p == null || p === "") return;
+      if (Array.isArray(p)) { renderParts(target, p); return; }
       if (typeof p === "string") {
         p.split(URL_RE).forEach(function (piece, i) {
           if (!piece) return;
@@ -2903,6 +2980,27 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     if (raceView === "mosaic") focusId = null;
     Array.prototype.forEach.call(viewSeg.querySelectorAll("button"), function (b) {
       b.classList.toggle("active", b === btn);
+    });
+    renderSpectate(lastSnap);
+  });
+  specMosaic.addEventListener("click", function (ev) {
+    const cell = ev.target.closest(".spec-cell");
+    if (!cell) return;
+    focusId = cell.getAttribute("data-id");
+    raceView = "focus";
+    Array.prototype.forEach.call(viewSeg.querySelectorAll("button"), function (b) {
+      b.classList.toggle("active", b.getAttribute("data-view") === "focus");
+    });
+    renderSpectate(lastSnap);
+  });
+  // mousedown: the table re-renders as run clocks tick, which can swallow a click.
+  specStandings.addEventListener("mousedown", function (ev) {
+    const row = ev.target.closest("tr.clickable[data-id]");
+    if (!row || !lastSnap || lastSnap.mode !== "race") return;
+    focusId = row.getAttribute("data-id");
+    raceView = "focus";
+    Array.prototype.forEach.call(viewSeg.querySelectorAll("button"), function (b) {
+      b.classList.toggle("active", b.getAttribute("data-view") === "focus");
     });
     renderSpectate(lastSnap);
   });
@@ -3263,6 +3361,8 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   }
 
   function hideAllSpec() {
+    // Themed views re-apply their board border; empty/offline falls back to the console look.
+    document.getElementById("specStage").style.background = "";
     specEmpty.style.display = "none";
     specMosaic.classList.remove("show");
     specFocus.classList.remove("show");
@@ -3286,27 +3386,281 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     if (cur) roomPick.value = cur;
   }
 
+  // .spec-cell padding + border around the canvas, and label row + gap above it.
+  const CELL_CHROME_X = 14;
+  const CELL_CHROME_Y = 38;
   function layoutMosaic(n, boardW, boardH) {
     const stage = document.getElementById("specStage");
     const availW = Math.max(200, stage.clientWidth - 24);
-    const availH = Math.max(220, Math.min(560, window.innerHeight * 0.45));
+    const availH = Math.max(220, stage.clientHeight - 24);
     const gap = 10;
-    const chrome = 28;
     const aspect = boardW / Math.max(1, boardH);
     let best = null;
     for (let cols = 1; cols <= n; cols++) {
       const rows = Math.ceil(n / cols);
-      const cellW = (availW - gap * (cols - 1)) / cols;
-      const cellH = (availH - gap * (rows - 1)) / rows;
-      const maxBoardH = Math.max(40, cellH - chrome);
-      let w = cellW;
+      const maxW = Math.max(40, (availW - gap * (cols - 1)) / cols - CELL_CHROME_X);
+      const maxH = Math.max(40, (availH - gap * (rows - 1)) / rows - CELL_CHROME_Y);
+      let w = maxW;
       let h = w / aspect;
-      if (h > maxBoardH) { h = maxBoardH; w = h * aspect; }
-      if (w > cellW) { w = cellW; h = w / aspect; }
+      if (h > maxH) { h = maxH; w = h * aspect; }
       const area = w * h;
       if (!best || area > best.area) best = { cols: cols, w: Math.floor(w), h: Math.floor(h), area: area };
     }
     return best || { cols: 1, w: 200, h: 180, area: 0 };
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+  /** 83000 → "1:23", 3723000 → "1:02:03". `ceil` suits countdowns (never shows 0:00 early). */
+  function fmtClock(ms, ceil) {
+    if (ms == null || !isFinite(ms)) return "—";
+    const total = Math.max(0, ceil ? Math.ceil(ms / 1000) : Math.floor(ms / 1000));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor(total / 60) % 60;
+    const s = total % 60;
+    return h ? h + ":" + pad2(m) + ":" + pad2(s) : m + ":" + pad2(s);
+  }
+  function fmtSecs(ms) {
+    return ms == null || !isFinite(ms) ? "—" : (ms / 1000).toFixed(2) + "s";
+  }
+
+  const COUNT_NAMES = ["1 apple", "3 apples", "5 apples", "10 apples", "Dice", "Bomb", "Tally"];
+  const SPEED_NAMES = ["Normal", "Fast", "Slow"];
+  const SIZE_NAMES = ["Standard", "Small", "Large"];
+  function settingName(list, v) {
+    const i = Number(v);
+    if (v == null || !Number.isFinite(i)) return null;
+    return list[i] || "#" + i;
+  }
+  function matchSettingsText(settings, board) {
+    const s = settings || {};
+    const b = board || {};
+    const parts = [];
+    const trophy = s.trophy != null ? s.trophy : b.trophyIndex;
+    if (b.modeKey && b.modeKey !== "classic") parts.push(String(b.modeKey).replace(/_/g, " "));
+    else if (trophy != null && Number(trophy) > 0) parts.push("Mode " + trophy);
+    else parts.push("Classic");
+    [
+      settingName(COUNT_NAMES, s.count != null ? s.count : b.countIndex),
+      settingName(SPEED_NAMES, s.speed != null ? s.speed : b.speedIndex),
+      settingName(SIZE_NAMES, s.size != null ? s.size : b.sizeIndex),
+    ].forEach(function (p) { if (p) parts.push(p); });
+    return parts.join(" · ");
+  }
+
+  /** Live run length: wall clock since the run armed while alive, frozen run time once dead. */
+  function runMsOf(snap, p, b) {
+    const alive = b && b.alive != null ? b.alive !== false : !p || p.alive !== false;
+    const started = p && p.runStartedAtMs;
+    if (alive && started && snap.serverNowMs) {
+      const ms = snap.serverNowMs - started;
+      if (ms >= 0 && ms < 86400000) return ms;
+    }
+    const t = (b && b.timeMs) || (p && p.timeMs);
+    return t > 0 ? t : null;
+  }
+
+  /** Same order the server uses to pick the race leader / winner. */
+  function raceStandings(snap) {
+    const boards = snap.boards || {};
+    const timed = snap.raceGoal && snap.raceGoal !== "score";
+    const rows = (snap.players || [])
+      .filter(function (p) { return p.role === "player" || boards[p.clientId]; })
+      .map(function (p) {
+        const b = boards[p.clientId] || null;
+        const score = b && b.score != null ? b.score : (p.score || 0);
+        return {
+          id: p.clientId,
+          name: (b && b.displayName) || p.resolvedName || p.displayName || p.clientId.slice(0, 6),
+          board: b,
+          player: p,
+          score: score,
+          best: Math.max(p.bestScore || 0, score || 0),
+          bestAt: p.bestScoreTimeMs || null,
+          goalMs: p.goalCompleted && p.bestGoalTimeMs ? p.bestGoalTimeMs : null,
+          alive: b && b.alive != null ? b.alive !== false : p.alive !== false,
+          hasRun: !!b || p.score != null,
+          runMs: runMsOf(snap, p, b),
+          length: b && (b.length || (b.body && b.body.length)) || null,
+        };
+      });
+    rows.sort(function (a, b) {
+      if (timed) {
+        if (a.goalMs && b.goalMs) return a.goalMs - b.goalMs;
+        if (a.goalMs) return -1;
+        if (b.goalMs) return 1;
+      }
+      if (b.best !== a.best) return b.best - a.best;
+      return (a.bestAt || Infinity) - (b.bestAt || Infinity);
+    });
+    const lead = snap.leaderClientId;
+    const li = lead ? rows.findIndex(function (r) { return r.id === lead; }) : -1;
+    if (li > 0) rows.unshift(rows.splice(li, 1)[0]);
+    return rows;
+  }
+
+  function leaderValue(snap, row) {
+    if (!row) return "";
+    if (snap.raceGoal && snap.raceGoal !== "score" && row.goalMs) return fmtSecs(row.goalMs);
+    return row.best + (row.best === 1 ? " apple" : " apples");
+  }
+
+  function swatchColor(b) {
+    try { return snakeColor(b).primary || "#4E7CF6"; } catch (e) { return "#4E7CF6"; }
+  }
+
+  function hudChip(k, v, cls, title) {
+    return '<div class="hud-chip ' + (cls || "") + '"' + (title ? ' title="' + esc(title) + '"' : "") +
+      '><span class="k">' + esc(k) + '</span><span class="v">' + esc(v) + "</span></div>";
+  }
+
+  let lastHudHtml = "";
+  let lastStandingsHtml = "";
+  function setHtml(el, html, which) {
+    if (which === "hud") { if (html === lastHudHtml) return; lastHudHtml = html; }
+    else { if (html === lastStandingsHtml) return; lastStandingsHtml = html; }
+    el.innerHTML = html;
+  }
+
+  function renderRaceHud(snap, rows) {
+    const live = snap.sessionActive && !snap.attemptExpired;
+    const grace = snap.sessionActive && snap.attemptExpired;
+    const over = !snap.sessionActive && snap.attemptExpired;
+    const chips = [];
+    chips.push(hudChip(
+      "Status",
+      live ? "● Live" : grace ? "Time up · finishing runs" : over ? "Round over" : "Lobby",
+      live ? "live" : grace ? "timer over" : "",
+      snap.finishOngoingRuns ? "Runs still going at time-up may finish" : "Runs stop at time-up"
+    ));
+    if (snap.attemptRemainingMs != null) {
+      const ms = snap.attemptRemainingMs;
+      chips.push(hudChip("Time left", fmtClock(ms, true), "timer" + (ms <= 60000 ? " low" : ""),
+        "Round length " + snap.durationMin + " min"));
+    } else if (over) {
+      chips.push(hudChip("Time left", "0:00", "timer over"));
+    } else if (snap.durationMin) {
+      chips.push(hudChip("Round", snap.durationMin + " min", "timer"));
+    }
+    chips.push(hudChip("Goal", snap.raceGoalLabel || snap.raceGoal || "Score"));
+    const leadRow = snap.leaderClientId
+      ? rows.find(function (r) { return r.id === snap.leaderClientId; })
+      : null;
+    if (leadRow) {
+      chips.push(hudChip(over ? "🏆 Winner" : "👑 Leader", leadRow.name + " · " + leaderValue(snap, leadRow), "leader"));
+    }
+    const racers = rows.filter(function (r) { return r.hasRun; });
+    if (racers.length) {
+      const alive = racers.filter(function (r) { return r.alive; }).length;
+      chips.push(hudChip("Alive", alive + " / " + racers.length));
+    }
+    chips.push(hudChip("Settings", matchSettingsText(snap.settings, rows[0] && rows[0].board)));
+    return chips.join("");
+  }
+
+  function renderCoopHud(snap) {
+    const board = snap.board || {};
+    const players = (snap.players || []).filter(function (p) { return p.role === "player"; });
+    const chips = [];
+    chips.push(hudChip("Status", snap.sessionActive ? "● Live" : "Lobby", snap.sessionActive ? "live" : ""));
+    if (snap.coopTimerStartedAtMs && snap.serverNowMs) {
+      chips.push(hudChip("Time", fmtClock(snap.serverNowMs - snap.coopTimerStartedAtMs), "timer"));
+    } else if (snap.sessionActive) {
+      chips.push(hudChip("Time", "0:00", "timer", "Starts on the first move"));
+    }
+    let score = Number(board.score);
+    if (!Number.isFinite(score)) {
+      score = players.reduce(function (t, p) { return t + (p.score || 0); }, 0);
+    }
+    chips.push(hudChip("Score", String(score)));
+    if (players.length) {
+      const alive = players.filter(function (p) { return p.alive !== false; }).length;
+      chips.push(hudChip("Alive", alive + " / " + players.length));
+    }
+    chips.push(hudChip("Settings", matchSettingsText(snap.settings, board)));
+    return chips.join("");
+  }
+
+  function renderRaceStandings(snap, rows) {
+    if (!rows.length) return "";
+    const timed = snap.raceGoal && snap.raceGoal !== "score";
+    const head =
+      "<tr><th>#</th><th>Player</th><th class=\"num\">Score</th><th class=\"num\">Best</th>" +
+      (timed ? "<th class=\"num\">" + esc(snap.raceGoalLabel || "Goal") + "</th>" : "") +
+      "<th class=\"num\">Run</th><th class=\"num\">Length</th><th>Status</th></tr>";
+    const body = rows.map(function (r, i) {
+      const lead = r.id === snap.leaderClientId;
+      const status = !r.hasRun
+        ? '<span class="tag">waiting</span>'
+        : r.alive
+          ? '<span class="tag ok">alive</span>'
+          : '<span class="tag bad">dead</span>';
+      const ready = r.player && r.player.ready && !snap.sessionActive ? '<span class="tag ok">ready</span>' : "";
+      const admin = r.player && r.player.isAdmin ? '<span class="tag">admin</span>' : "";
+      return '<tr data-id="' + esc(r.id) + '" class="' +
+        (r.board ? "clickable " : "") + (lead ? "leader " : "") + (r.hasRun && !r.alive ? "dead" : "") + '">' +
+        '<td class="num">' + (lead ? "👑" : i + 1) + "</td>" +
+        '<td class="name"><span class="swatch" style="background:' + esc(swatchColor(r.board || r.player)) + '"></span>' +
+          esc(r.name) + admin + ready + "</td>" +
+        '<td class="num">' + (r.hasRun ? r.score : "—") + "</td>" +
+        '<td class="num">' + (r.hasRun ? r.best : "—") + "</td>" +
+        (timed ? '<td class="num">' + fmtSecs(r.goalMs) + "</td>" : "") +
+        '<td class="num">' + fmtClock(r.runMs) + "</td>" +
+        '<td class="num">' + (r.length || "—") + "</td>" +
+        "<td>" + status + "</td></tr>";
+    }).join("");
+    return "<table>" + head + body + "</table>";
+  }
+
+  function renderCoopStandings(snap) {
+    const players = (snap.players || []).filter(function (p) { return p.role === "player"; });
+    if (!players.length) return "";
+    const head = "<tr><th>Player</th><th class=\"num\">Score</th><th>Status</th></tr>";
+    const body = players.map(function (p) {
+      const name = p.resolvedName || p.displayName || p.clientId.slice(0, 6);
+      const status = !snap.sessionActive
+        ? (p.ready ? '<span class="tag ok">ready</span>' : '<span class="tag">not ready</span>')
+        : p.alive === false ? '<span class="tag bad">dead</span>' : '<span class="tag ok">alive</span>';
+      return '<tr class="' + (p.alive === false ? "dead" : "") + '"><td class="name">' + esc(name) +
+        (p.isAdmin ? '<span class="tag">admin</span>' : "") + "</td>" +
+        '<td class="num">' + (p.score != null ? p.score : "—") + "</td><td>" + status + "</td></tr>";
+    }).join("");
+    return "<table>" + head + body + "</table>";
+  }
+
+  function renderSpecDetails(snap) {
+    const players = snap.players || [];
+    const nPlayers = players.filter(function (p) { return p.role === "player"; }).length;
+    const nSpecs = players.length - nPlayers;
+    const admin = players.find(function (p) { return p.isAdmin; });
+    specMeta.innerHTML =
+      "<span>Room <strong>" + esc(snap.roomCode || "—") + "</strong></span>" +
+      "<span>Players <strong>" + nPlayers + "</strong></span>" +
+      "<span>Spectators <strong>" + nSpecs + "</strong></span>" +
+      (admin ? "<span>Admin <strong>" + esc(admin.resolvedName || admin.displayName || "") + "</strong></span>" : "") +
+      (snap.mode === "coop" && snap.coopAuthority
+        ? "<span>Authority <strong>" + esc(snap.coopAuthority) + "</strong></span>"
+        : "");
+    let hud = "";
+    let table = "";
+    let rows = [];
+    if (snap.mode === "race") {
+      rows = raceStandings(snap);
+      hud = renderRaceHud(snap, rows);
+      table = renderRaceStandings(snap, rows);
+    } else if (snap.mode === "coop") {
+      hud = renderCoopHud(snap);
+      table = renderCoopStandings(snap);
+    }
+    specHud.classList.toggle("show", !!hud);
+    specStandings.classList.toggle("show", !!table);
+    setHtml(specHud, hud, "hud");
+    setHtml(specStandings, table, "standings");
+    return rows;
   }
 
   function playerName(snap, clientId) {
@@ -3327,21 +3681,19 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     if (!snap || snap.offline || (!snap.mode && !(snap.rooms && snap.rooms.length))) {
       specEmpty.style.display = "flex";
       specEmpty.textContent = (snap && snap.message) || "Waiting for game server…";
-      specModeTag.textContent = "offline";
+      specModeTag.textContent = !snap || snap.offline ? "offline" : "no rooms";
       specMeta.innerHTML = "";
+      specHud.classList.remove("show");
+      specStandings.classList.remove("show");
       viewSeg.style.opacity = "0.35";
       return;
     }
     viewSeg.style.opacity = snap.mode === "race" ? "1" : "0.35";
     const mode = snap.mode || "—";
     specModeTag.textContent = mode + (snap.sessionActive ? " · live" : " · lobby");
-    const roomCode = snap.roomCode || "—";
-    specMeta.innerHTML =
-      "<span>Room <strong>" + roomCode + "</strong></span>" +
-      "<span>Players <strong>" + ((snap.players && snap.players.length) || 0) + "</strong></span>" +
-      (snap.mode === "coop" && snap.coopAuthority
-        ? "<span>Authority <strong>" + snap.coopAuthority + "</strong></span>"
-        : "");
+    const standings = renderSpecDetails(snap);
+    const rowById = {};
+    standings.forEach(function (r) { rowById[r.id] = r; });
 
     if (snap.mode === "coop") {
       const board = snap.board;
@@ -3388,8 +3740,13 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
         btnBackMosaic.style.display = "inline-block";
         specFocus.classList.add("show");
         const b = boards[fid];
-        const score = b.score != null ? " · " + b.score : "";
-        focusLabel.textContent = playerName(snap, fid) + score;
+        const fr = rowById[fid];
+        const bits = [(fid === snap.leaderClientId ? "👑 " : "") + playerName(snap, fid)];
+        if (b.score != null) bits.push(b.score + (b.score === 1 ? " apple" : " apples"));
+        if (fr && fr.runMs != null) bits.push(fmtClock(fr.runMs));
+        if (fr && fr.length) bits.push("length " + fr.length);
+        if (b.alive === false) bits.push("dead");
+        focusLabel.textContent = bits.join(" · ");
         const theme = themeOf(b);
         if (theme.border) document.getElementById("specStage").style.background = theme.border;
         const stageBox = spectateStageBox();
@@ -3411,34 +3768,42 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
       if (chromeBorder) document.getElementById("specStage").style.background = chromeBorder;
       const layout = layoutMosaic(order.length, bw, bh);
       specMosaic.classList.add("show");
-      specMosaic.style.gridTemplateColumns = "repeat(" + layout.cols + ", " + layout.w + "px)";
-      const html = [];
-      for (let i = 0; i < order.length; i++) {
-        const id = order[i];
-        const b = boards[id];
-        const name = (b && b.displayName) || playerName(snap, id);
-        const score = b && b.score != null ? b.score : "—";
-        const alive = b && b.alive === false ? " · dead" : "";
-        html.push(
-          '<div class="spec-cell" data-id="' + id + '">' +
-            '<div class="label"><span>' + name + alive + '</span><span class="score">' + score + "</span></div>" +
-            '<canvas width="240" height="212"></canvas>' +
-          "</div>"
-        );
+      specMosaic.style.gridTemplateColumns =
+        "repeat(" + layout.cols + ", " + (layout.w + CELL_CHROME_X) + "px)";
+      // Rebuilding every poll swaps the cell between mousedown and mouseup, which eats clicks.
+      const key = order.join(",");
+      if (key !== mosaicKey) {
+        mosaicKey = key;
+        specMosaic.textContent = "";
+        for (let i = 0; i < order.length; i++) {
+          const cell = document.createElement("div");
+          cell.className = "spec-cell";
+          cell.setAttribute("data-id", order[i]);
+          cell.title = "Click to focus";
+          cell.innerHTML =
+            '<div class="label"><span class="name"></span>' +
+            '<span class="right"><span class="time"></span><span class="score"></span></span></div><canvas></canvas>';
+          specMosaic.appendChild(cell);
+        }
       }
-      specMosaic.innerHTML = html.join("");
-      Array.prototype.forEach.call(specMosaic.querySelectorAll(".spec-cell"), function (cell) {
+      Array.prototype.forEach.call(specMosaic.children, function (cell) {
         const id = cell.getAttribute("data-id");
-        const canvas = cell.querySelector("canvas");
-        paintBoardOnCanvas(canvas, boards[id], layout.w, layout.h, snap.settings);
-        cell.addEventListener("click", function () {
-          focusId = id;
-          raceView = "focus";
-          Array.prototype.forEach.call(viewSeg.querySelectorAll("button"), function (b) {
-            b.classList.toggle("active", b.getAttribute("data-view") === "focus");
-          });
-          renderSpectate(lastSnap);
-        });
+        const b = boards[id];
+        const lead = id === snap.leaderClientId;
+        const dead = !!(b && b.alive === false);
+        const name = (lead ? "👑 " : "") + ((b && b.displayName) || playerName(snap, id)) + (dead ? " · dead" : "");
+        const score = b && b.score != null ? String(b.score) : "—";
+        const row = rowById[id];
+        const time = row && row.runMs != null ? fmtClock(row.runMs) : "";
+        cell.classList.toggle("leader", lead);
+        cell.classList.toggle("dead", dead);
+        const nameEl = cell.querySelector(".name");
+        const scoreEl = cell.querySelector(".score");
+        const timeEl = cell.querySelector(".time");
+        if (nameEl.textContent !== name) nameEl.textContent = name;
+        if (scoreEl.textContent !== score) scoreEl.textContent = score;
+        if (timeEl.textContent !== time) timeEl.textContent = time;
+        paintBoardOnCanvas(cell.querySelector("canvas"), b, layout.w, layout.h, snap.settings);
       });
       return;
     }

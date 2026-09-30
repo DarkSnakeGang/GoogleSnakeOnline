@@ -12,6 +12,8 @@ pub const MAX_CONNECTIONS: usize = 30;
 pub const MAX_RACE_PLAYERS: usize = 9;
 pub const MAX_COOP_PLAYERS: usize = 4;
 pub const DEFAULT_DURATION_MIN: u32 = 30;
+/// How long one console spectate poll keeps race players publishing boards.
+pub const CONSOLE_WATCH_TTL: Duration = Duration::from_secs(3);
 
 const SERVER_SIM_AUTHORITY: &str = "server-sim-v1";
 const NATIVE_RELAY_AUTHORITY: &str = "native-relay-v1";
@@ -231,6 +233,9 @@ pub struct Room {
     pub finish_ongoing_runs: bool,
     pub race_scores: HashMap<String, RaceScore>,
     pub race_boards: HashMap<String, Value>,
+    /// Settings the current race started with. Lobby SETTINGS_SYNC after Start
+    /// must not rewrite what spectators see as the match rules.
+    pub race_run_settings: Option<Value>,
     /// Server-authoritative co-op sim (Plan 1). Race never uses this.
     pub coop: Option<CoopGame>,
     /// Accumulator for co-op step interval (main loop is 100ms).
@@ -258,6 +263,9 @@ pub struct Room {
     pub native_relay: Option<NativeRelayState>,
     /// Admin (or last publisher) board theme for console spectate.
     pub coop_theme_colors: Option<Value>,
+    /// Console spectate is polling this room until then (players publish boards
+    /// for it even with no in-room spectators).
+    pub console_watch_until: Option<Instant>,
     pub outbox: Vec<(Option<String>, Envelope)>, // None = broadcast
     pub server_seq: u64,
 }
@@ -285,6 +293,7 @@ impl Room {
             finish_ongoing_runs: true,
             race_scores: HashMap::new(),
             race_boards: HashMap::new(),
+            race_run_settings: None,
             coop: None,
             coop_accum_ms: 0,
             coop_snakes: HashMap::new(),
@@ -300,6 +309,7 @@ impl Room {
             coop_run_settings: None,
             native_relay: None,
             coop_theme_colors: None,
+            console_watch_until: None,
             outbox: Vec::new(),
             server_seq: 0,
         }
@@ -541,6 +551,7 @@ impl Room {
             "coopAuthority": self.coop_authority.map(|a| a.as_str()),
             "coopGeneration": self.coop_generation,
             "leaderClientId": self.race_leader_id(),
+            "consoleWatching": self.console_watching(),
             "clients": list,
             "settings": self.settings,
         })
@@ -549,6 +560,28 @@ impl Room {
     pub fn broadcast_roster(&mut self) {
         let payload = self.roster_payload();
         self.push_broadcast(Envelope::new("ROSTER", payload));
+    }
+
+    pub fn console_watching(&self) -> bool {
+        self.console_watch_until
+            .is_some_and(|until| Instant::now() < until)
+    }
+
+    /// A console spectate poll: extend the watch and tell clients when it starts.
+    pub fn note_console_watch(&mut self) {
+        let was_watching = self.console_watching();
+        self.console_watch_until = Some(Instant::now() + CONSOLE_WATCH_TTL);
+        if !was_watching {
+            self.broadcast_roster();
+        }
+    }
+
+    /// Room loop: once polling stops, clear the watch so players stop uploading.
+    pub fn expire_console_watch(&mut self) {
+        if self.console_watch_until.is_some() && !self.console_watching() {
+            self.console_watch_until = None;
+            self.broadcast_roster();
+        }
     }
 
     /// HTTP/console spectate dump: race = per-player boards; co-op = one shared board.
@@ -576,9 +609,19 @@ impl Room {
                             .map(|n| n as u32)
                     }),
                     "timeMs": score.map(|s| s.time_ms),
+                    "bestScore": score.map(|s| s.best_score),
+                    "bestTimeMs": score.and_then(|s| s.best_time_ms),
+                    "bestScoreTimeMs": score.and_then(|s| s.best_score_time_ms),
+                    "bestGoalTimeMs": score.and_then(|s| s.best_goal_time_ms),
+                    "goalCompleted": score.map(|s| s.goal_completed),
+                    "runStartedAtMs": score.and_then(|s| s.run_started_at_ms),
                 })
             })
             .collect();
+        let server_now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         players.sort_by_key(|v| {
             self.clients
                 .get(v["clientId"].as_str().unwrap_or(""))
@@ -627,9 +670,19 @@ impl Room {
                     "mode": "race",
                     "sessionActive": self.session_active,
                     "raceGoal": self.race_goal.as_str(),
+                    "raceGoalLabel": self.race_goal.label(),
+                    "durationMin": self.duration_min,
+                    "attemptRemainingMs": self.attempt_deadline.map(|d| {
+                        d.saturating_duration_since(Instant::now()).as_millis() as u64
+                    }),
+                    "attemptExpired": self.attempt_expired,
+                    "allowNewRuns": self.allow_new_runs,
+                    "finishOngoingRuns": self.finish_ongoing_runs,
+                    "leaderClientId": self.race_leader_id(),
+                    "serverNowMs": server_now_ms,
                     "players": players,
                     "boards": boards,
-                    "settings": self.settings,
+                    "settings": self.race_run_settings.as_ref().unwrap_or(&self.settings),
                     "room": rooms_meta,
                 })
             }
@@ -641,6 +694,8 @@ impl Room {
                     "sessionActive": self.session_active,
                     "coopAuthority": self.coop_authority.map(|a| a.as_str()),
                     "coopGeneration": self.coop_generation,
+                    "coopTimerStartedAtMs": self.coop_timer_started_at_ms,
+                    "serverNowMs": server_now_ms,
                     "players": players,
                     "board": board,
                     "settings": self.coop_run_settings.as_ref().unwrap_or(&self.settings),
@@ -968,6 +1023,8 @@ impl Room {
         }
         // Last alive player disconnect must end co-op (not wait for another death msg)
         self.maybe_end_coop_all_dead();
+        // Same for race time-up grace: nobody else will send the score that closes it.
+        self.maybe_end_race_grace();
         if !self.clients.is_empty() {
             self.broadcast_roster();
         } else if self.session_active {
@@ -1118,6 +1175,7 @@ impl Room {
             }
         }
         info!(roomId = %self.code, clientId = %target, role = role.as_str(), event = "set_role");
+        self.maybe_end_race_grace();
         self.broadcast_roster();
         Ok(())
     }
@@ -1392,6 +1450,7 @@ impl Room {
         // Mode switch drops prior race results (Start of a different game type)
         self.race_scores.clear();
         self.race_boards.clear();
+        self.race_run_settings = None;
         self.attempt_expired = false;
         if mode == Mode::Coop {
             // demote newest promotions until <= MAX_COOP_PLAYERS
@@ -1483,6 +1542,7 @@ impl Room {
         self.coop_run_settings = None;
         self.native_relay = None;
         if self.mode == Mode::Race {
+            self.race_run_settings = Some(self.settings.clone());
             self.attempt_deadline =
                 Some(Instant::now() + Duration::from_secs(self.duration_min as u64 * 60));
             self.collectables_owner = None;
@@ -4813,6 +4873,111 @@ mod tests {
         assert_eq!(snap["mode"], "race");
         assert!(snap["boards"]["p1"]["body"].as_array().unwrap().len() >= 2);
         assert_eq!(snap["boards"]["p1"]["displayName"], "Alice");
+    }
+
+    #[test]
+    fn race_grace_ends_when_last_running_player_leaves() {
+        let mut r = room();
+        r.join("admin".into(), Some("Host".into()), None).unwrap();
+        r.join("p1".into(), Some("Alice".into()), None).unwrap();
+        r.join("p2".into(), Some("Bob".into()), None).unwrap();
+        for id in ["p1", "p2"] {
+            r.cmd_set_role("admin", &json!({"clientId": id, "role": "player"}))
+                .unwrap();
+            r.cmd_ready(id, &json!({"ready": true})).unwrap();
+        }
+        r.cmd_session_start("admin", &json!({"finishOngoingRuns": true}))
+            .unwrap();
+        let score = |alive: bool| RaceScore {
+            score: 3,
+            time_ms: 1000,
+            best_score: 3,
+            best_time_ms: None,
+            best_score_time_ms: None,
+            best_goal_time_ms: None,
+            goal_completed: false,
+            alive,
+            run_started_at_ms: None,
+        };
+        r.race_scores.insert("p1".into(), score(false));
+        r.race_scores.insert("p2".into(), score(true));
+        r.attempt_deadline = Some(Instant::now());
+        r.tick();
+        assert!(r.attempt_expired && r.session_active, "p2 still running → grace");
+        r.leave("p2");
+        assert!(!r.session_active, "grace must close once the last runner is gone");
+    }
+
+    #[test]
+    fn spectate_snapshot_race_includes_timer_and_leader() {
+        let mut r = room();
+        r.join("admin".into(), Some("Host".into()), None).unwrap();
+        r.join("p1".into(), Some("Alice".into()), None).unwrap();
+        r.cmd_set_role("admin", &json!({"clientId": "p1", "role": "player"}))
+            .unwrap();
+        r.cmd_ready("p1", &json!({"ready": true})).unwrap();
+        let lobby = r.spectate_snapshot();
+        assert!(lobby["attemptRemainingMs"].is_null());
+        assert_eq!(lobby["raceGoalLabel"], "Score");
+
+        r.cmd_session_start("admin", &json!({"settings": {"count": 5}}))
+            .unwrap();
+        r.cmd_settings_sync("admin", &json!({"count": 0})).unwrap();
+        r.race_scores.insert(
+            "p1".into(),
+            RaceScore {
+                score: 7,
+                time_ms: 9000,
+                best_score: 12,
+                best_time_ms: Some(20000),
+                best_score_time_ms: Some(18000),
+                best_goal_time_ms: None,
+                goal_completed: false,
+                alive: true,
+                run_started_at_ms: Some(1),
+            },
+        );
+        let snap = r.spectate_snapshot();
+        let remaining = snap["attemptRemainingMs"].as_u64().unwrap();
+        assert!(remaining > 0 && remaining <= r.duration_min as u64 * 60_000);
+        assert_eq!(snap["durationMin"], r.duration_min);
+        assert_eq!(snap["leaderClientId"], "p1");
+        assert_eq!(snap["settings"]["count"], 5, "match rules, not the later lobby sync");
+        assert!(snap["serverNowMs"].as_u64().unwrap() > 0);
+        let p1 = snap["players"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["clientId"] == "p1")
+            .unwrap();
+        assert_eq!(p1["bestScore"], 12);
+        assert_eq!(p1["runStartedAtMs"], 1);
+    }
+
+    #[test]
+    fn console_watch_flags_roster_once_and_expires() {
+        let mut r = room();
+        r.join("admin".into(), Some("Host".into()), None).unwrap();
+        r.take_outbox();
+        let rosters = |r: &mut Room| {
+            r.take_outbox()
+                .into_iter()
+                .filter(|(to, e)| to.is_none() && e.msg_type == "ROSTER")
+                .map(|(_, e)| e.payload["consoleWatching"].as_bool().unwrap())
+                .collect::<Vec<_>>()
+        };
+
+        r.note_console_watch();
+        r.note_console_watch();
+        assert_eq!(rosters(&mut r), vec![true], "only the first poll broadcasts");
+
+        r.expire_console_watch();
+        assert!(rosters(&mut r).is_empty(), "still inside the TTL");
+
+        r.console_watch_until = Some(Instant::now() - Duration::from_millis(1));
+        r.expire_console_watch();
+        assert_eq!(rosters(&mut r), vec![false]);
+        assert!(r.console_watch_until.is_none());
     }
 
     #[test]

@@ -5176,7 +5176,7 @@
     const specs = (roster.clients || []).filter(function (c) {
       return c.role === "spectator";
     });
-    if (!specs.length) return;
+    if (!specs.length && !roster.consoleWatching) return;
     const board = Gsm.scrapeBoard({
       colorId: me.colorId != null ? me.colorId : undefined,
     });
@@ -5392,7 +5392,7 @@
       const specs = (self.client.roster.clients || []).filter(function (c) {
         return c.role === "spectator";
       });
-      if (!specs.length) return;
+      if (!specs.length && !self.client.roster.consoleWatching) return;
       const board = Gsm.scrapeBoard({
         colorId: me.colorId != null ? me.colorId : undefined,
       });

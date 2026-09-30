@@ -484,6 +484,9 @@ describe("ws integration", { timeout: 60000 }, () => {
       .map((c) => c.colorId);
     assert.equal(new Set(colors).size, 2, "players must have distinct colors");
     const aColor = roster.clients.find((c) => c.clientId === aId).colorId;
+    // Unready peers may share a pick; only Ready locks a co-op color.
+    send(a.ws, "READY", { ready: true });
+    await waitRosterWhere(a.inbox, (r) => r.clients.some((c) => c.clientId === aId && c.ready));
     a.inbox.length = 0;
     send(b.ws, "COLOR_CLAIM", { colorId: aColor });
     const err = await waitMsg(b.inbox, "ERROR");
@@ -865,7 +868,7 @@ describe("ws integration", { timeout: 60000 }, () => {
     assert.ok(Array.isArray(startSpec.payload.slots));
     assert.equal(startSpec.payload.slots.length, 3);
     const oys = startSpec.payload.slots.map((s) => s.oy).sort((x, y) => x - y);
-    assert.deepEqual(oys, [-2, 0, 3]);
+    assert.deepEqual(oys, [-2, 0, 2]);
     await waitMsg(spec.inbox, "PLAY_SYNC");
     const generation = await readyNativeBoard(
       [

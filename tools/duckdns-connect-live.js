@@ -311,7 +311,11 @@ async function main() {
   }
 }
 
-main().catch(function (e) {
-  console.error("[duckdns-connect] FAILED:", e && e.message);
-  process.exit(1);
-});
+module.exports = { installModIntercept, loadModFromUrl, connect, FAKE_MOD_ORIGIN, GSM_URL };
+
+if (require.main === module) {
+  main().catch(function (e) {
+    console.error("[duckdns-connect] FAILED:", e && e.message);
+    process.exit(1);
+  });
+}

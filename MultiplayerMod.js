@@ -1,10 +1,10 @@
 /* MultiplayerMod — Remix + Multiplayer LAN layer */
 
-/* Built: 2026-09-29T13:58:03.271Z */
+/* Built: 2026-09-29T14:13:18.242Z */
 
 window.__MP_MOD_VERSION="13";
 
-window.__MP_MOD_BUILT="2026-09-29T13:58:03.271Z";
+window.__MP_MOD_BUILT="2026-09-29T14:13:18.242Z";
 
 
 /* ==== BEGIN RemixMod ==== */
@@ -59936,7 +59936,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
     const specs = (roster.clients || []).filter(function (c) {
       return c.role === "spectator";
     });
-    if (!specs.length) return;
+    if (!specs.length && !roster.consoleWatching) return;
     const board = Gsm.scrapeBoard({
       colorId: me.colorId != null ? me.colorId : undefined,
     });
@@ -60152,7 +60152,7 @@ button[jsname="qycu7d"].mp-ready-btn.mp-ready-on,
       const specs = (self.client.roster.clients || []).filter(function (c) {
         return c.role === "spectator";
       });
-      if (!specs.length) return;
+      if (!specs.length && !self.client.roster.consoleWatching) return;
       const board = Gsm.scrapeBoard({
         colorId: me.colorId != null ? me.colorId : undefined,
       });

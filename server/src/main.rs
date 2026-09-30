@@ -1,7 +1,7 @@
 //! Optional TLS for wss:// — friends on LAN keep using plain ws://.
 
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{Query, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Json;
@@ -321,6 +321,7 @@ async fn main() {
                         if room.session_active {
                             room.tick();
                         }
+                        room.expire_console_watch();
                     }
                 }
                 tick_state.flush_outbox(&code);
@@ -531,8 +532,12 @@ async fn wait_for_shutdown_signal() {
     }
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket(socket, state, peer.ip().to_canonical()))
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -557,7 +562,7 @@ async fn api_spectate(
     State(state): State<Arc<AppState>>,
     Query(q): Query<SpectateQuery>,
 ) -> Json<Value> {
-    let rooms = state.rooms.lock();
+    let mut rooms = state.rooms.lock();
     let mut room_list: Vec<Value> = rooms.values().map(|r| r.room_summary()).collect();
     room_list.sort_by(|a, b| {
         a["roomCode"]
@@ -568,7 +573,9 @@ async fn api_spectate(
 
     if let Some(code) = q.room.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         let code_up = code.to_ascii_uppercase();
-        if let Some(room) = rooms.get(&code_up).or_else(|| rooms.get(code)) {
+        let key = if rooms.contains_key(&code_up) { code_up.clone() } else { code.to_string() };
+        if let Some(room) = rooms.get_mut(&key) {
+            room.note_console_watch();
             let mut snap = room.spectate_snapshot();
             if let Some(obj) = snap.as_object_mut() {
                 obj.insert("rooms".into(), json!(room_list));
@@ -590,9 +597,11 @@ async fn api_spectate(
     let picked = rooms
         .values()
         .find(|r| r.session_active)
-        .or_else(|| rooms.values().next());
-    match picked {
+        .or_else(|| rooms.values().next())
+        .map(|r| r.code.clone());
+    match picked.and_then(|code| rooms.get_mut(&code)) {
         Some(room) => {
+            room.note_console_watch();
             let mut snap = room.spectate_snapshot();
             if let Some(obj) = snap.as_object_mut() {
                 obj.insert("rooms".into(), json!(room_list));
@@ -611,8 +620,9 @@ async fn api_spectate(
     }
 }
 
-async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
+async fn handle_socket(socket: WebSocket, state: Arc<AppState>, ip: IpAddr) {
     let client_id = Uuid::new_v4().to_string();
+    info!(clientId = %client_id, %ip, event = "connect");
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     state.clients.lock().insert(client_id.clone(), tx);
@@ -833,5 +843,5 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     }
     state.clients.lock().remove(&client_id);
     writer.abort();
-    info!(clientId = %client_id, event = "disconnect", code = "ws_closed");
+    info!(clientId = %client_id, %ip, event = "disconnect", code = "ws_closed");
 }

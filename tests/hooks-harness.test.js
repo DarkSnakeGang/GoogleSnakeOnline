@@ -1266,8 +1266,8 @@ describe("GSM hook harness", () => {
     assert.equal(win.__remixGame.oa.ka.length, 3);
     assert.equal(win.__remixGame.oa.ka[0].y, Math.floor(15 / 2) + 2);
     assert.equal(win.__remixGame.oa.ka[0].x, Math.floor(17 / 2));
-    // Must not force RIGHT — Start match should leave snakes idle until a key
-    assert.equal(win.__remixGame.oa.direction, "UP");
+    // Seating parks the snake (idle until a key) — never forces or keeps a crawl
+    assert.equal(win.__remixGame.oa.direction, "NONE");
   });
 
   it("applyCoopSpawnOffset prefers server absolute seat when board matches", () => {
